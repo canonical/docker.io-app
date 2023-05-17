@@ -1,0 +1,16 @@
+engine/README.md
+# Add NOTICE files because of Apache-2.0 license requirement
+cli/NOTICE
+cli/vendor/github.com/containerd/containerd/NOTICE
+cli/vendor/github.com/docker/docker/NOTICE
+cli/vendor/github.com/docker/go-metrics/NOTICE
+cli/vendor/github.com/opencontainers/runc/NOTICE
+cli/vendor/github.com/prometheus/client_golang/NOTICE
+cli/vendor/gopkg.in/yaml.v2/NOTICE
+engine/NOTICE
+engine/vendor/code.cloudfoundry.org/clock/NOTICE
+engine/vendor/github.com/containerd/containerd/NOTICE
+engine/vendor/github.com/docker/go-metrics/NOTICE
+engine/vendor/github.com/opencontainers/runc/NOTICE
+engine/vendor/github.com/prometheus/client_golang/NOTICE
+libnetwork/vendor/github.com/docker/docker/NOTICE

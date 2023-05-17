@@ -1,0 +1,45 @@
+# Translations of docker.io debconf template.
+# Copyright (C) 2023 Lucas Kanashiro <lucas.kanashiro@canonical.com>
+# This file is distributed under the same license as the docker.io-app package.
+# Lucas Kanashiro <lucas.kanashiro@canonical.com>, 2023.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: docker.io-app\n"
+"Report-Msgid-Bugs-To: docker.io-app@packages.debian.org\n"
+"POT-Creation-Date: 2023-05-23 18:26-0300\n"
+"PO-Revision-Date: 2023-05-23 18:26-0300\n"
+"Last-Translator: Lucas Kanashiro <lucas.kanashiro@canonical.com>\n"
+"Language-Team: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../docker.io.templates:1001
+msgid "Automatically restart Docker daemon?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../docker.io.templates:1001
+msgid ""
+"If Docker is upgraded without restarting the Docker daemon, Docker will "
+"often have trouble starting new containers, and in some cases even "
+"maintaining the containers it is currently running. See https://launchpad."
+"net/bugs/1658691 for an example of this breakage."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../docker.io.templates:1001
+msgid ""
+"Normally, upgrading the package would simply restart the associated "
+"daemon(s). In the case of the Docker daemon, that would also imply stopping "
+"all running containers (which will only be restarted if they're part of a "
+"\"service\", have an appropriate restart policy configured, or have some "
+"other means of being restarted such as an external systemd unit)."
+msgstr ""

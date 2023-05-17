@@ -1,0 +1,75 @@
+Source: docker.io-app
+Section: admin
+Priority: optional
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Build-Depends: bash-completion,
+               ca-certificates,
+               cmake,
+               debconf (>= 0.5),
+               debhelper-compat (= 12),
+               dh-apparmor,
+               dh-exec,
+               dh-golang,
+               git,
+               golang-go,
+               libapparmor-dev,
+               libbtrfs-dev | btrfs-progs (<< 4.16.1~),
+               libdevmapper-dev (>= 2:1.02.68~),
+               libltdl-dev,
+               libseccomp-dev,
+               libsystemd-dev (>= 209~),
+               pkg-config,
+               po-debconf,
+               procps,
+               tzdata
+Standards-Version: 4.6.2
+Homepage: https://mobyproject.org/
+Vcs-Git: https://github.com/canonical/docker.io-app.git
+Vcs-Browser: https://github.com/canonical/docker.io-app
+
+Package: docker.io
+Architecture: amd64 arm64 armhf i386 ppc64el riscv64 s390x
+Depends: adduser,
+         containerd (>= 1.2.6-0ubuntu1~),
+         iptables,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Recommends: ca-certificates,
+            git,
+            pigz,
+            ubuntu-fan,
+            xz-utils,
+            ${apparmor:Recommends}
+Suggests: aufs-tools,
+          btrfs-progs,
+          cgroupfs-mount | cgroup-lite,
+          debootstrap,
+          docker-doc,
+          rinse,
+          zfs-fuse | zfsutils
+Built-Using: ${libc:Built-Using}, ${misc:Built-Using}
+Description: Linux container runtime
+ Docker complements kernel namespacing with a high-level API which operates at
+ the process level. It runs unix processes with strong guarantees of isolation
+ and repeatability across servers.
+ .
+ Docker is a great building block for automating distributed systems:
+ large-scale web deployments, database clusters, continuous deployment systems,
+ private PaaS, service-oriented architectures, etc.
+
+Package: docker-doc
+Provides: docker.io-doc
+Section: doc
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends}
+Description: Linux container runtime -- documentation
+ Docker complements kernel namespacing with a high-level API which operates at
+ the process level. It runs unix processes with strong guarantees of isolation
+ and repeatability across servers.
+ .
+ Docker is a great building block for automating distributed systems:
+ large-scale web deployments, database clusters, continuous deployment systems,
+ private PaaS, service-oriented architectures, etc.
+ .
+ This package provides documentation for Docker.

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+. debian/tests/common
+
+defer 'journalctl -u docker | tail'
+
+# make sure Docker itself is working before we go too deep down the rabbit hole
+docker version
+
+debootstrap \
+	--variant=minbase \
+	stable \
+	"$tempDir" \
+	http://httpredir.debian.org/debian
+
+tar -cC "$tempDir" . | docker import - debian
+defer 'docker rmi debian'
+
+docker run --name test debian true
+defer 'docker rm -f test'
