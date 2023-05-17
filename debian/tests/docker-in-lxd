@@ -1,0 +1,227 @@
+#!/bin/bash
+
+. debian/tests/common
+
+arch=$(dpkg --print-architecture)
+release=$(lsb_release -rs)
+suite=$(lsb_release -cs)
+
+if [ "$arch" = "i386" -a "$release" \> "19.04" ]; then
+    exit 0
+fi
+
+# lxd is not available as a .deb anymore
+snap install lxd
+
+# This stolen from lxd's debconf magic.
+random_ipv4() {
+  while :; do
+    SUBNET="10.$(shuf -i 1-255 -n 1).$(shuf -i 0-255 -n 1)"
+
+    # Check if well known
+    if [ "${SUBNET}" = "10.10.10" ]; then
+      continue
+    fi
+
+    # Check if used locally
+    if ip -4 route show | grep -q ${SUBNET}; then
+      continue
+    fi
+
+    # Attempt to see if used behind the gateway
+    if ping -n -q ${SUBNET}.1 -c 1 -W 1 >/dev/null 2>&1; then
+      continue
+    fi
+
+    if ping -n -q ${SUBNET}.254 -c 1 -W 1 >/dev/null 2>&1; then
+      continue
+    fi
+
+    break
+  done
+
+  echo ${SUBNET}
+}
+
+# Detect LXD API extensions
+lxd_extension() {
+  lxc info | grep -q "^\- ${1}$"
+}
+
+# Copy the local apt package archive over to the lxd container.
+# This function assumes that the container is named "docker".
+copy_local_apt_files() {
+  for local_source in $(apt-get indextargets | grep-dctrl -F URI -e '^file:/' -sURI); do
+    local_source=${local_source#file:}
+    local_dir=$(dirname "${local_source}")
+    lxc exec docker -- mkdir -p "${local_dir}"
+    tar -cC "${local_dir}" . | lxc exec docker -- tar -xC "${local_dir}"
+  done
+}
+
+time lxd waitready --timeout 600
+
+# Attempt to auto-configure ipv4, but only when really running under
+# autopkgtest.
+if [ -n "${AUTOPKGTEST_TMP:-}" ]; then
+    lxd init --auto
+    if lxd_extension "network"; then
+        if ! lxc profile device list default | grep -q eth0; then
+            lxc network create adt-br0
+            lxc network attach-profile adt-br0 default eth0
+        fi
+    else
+        sleep 10
+        systemctl stop lxd-bridge
+        SUBNET=$(random_ipv4)
+        cat <<EOF > /etc/default/lxd-bridge
+USE_LXD_BRIDGE="true"
+LXD_BRIDGE="lxdbr0"
+UPDATE_PROFILE="true"
+LXD_IPV4_ADDR="${SUBNET}.1"
+LXD_IPV4_NETMASK="255.255.255.0"
+LXD_IPV4_NETWORK="${SUBNET}.1/24"
+LXD_IPV4_DHCP_RANGE="${SUBNET}.2,${SUBNET}.254"
+LXD_IPV4_DHCP_MAX="252"
+LXD_IPV4_NAT="true"
+LXD_IPV6_ADDR=""
+LXD_IPV6_MASK=""
+LXD_IPV6_NETWORK=""
+LXD_IPV6_NAT="false"
+LXD_IPV6_PROXY="false"
+EOF
+        systemctl start lxd-bridge
+    fi
+fi
+
+if [ -n "${http_proxy:-}" ]; then
+    lxc config set core.proxy_http $http_proxy
+fi
+if [ -n "${https_proxy:-}" ]; then
+    lxc config set core.proxy_https $https_proxy
+fi
+if [ -n "${noproxy:-}" ]; then
+    lxc config set core.proxy_ignore_hosts $noproxy
+fi
+
+# Follow the official tutorial on how to run docker inside lxd containers
+# https://ubuntu.com/tutorials/how-to-run-docker-inside-lxd-containers
+lxc storage create docker-storage btrfs
+lxc storage volume create docker-storage docker-vol
+lxc launch ubuntu-daily:${suite}/${arch} docker -c security.nesting=true -c security.syscalls.intercept.mknod=true -c security.syscalls.intercept.setxattr=true
+lxc storage volume attach docker-storage docker-vol docker /var/lib/docker
+
+defer 'lxc delete --force docker'
+
+# autopkgtest will have done some complicated things to ensure that "apt
+# install docker.io" installs the version that should be tested in the
+# host. But we want to test that version of docker in the container, so
+# replace the entire apt configuration of the container with that of the host
+# (after waiting for cloud-init to avoid racing with its attempts to rewrite
+# the apt config).
+lxc exec docker -- cloud-init status --wait
+lxc exec docker -- rm -rf /etc/apt
+lxc exec docker -- mkdir /etc/apt
+tar -cC /etc/apt . | lxc exec docker -- tar -xC /etc/apt
+
+copy_local_apt_files
+
+if [ -n "${http_proxy:-}" ]; then
+    lxc exec docker -- mkdir -p /etc/systemd/system/docker.service.d
+    cat <<EOF | lxc file push - docker/etc/systemd/system/docker.service.d/http-proxy.conf
+[Service]
+Environment="HTTP_PROXY=$http_proxy"
+EOF
+fi
+if [ -n "${https_proxy:-}" ]; then
+    lxc exec docker -- mkdir -p /etc/systemd/system/docker.service.d
+    cat <<EOF | lxc file push - docker/etc/systemd/system/docker.service.d/https-proxy.conf
+[Service]
+Environment="HTTPS_PROXY=$https_proxy"
+EOF
+fi
+if [ -n "${no_proxy:-}" ]; then
+    lxc exec docker -- mkdir -p /etc/systemd/system/docker.service.d
+    cat <<EOF | lxc file push - docker/etc/systemd/system/docker.service.d/no-proxy.conf
+[Service]
+Environment="NO_PROXY=$no_proxy"
+EOF
+fi
+
+attempts=0
+while ! lxc exec docker -- grep -q ^nameserver /etc/resolv.conf; do
+    sleep 1
+    attempts=$((attempts+1))
+    if [ $attempts -gt 30 ]; then
+        echo "Network failed to come up after 30 seconds"
+        exit 1
+    fi
+done
+if ! lxc exec docker -- sh -c 'grep ^nameserver /etc/resolv.conf | grep -qv 127.0.0.53'
+then
+    echo "systemd-resolved"
+    while ! lxc exec docker -- sh -c 'grep -v fe80 /run/systemd/resolve/resolv.conf | grep -q ^nameserver'; do
+        sleep 1
+        attempts=$((attempts+1))
+        if [ $attempts -gt 30 ]; then
+            echo "Network failed to come up after 30 seconds"
+            exit 1
+        fi
+    done
+fi
+
+# Perform a full upgrade and restart the container before attempting
+# to install docker.io.  See
+# https://bugs.launchpad.net/ubuntu/+source/docker.io/+bug/1942276 for
+# more details.
+lxc exec docker -- apt-get update
+lxc exec docker --env DEBIAN_FRONTEND=noninteractive -- apt-get full-upgrade -y
+lxc restart docker
+sleep 5
+
+# We call this again here because if the local apt repository lived
+# under /tmp, it won't be available anymore after a container restart.
+copy_local_apt_files
+lxc exec docker -- apt-get update
+
+lxc exec docker --env DEBIAN_FRONTEND=noninteractive -- apt-get install docker.io -y
+
+# Now basically run the simplest possible test inside the container.
+
+case ${arch} in
+    amd64|i386|s390x)
+        image_hello_world=${arch}/hello-world
+        image_ubuntu="${arch}/ubuntu:devel";;
+    armhf)
+        image_hello_world=arm32v7/hello-world
+        image_ubuntu=arm32v7/ubuntu:devel;;
+    ppc64el)
+        image_hello_world=ppc64le/hello-world
+        image_ubuntu=ppc64le/ubuntu:devel;;
+    arm64)
+        image_hello_world=arm64v8/hello-world
+        image_ubuntu=arm64v8/ubuntu:devel;;
+    *)
+        echo "unknown arch: ${arch}"
+        exit 2;;
+esac
+
+lxc exec docker -- docker run "${image_hello_world}"
+
+ubuntu_devel_suite=$(lxc exec docker -- docker run --rm "${image_ubuntu}" \
+                         /bin/bash -c 'source /etc/lsb-release && echo "$DISTRIB_CODENAME"')
+
+# We also need to run some commands inside an ubuntu:devel container,
+# to make sure that docker.io can work correctly with the latest
+# glibc.
+#
+# It's also important to make sure the docker container is using the
+# same apt configuration from the lxd container, which itself is the
+# same apt configuration from the host.
+#
+# We just want to perform this test when the docker.io package is
+# being tested against the development release of Ubuntu.
+if [ "${ubuntu_devel_suite}" = "${suite}" ]; then
+  lxc exec docker -- docker run -v /etc/apt:/etc/apt "${image_ubuntu}" \
+      /bin/bash -c 'apt-get update; apt-get full-upgrade -y && apt-get install -y hello'
+fi
