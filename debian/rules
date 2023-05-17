@@ -1,0 +1,136 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+include /usr/share/dpkg/pkg-info.mk
+
+export VERSION := $(DEB_VERSION_UPSTREAM)
+
+export DOCKER_GITCOMMIT := $(DEB_VERSION)
+
+# temporary build path (see http://golang.org/doc/code.html#GOPATH)
+OUR_GOPATH := $(CURDIR)/.gopath
+export GOPATH := $(OUR_GOPATH)
+export GOCACHE := $(CURDIR)/.gocache
+
+# https://blog.golang.org/go116-module-changes (TODO figure out a new solution for Go 1.17+)
+export GO111MODULE := auto
+
+# AppArmor can be optionally used in Debian and is there by default in Ubuntu, so we need support for it compiled into our binary
+# same story with SELinux
+export DOCKER_BUILDTAGS := apparmor seccomp selinux
+
+ifneq (,$(filter parallel=%, $(DEB_BUILD_OPTIONS)))
+	NUMJOBS := $(patsubst parallel=%, %, $(filter parallel=%, $(DEB_BUILD_OPTIONS)))
+	MAKEFLAGS += -j '$(NUMJOBS)'
+endif
+
+override_dh_gencontrol:
+	# if we're on Ubuntu, we need to Recommends: apparmor
+	echo 'apparmor:Recommends=$(shell dpkg-vendor --is Ubuntu && echo apparmor)' >> debian/docker.io.substvars
+	echo 'libc:Built-Using=$(shell dpkg-query -f '$${source:Package} (= $${source:Version})' -W libc-dev-bin)' >> debian/docker.io.substvars
+	# use "dh_golang" to generate "misc:Built-Using" (via "go list")
+	DH_GOLANG_BUILDPKG=' \
+		-tags "$(DOCKER_BUILDTAGS)" \
+		github.com/docker/docker/cmd/dockerd \
+		github.com/docker/cli/cmd/docker \
+		github.com/docker/libnetwork/cmd/proxy \
+	' dh_golang --builddirectory='$(OUR_GOPATH:$(CURDIR)/%=%)'
+	dh_gencontrol
+
+override_dh_auto_configure:
+	# set up GOPATH symlink farm
+	# libnetwork
+	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
+	ln -sfT '$(CURDIR)/libnetwork' '$(OUR_GOPATH)/src/github.com/docker/libnetwork'
+	# cli
+	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
+	ln -sfT '$(CURDIR)/cli' '$(OUR_GOPATH)/src/github.com/docker/cli'
+	# engine
+	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
+	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/docker/docker'
+
+override_dh_auto_build: _build-tini _build-proxy _build-cli _build-manpages _build-engine
+	@#
+
+# several "supporting binaries" need to be built and installed
+# (https://github.com/docker/docker-ce/tree/v19.03.6/components/engine/hack/dockerfile/install)
+
+_build-tini: # (docker-init)
+	mkdir -p tini/build
+	cd tini/build \
+		&& cmake .. \
+		&& make tini-static
+
+_build-proxy: # (from libnetwork)
+	go build -o libnetwork/docker-proxy github.com/docker/libnetwork/cmd/proxy
+
+_build-cli:
+	DISABLE_WARN_OUTSIDE_CONTAINER=1 \
+		make -C cli \
+			LDFLAGS='' \
+			VERSION='$(VERSION)' \
+			GITCOMMIT='$(DOCKER_GITCOMMIT)' \
+			dynbinary
+
+# https://github.com/docker/docker-ce/blob/v19.03.6/components/cli/scripts/docs/generate-man.sh
+# (replacing hard-coded "/tmp/gen-manpages" with "debian/tmp/gen-manpages")
+_build-manpages:
+	cd '$(OUR_GOPATH)/src/github.com/docker/cli' \
+		&& export PATH='$(OUR_GOPATH)/bin':"$$PATH" \
+		&& sed 's!/tmp/gen-manpages!$(CURDIR)/debian/tmp/gen-manpages!g' scripts/docs/generate-man.sh \
+		&& sed 's!/go/bin/go-md2man!$(OUR_GOPATH)/bin/go-md2man!g' scripts/docs/generate-man.sh \
+			| bash
+
+_build-engine:
+	cd engine \
+		&& PRODUCT=docker ./hack/make.sh dynbinary
+
+# basic smoke test to ensure binaries built successfully
+# (especially since their actual tests are *really* involved)
+override_dh_auto_test:
+	# tini
+	./tini/build/tini-static --version
+	# cli
+	./cli/build/docker --version
+	# engine
+	./engine/bundles/dynbinary-daemon/dockerd --version
+
+override_dh_strip:
+	# Go has lots of problems with stripping, so just don't
+
+override_dh_auto_install:
+	# we use dh_install / dh-exec for installing files where they need to be
+
+# "--no-start" because we have a debconf prompt to determine whether to restart during upgrades
+# (which means we get to handle both "start" and "stop" ourselves too)
+override_dh_installinit:
+	dh_installinit --name=docker --no-start
+
+override_dh_installsystemd:
+	# We take care of determining whether the docker.io service should be
+	# restarted during upgrades or not ourselves, based on the debconf
+	# choice made by the user during installation.  For this reason, we
+	# invoke dh_installsystemd with "--no-stop-on-upgrade" in order
+	# to avoid indiscriminately stopping the service during upgrades.
+	dh_installsystemd --name=docker --no-start -pdocker.io --no-stop-on-upgrade docker.service
+	dh_installsystemd --name=docker --no-start -pdocker.io --no-stop-on-upgrade docker.socket
+
+override_dh_installudev:
+	# use priority z80 to match the upstream priority of 80
+	dh_installudev --priority=z80
+
+override_dh_install:
+	dh_install
+	dh_apparmor --profile-name=docker.io -pdocker.io
+
+override_dh_shlibdeps:
+	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info
+
+override_dh_auto_clean:
+	@# stop debhelper from doing "make clean"
+
+override_dh_dwz:
+	# do not call dh_dwz to avoid "dwz: Too few files for multifile optimization"
+
+%:
+	dh $@ --with=bash-completion

@@ -1,0 +1,7 @@
+# This script is not used nor installed by the package
+docker.io: script-without-interpreter [config]
+
+# Go binaries have some problems with stripping
+docker.io: unstripped-binary-or-object [usr/bin/docker-proxy]
+docker.io: unstripped-binary-or-object [usr/bin/docker]
+docker.io: unstripped-binary-or-object [usr/bin/dockerd]
