@@ -1,0 +1,185 @@
+---
+title: "version"
+description: "The version command description and usage"
+keywords: "version, architecture, api"
+---
+
+# version
+
+```markdown
+Usage:  docker version [OPTIONS]
+
+Show the Docker version information
+
+Options:
+  -f, --format string       Format the output using the given Go template
+      --help                Print usage
+      --kubeconfig string   Kubernetes config file
+```
+
+## Description
+
+The version command prints the current version number for all independently
+versioned Docker components. Use the [`--format`](#format) option to customize
+the output.
+
+The version command (`docker version`) outputs the version numbers of Docker
+components, while the `--version` flag (`docker --version`) outputs the version
+number of the Docker CLI you are using.
+
+### Default output
+
+The default output renders all version information divided into two sections;
+the "Client" section contains information about the Docker CLI and client
+components, and the "Server" section contains information about the Docker
+Engine and components used by the Engine, such as the "Containerd" and "Runc"
+OCI Runtimes.
+
+The information shown may differ depending on how you installed Docker and
+what components are in use. The following example shows the output on a macOS
+machine running Docker Desktop:
+
+```console
+$ docker version
+
+Client:
+ Version:           20.10.16
+ API version:       1.41
+ Go version:        go1.17.10
+ Git commit:        aa7e414
+ Built:             Thu May 12 09:17:28 2022
+ OS/Arch:           darwin/amd64
+ Context:           default
+
+Server: Docker Desktop 4.8.2 (77141)
+ Engine:
+  Version:          20.10.16
+  API version:      1.41 (minimum version 1.12)
+  Go version:       go1.17.10
+  Git commit:       f756502
+  Built:            Thu May 12 09:15:33 2022
+  OS/Arch:          linux/amd64
+  Experimental:     false
+ containerd:
+  Version:          1.6.4
+  GitCommit:        212e8b6fa2f44b9c21b2798135fc6fb7c53efc16
+ runc:
+  Version:          1.1.1
+  GitCommit:        v1.1.1-0-g52de29d
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        de40ad0
+```
+
+### Client and server versions
+
+Docker uses a client/server architecture, which allows you to use the Docker CLI
+on your local machine to control a Docker Engine running on a remote machine,
+which can be (for example) a machine running in the Cloud or inside a Virtual Machine.
+
+The following example switches the Docker CLI to use a [context](context.md)
+named "remote-test-server", which runs an older version of the Docker Engine
+on a Linux server:
+
+```console
+$ docker context use remote-test-server
+remote-test-server
+
+$ docker version
+
+Client:
+ Version:           20.10.16
+ API version:       1.40 (downgraded from 1.41)
+ Go version:        go1.17.10
+ Git commit:        aa7e414
+ Built:             Thu May 12 09:17:28 2022
+ OS/Arch:           darwin/amd64
+ Context:           remote-test-server
+
+Server: Docker Engine - Community
+ Engine:
+  Version:          19.03.8
+  API version:      1.40 (minimum version 1.12)
+  Go version:       go1.12.17
+  Git commit:       afacb8b
+  Built:            Wed Mar 11 01:29:16 2020
+  OS/Arch:          linux/amd64
+ containerd:
+  Version:          v1.2.13
+  GitCommit:        7ad184331fa3e55e52b890ea95e65ba581ae3429
+ runc:
+  Version:          1.0.0-rc10
+  GitCommit:        dc9208a3303feef5b3839f4323d9beb36df0a9dd
+ docker-init:
+  Version:          0.18.0
+  GitCommit:        fec3683
+```
+
+## Examples
+
+### <a name="format"></a> Format the output (--format)
+
+The formatting option (`--format`) pretty-prints the output using a Go template,
+which allows you to customize the output format, or to obtain specific information
+from the output. Refer to the [format command and log output](https://docs.docker.com/config/formatting/)
+page for details of the format.
+
+### Get the server version
+
+```console
+$ docker version --format '{{.Server.Version}}'
+
+20.10.16
+```
+
+### Dump raw JSON data
+
+```console
+$ docker version --format '{{json .}}'
+
+{"Client":{"Platform":{"Name":"Docker Engine - Community"},"Version":"19.03.8","ApiVersion":"1.40","DefaultAPIVersion":"1.40","GitCommit":"afacb8b","GoVersion":"go1.12.17","Os":"darwin","Arch":"amd64","BuildTime":"Wed Mar 11 01:21:11 2020","Experimental":true},"Server":{"Platform":{"Name":"Docker Engine - Community"},"Components":[{"Name":"Engine","Version":"19.03.8","Details":{"ApiVersion":"1.40","Arch":"amd64","BuildTime":"Wed Mar 11 01:29:16 2020","Experimental":"true","GitCommit":"afacb8b","GoVersion":"go1.12.17","KernelVersion":"4.19.76-linuxkit","MinAPIVersion":"1.12","Os":"linux"}},{"Name":"containerd","Version":"v1.2.13","Details":{"GitCommit":"7ad184331fa3e55e52b890ea95e65ba581ae3429"}},{"Name":"runc","Version":"1.0.0-rc10","Details":{"GitCommit":"dc9208a3303feef5b3839f4323d9beb36df0a9dd"}},{"Name":"docker-init","Version":"0.18.0","Details":{"GitCommit":"fec3683"}}],"Version":"19.03.8","ApiVersion":"1.40","MinAPIVersion":"1.12","GitCommit":"afacb8b","GoVersion":"go1.12.17","Os":"linux","Arch":"amd64","KernelVersion":"4.19.76-linuxkit","Experimental":true,"BuildTime":"2020-03-11T01:29:16.000000000+00:00"}}
+```
+
+### Print the current context
+
+The following example prints the currently used [`docker context`](context.md):
+
+```console
+$ docker version --format='{{.Client.Context}}'
+default
+```
+
+As an example, this output can be used to dynamically change your shell prompt
+to indicate your active context. The example below illustrates how this output
+could be used when using Bash as your shell.
+
+Declare a function to obtain the current context in your `~/.bashrc`, and set
+this command as your `PROMPT_COMMAND`
+
+```console
+function docker_context_prompt() {
+        PS1="context: $(docker version --format='{{.Client.Context}}')> "
+}
+
+PROMPT_COMMAND=docker_context_prompt
+```
+
+After reloading the `~/.bashrc`, the prompt now shows the currently selected
+`docker context`:
+
+```console
+$ source ~/.bashrc
+context: default> docker context create --docker host=unix:///var/run/docker.sock my-context
+my-context
+Successfully created context "my-context"
+context: default> docker context use my-context
+my-context
+Current context is now "my-context"
+context: my-context> docker context use default
+default
+Current context is now "default"
+context: default>
+```
+
+Refer to the [`docker context` section](context.md) in the command line reference
+for more information about `docker context`.
