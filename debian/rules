@@ -129,6 +129,8 @@ override_dh_shlibdeps:
 override_dh_auto_clean:
 	@# stop debhelper from doing "make clean"
 
+### sergiodj: I tried invoking dh_dwz passing --no-dwz-multifile to
+### see if it could make any difference, to no avail.  Oh, well...
 override_dh_dwz:
 	# do not call dh_dwz to avoid "dwz: Too few files for multifile optimization"
 

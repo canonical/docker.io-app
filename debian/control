@@ -47,8 +47,6 @@ Suggests: aufs-tools,
           docker-doc,
           rinse,
           zfs-fuse | zfsutils
-Conflicts: docker.io (<< 20.10.25-0ubuntu1~)
-Replaces: docker.io (<< 20.10.25-0ubuntu1~) 
 Built-Using: ${libc:Built-Using}, ${misc:Built-Using}
 Description: Linux container runtime
  Docker complements kernel namespacing with a high-level API which operates at
