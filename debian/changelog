@@ -1,4 +1,4 @@
-docker.io-app (20.10.25-0ubuntu1~23.04.1) UNRELEASED; urgency=medium
+docker.io-app (20.10.25-0ubuntu1~23.04.1) lunar; urgency=medium
 
   * Backport version from Mantic to Lunar (LP: #2023694, #2022390)
 
