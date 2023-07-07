@@ -1,4 +1,4 @@
-docker.io-app (20.10.25-0ubuntu1~22.10.1) UNRELEASED; urgency=medium
+docker.io-app (20.10.25-0ubuntu1~22.10.1) kinetic; urgency=medium
 
   * Backport version from Mantic to Kinetic (LP: #2023694, #2022390)
 
