@@ -1,3 +1,12 @@
+docker.io-app (20.10.25-0ubuntu1~22.04.2) jammy; urgency=medium
+
+  * Fix docker layers ownership info (LP: #2029523, #2029893)
+    - Build with Go 1.20
+      + d/control: b-d on golang-1.20-go intead of golang-go
+      + d/rules: add Go 1.20 to $PATH
+
+ -- Artem Leshchev <matshch@avride.ai>  Fri, 04 Aug 2023 09:20:46 +0000
+
 docker.io-app (20.10.25-0ubuntu1~22.04.1) jammy; urgency=medium
 
   * Backport version from Mantic to Jammy (LP: #2023694, #2022390)
