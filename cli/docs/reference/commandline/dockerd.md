@@ -18,7 +18,7 @@ redirect_from:
 # daemon
 
 ```markdown
-Usage: dockerd COMMAND
+Usage: dockerd [OPTIONS]
 
 A self-sufficient runtime for containers.
 
@@ -35,14 +35,14 @@ Options:
       --containerd-namespace string           Containerd namespace to use (default "moby")
       --containerd-plugins-namespace string   Containerd namespace to use for plugins (default "plugins.moby")
       --cpu-rt-period int                     Limit the CPU real-time period in microseconds for the
-                                              parent cgroup for all containers
+                                              parent cgroup for all containers (not supported with cgroups v2)
       --cpu-rt-runtime int                    Limit the CPU real-time runtime in microseconds for the
-                                              parent cgroup for all containers
+                                              parent cgroup for all containers (not supported with cgroups v2)
       --cri-containerd                        start containerd with cri
       --data-root string                      Root directory of persistent Docker state (default "/var/lib/docker")
   -D, --debug                                 Enable debug mode
       --default-address-pool pool-options     Default address pools for node specific local networks
-      --default-cgroupns-mode string          Default mode for containers cgroup namespace ("host" | "private") (default "host")
+      --default-cgroupns-mode string          Default mode for containers cgroup namespace ("host" | "private") (default "private")
       --default-gateway ip                    Container default gateway IPv4 address
       --default-gateway-v6 ip                 Container default gateway IPv6 address
       --default-ipc-mode string               Default mode for containers ipc ("shareable" | "private") (default "private")
@@ -62,6 +62,8 @@ Options:
   -H, --host list                             Daemon socket(s) to connect to
       --host-gateway-ip ip                    IP address that the special 'host-gateway' string in --add-host resolves to.
                                               Defaults to the IP address of the default bridge
+      --http-proxy string                     HTTP proxy URL to use for outgoing traffic
+      --https-proxy string                    HTTPS proxy URL to use for outgoing traffic
       --icc                                   Enable inter-container communication (default true)
       --init                                  Run an init in the container to forward signals and reap processes
       --init-path string                      Path to the docker-init binary
@@ -69,8 +71,8 @@ Options:
       --ip ip                                 Default IP when binding container ports (default 0.0.0.0)
       --ip-forward                            Enable net.ipv4.ip_forward (default true)
       --ip-masq                               Enable IP masquerading (default true)
+      --ip6tables                             Enable addition of ip6tables rules (experimental)
       --iptables                              Enable addition of iptables rules (default true)
-      --ip6tables                             Enable addition of ip6tables rules (default false)
       --ipv6                                  Enable IPv6 networking
       --label list                            Set key=value labels to the daemon
       --live-restore                          Enable live restore of docker when containers are still running
@@ -81,16 +83,17 @@ Options:
       --max-concurrent-uploads int            Set the max concurrent uploads (default 5)
       --max-download-attempts int             Set the max download attempts for each pull (default 5)
       --metrics-addr string                   Set default address and port to serve the metrics api on
-      --mtu int                               Set the containers network MTU
+      --mtu int                               Set the containers network MTU (default 1500)
       --network-control-plane-mtu int         Network Control plane MTU (default 1500)
       --no-new-privileges                     Set no-new-privileges by default for new containers
+      --no-proxy string                       Comma-separated list of hosts or IP addresses for which the proxy is skipped
       --node-generic-resource list            Advertise user-defined resource
-      --oom-score-adjust int                  Set the oom_score_adj for the daemon (default -500)
+      --oom-score-adjust int                  Set the oom_score_adj for the daemon
   -p, --pidfile string                        Path to use for daemon PID file (default "/var/run/docker.pid")
       --raw-logs                              Full timestamps without ANSI coloring
-      --registry-mirror list                  Preferred Docker registry mirror
+      --registry-mirror list                  Preferred registry mirror
       --rootless                              Enable rootless mode; typically used with RootlessKit
-      --seccomp-profile string                Path to seccomp profile
+      --seccomp-profile string                Path to seccomp profile. Use "unconfined" to disable the default seccomp profile (default "builtin")
       --selinux-enabled                       Enable selinux support
       --shutdown-timeout int                  Set the default shutdown timeout (default 15)
   -s, --storage-driver string                 Storage driver to use
@@ -104,6 +107,7 @@ Options:
       --userland-proxy                        Use userland proxy for loopback traffic (default true)
       --userland-proxy-path string            Path to the userland proxy binary
       --userns-remap string                   User/Group setting for user namespaces
+      --validate                              Validate daemon configuration and exit
   -v, --version                               Print version information and quit
 ```
 
@@ -128,15 +132,41 @@ to [the `daemon.json` file](#daemon-configuration-file).
 For easy reference, the following list of environment variables are supported
 by the `dockerd` command line:
 
-* `DOCKER_DRIVER` The graph driver to use.
-* `DOCKER_NOWARN_KERNEL_VERSION` Prevent warnings that your Linux kernel is
-  unsuitable for Docker.
-* `DOCKER_RAMDISK` If set this will disable 'pivot_root'.
-* `DOCKER_TMPDIR` Location for temporary Docker files.
-* `MOBY_DISABLE_PIGZ` Do not use [`unpigz`](https://linux.die.net/man/1/pigz) to
-  decompress layers in parallel when pulling images, even if it is installed.
+| Variable            | Description                                                                                                                                                                       |
+|:--------------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `DOCKER_CERT_PATH`  | Location of your authentication keys. This variable is used both by the [`docker` CLI](cli.md) and the `dockerd` daemon.                                                          |
+| `DOCKER_DRIVER`     | The storage driver to use.                                                                                                                                                        |
+| `DOCKER_RAMDISK`    | If set this disables 'pivot_root'.                                                                                                                                                |
+| `DOCKER_TLS_VERIFY` | When set Docker uses TLS and verifies the remote. This variable is used both by the  [`docker` CLI](cli.md) and the `dockerd` daemon.                                             |
+| `DOCKER_TMPDIR`     | Location for temporary files created by the daemon.                                                                                                                               |
+| `HTTP_PROXY`        | Proxy URL for HTTP requests unless overridden by NoProxy. See the [Go specification](https://pkg.go.dev/golang.org/x/net/http/httpproxy#Config) for details.                      |
+| `HTTPS_PROXY`       | Proxy URL for HTTPS requests unless overridden by NoProxy. See the [Go specification](https://pkg.go.dev/golang.org/x/net/http/httpproxy#Config) for details.                     |
+| `MOBY_DISABLE_PIGZ` | Disables the use of [`unpigz`](https://linux.die.net/man/1/pigz) to  decompress layers in parallel when pulling images, even if it is installed.                                  |                                                                                                                                                               |
+| `NO_PROXY`          | Comma-separated values specifying hosts that should be excluded from proxying. See the [Go specification](https://pkg.go.dev/golang.org/x/net/http/httpproxy#Config) for details. |
 
 ## Examples
+
+### Proxy configuration
+
+> **Note**
+> 
+> Refer to the [Docker Desktop manual](https://docs.docker.com/desktop/networking/#httphttps-proxy-support)
+> if you are running [Docker Desktop](https://docs.docker.com/desktop/).
+
+If you are behind an HTTP proxy server, for example in corporate settings,
+you may have to configure the Docker daemon to use the proxy server for
+operations such as pulling and pushing images. The daemon can be configured
+in three ways:
+
+1. Using environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`).
+2. Using the "http-proxy", "https-proxy", and "no-proxy" fields in the
+  [daemon configuration file](#daemon-configuration-file) (Docker Engine 23.0 or newer).
+3. Using the `--http-proxy`, `--https-proxy`, and `--no-proxy` command-line
+  options. (Docker Engine 23.0 or newer).
+
+The command-line and configuration file options take precedence over environment
+variables. Refer to [control and configure Docker with systemd](https://docs.docker.com/config/daemon/systemd/#httphttps-proxy)
+to set these environment variables on a host using `systemd`.
 
 ### Daemon socket option
 
@@ -212,6 +242,7 @@ precedence over `HTTP_PROXY`.
 The Docker client supports connecting to a remote daemon via SSH:
 
 ```console
+$ docker -H ssh://me@example.com:22/var/run/docker.sock ps
 $ docker -H ssh://me@example.com:22 ps
 $ docker -H ssh://me@example.com ps
 $ docker -H ssh://example.com ps
@@ -292,70 +323,21 @@ $ docker -H tcp://127.0.0.1:2375 pull ubuntu
 ### Daemon storage-driver
 
 On Linux, the Docker daemon has support for several different image layer storage
-drivers: `aufs`, `devicemapper`, `btrfs`, `zfs`, `overlay`, `overlay2`, and `fuse-overlayfs`.
+drivers: `overlay2`, `fuse-overlayfs`, `btrfs`, `zfs`, and `devicemapper`.
 
-The `aufs` driver is the oldest, but is based on a Linux kernel patch-set that
-is unlikely to be merged into the main kernel. These are also known to cause
-some serious kernel crashes. However `aufs` allows containers to share
-executable and shared library memory, so is a useful choice when running
-thousands of containers with the same program or libraries.
+`overlay2` is the preferred storage driver for all currently supported Linux distributions,
+and is selected by default. Unless users have a strong reason to prefer another storage driver,
+`overlay2` should be used.
 
-The `devicemapper` driver uses thin provisioning and Copy on Write (CoW)
-snapshots. For each devicemapper graph location – typically
-`/var/lib/docker/devicemapper` – a thin pool is created based on two block
-devices, one for data and one for metadata. By default, these block devices
-are created automatically by using loopback mounts of automatically created
-sparse files. Refer to [Devicemapper options](#devicemapper-options) below
-for a way how to customize this setup.
-[~jpetazzo/Resizing Docker containers with the Device Mapper plugin](https://jpetazzo.github.io/2014/01/29/docker-device-mapper-resize/)
-article explains how to tune your existing setup without the use of options.
+You can find out more about storage drivers and how to select one in [Select a storage driver](https://docs.docker.com/storage/storagedriver/select-storage-driver/).
 
-The `btrfs` driver is very fast for `docker build` - but like `devicemapper`
-does not share executable memory between devices. Use
-`dockerd --storage-driver btrfs --data-root /mnt/btrfs_partition`.
-
-The `zfs` driver is probably not as fast as `btrfs` but has a longer track record
-on stability. Thanks to `Single Copy ARC` shared blocks between clones will be
-cached only once. Use `dockerd -s zfs`. To select a different zfs filesystem
-set `zfs.fsname` option as described in [ZFS options](#zfs-options).
-
-The `overlay` is a very fast union filesystem. It is now merged in the main
-Linux kernel as of [3.18.0](https://lkml.org/lkml/2014/10/26/137). `overlay`
-also supports page cache sharing, this means multiple containers accessing
-the same file can share a single page cache entry (or entries), it makes
-`overlay` as efficient with memory as `aufs` driver. Call `dockerd -s overlay`
-to use it.
-
-The `overlay2` uses the same fast union filesystem but takes advantage of
-[additional features](https://lkml.org/lkml/2015/2/11/106) added in Linux
-kernel 4.0 to avoid excessive inode consumption. Call `dockerd -s overlay2`
-to use it.
-
-> **Note**
->
-> The `overlay` storage driver can cause excessive inode consumption (especially
-> as the number of images grows). We recommend using the `overlay2` storage
-> driver instead.
-
-
-> **Note**
->
-> Both `overlay` and `overlay2` are currently unsupported on `btrfs`
-> or any Copy on Write filesystem and should only be used over `ext4` partitions.
-
-The `fuse-overlayfs` driver is similar to `overlay2` but works in userspace.
-The `fuse-overlayfs` driver is expected to be used for [Rootless mode](https://docs.docker.com/engine/security/rootless/).
-
-On Windows, the Docker daemon supports a single image layer storage driver
-depending on the image platform: `windowsfilter` for Windows images, and
-`lcow` for Linux containers on Windows.
+On Windows, the Docker daemon only supports the `windowsfilter` storage driver.
 
 ### Options per storage driver
 
 Particular storage-driver can be configured with options specified with
 `--storage-opt` flags. Options for `devicemapper` are prefixed with `dm`,
-options for `zfs` start with `zfs`, options for `btrfs` start with `btrfs`
-and options for `lcow` start with `lcow`.
+options for `zfs` start with `zfs`, and options for `btrfs` start with `btrfs`.
 
 #### Devicemapper options
 
@@ -846,129 +828,197 @@ Defaults to 20G.
 C:\> dockerd --storage-opt size=40G
 ```
 
-#### LCOW (Linux Containers on Windows) options
-
-##### `lcow.globalmode`
-
-Specifies whether the daemon instantiates utility VM instances as required
-(recommended and default if omitted), or uses single global utility VM (better
-performance, but has security implications and not recommended for production
-deployments).
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.globalmode=false
-```
-
-##### `lcow.kirdpath`
-
-Specifies the folder path to the location of a pair of kernel and initrd files
-used for booting a utility VM. Defaults to `%ProgramFiles%\Linux Containers`.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.kirdpath=c:\path\to\files
-```
-
-##### `lcow.kernel`
-
-Specifies the filename of a kernel file located in the `lcow.kirdpath` path.
-Defaults to `bootx64.efi`.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.kernel=kernel.efi
-```
-
-##### `lcow.initrd`
-
-Specifies the filename of an initrd file located in the `lcow.kirdpath` path.
-Defaults to `initrd.img`.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.initrd=myinitrd.img
-```
-
-##### `lcow.bootparameters`
-
-Specifies additional boot parameters for booting utility VMs when in kernel/
-initrd mode. Ignored if the utility VM is booting from VHD. These settings
-are kernel specific.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt "lcow.bootparameters='option=value'"
-```
-
-##### `lcow.vhdx`
-
-Specifies a custom VHDX to boot a utility VM, as an alternate to kernel
-and initrd booting. Defaults to `uvm.vhdx` under `lcow.kirdpath`.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.vhdx=custom.vhdx
-```
-
-##### `lcow.timeout`
-
-Specifies the timeout for utility VM operations in seconds. Defaults
-to 300.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.timeout=240
-```
-
-##### `lcow.sandboxsize`
-
-Specifies the size in GB to use when creating the sandbox which is used for
-containers. Defaults to 20. Cannot be less than 20.
-
-###### Example
-
-```powershell
-C:\> dockerd --storage-opt lcow.sandboxsize=40
-```
-
-### Docker runtime execution options
+### Runtime options
 
 The Docker daemon relies on a
 [OCI](https://github.com/opencontainers/runtime-spec) compliant runtime
 (invoked via the `containerd` daemon) as its interface to the Linux
 kernel `namespaces`, `cgroups`, and `SELinux`.
 
-By default, the Docker daemon automatically starts `containerd`. If you want to
-control `containerd` startup, manually start `containerd` and pass the path to
-the `containerd` socket using the `--containerd` flag. For example:
+#### Configure container runtimes
+
+By default, the Docker daemon uses runc as a container runtime.
+You can configure the daemon to add additional runtimes.
+
+containerd shims installed on `PATH` can be used directly, without the need
+to edit the daemon's configuration. For example, if you install the Kata
+Containers shim (`containerd-shim-kata-v2`) on `PATH`, then you can select that
+runtime with `docker run` without having to edit the daemon's configuration:
 
 ```console
-$ sudo dockerd --containerd /var/run/dev/docker-containerd.sock
+$ docker run --runtime io.containerd.kata.v2
 ```
 
-Runtimes can be registered with the daemon either via the
-configuration file or using the `--add-runtime` command line argument.
+Container runtimes that don't implement containerd shims, or containerd shims
+installed outside of `PATH`, must be registered with the daemon, either via the
+configuration file or using the `--add-runtime` command line flag.
 
-The following is an example adding 2 runtimes via the configuration:
+For examples on how to use other container runtimes, see
+[Alternative container runtimes](https://docs.docker.com/engine/alternative-runtimes/)
+
+##### Configure runtimes using `daemon.json`
+
+To register and configure container runtimes using the daemon's configuration
+file, add the runtimes as entries under `runtimes`:
 
 ```json
 {
-  "default-runtime": "runc",
   "runtimes": {
-    "custom": {
-      "path": "/usr/local/bin/my-runc-replacement",
-      "runtimeArgs": [
-        "--debug"
-      ]
+    "<runtime>": {}
+  }
+}
+```
+
+The key of the entry (`<runtime>` in the previous example) represents the name
+of the runtime. This is the name that you reference when you run a container,
+using `docker run --runtime <runtime>`.
+
+The runtime entry contains an object specifying the configuration for your
+runtime. The properties of the object depends on what kind of runtime you're
+looking to register:
+
+- If the runtime implements its own containerd shim, the object shall contain
+  a `runtimeType` field and an optional `options` field.
+
+  ```json
+  {
+    "runtimes": {
+      "<runtime>": {
+        "runtimeType": "<name-or-path>",
+        "options": {}
+      }
+    }
+  }
+  ```
+
+  See [Configure shims](#configure-containerd-shims).
+
+- If the runtime is designed to be a drop-in replacement for runc,
+  the object contains a `path` field, and an optional `runtimeArgs` field.
+
+  ```json
+  {
+    "runtimes": {
+      "<runtime>": {
+        "path": "/path/to/bin",
+        "runtimeArgs": ["...args"]
+      }
+    }
+  }
+  ```
+
+  See [Configure runc drop-in replacements](#configure-runc-drop-in-replacements).
+
+After changing the runtimes configuration in the configuration file,
+you must reload or restart the daemon for changes to take effect:
+
+```console
+$ sudo systemctl reload dockerd
+```
+
+##### Configure containerd shims
+
+If the runtime that you want to register implements a containerd shim,
+or if you want to register a runtime which uses the runc shim,
+use the following format for the runtime entry:
+
+```json
+{
+  "runtimes": {
+    "<runtime>": {
+      "runtimeType": "<name-or-path>",
+      "options": {}
+    }
+  }
+}
+```
+
+`runtimeType` refers to either:
+
+- A fully qualified name of a containerd shim.
+
+  The fully qualified name of a shim is the same as the `runtime_type` used to
+  register the runtime in containerd's CRI configuration.
+  For example, `io.containerd.runsc.v1`.
+
+- The path of a containerd shim binary.
+
+  This option is useful if you installed the containerd shim binary outside of
+  `PATH`.
+
+`options` is optional. It lets you specify the runtime configuration that you
+want to use for the shim. The configuration parameters that you can specify in
+`options` depends on the runtime you're registering. For most shims,
+the supported configuration options are `TypeUrl` and `ConfigPath`.
+For example:
+
+```json
+{
+  "runtimes": {
+    "gvisor": {
+      "runtimeType": "io.containerd.runsc.v1",
+      "options": {
+        "TypeUrl": "io.containerd.runsc.v1.options",
+        "ConfigPath": "/etc/containerd/runsc.toml",
+      }
+    }
+  }
+}
+```
+
+You can configure multiple runtimes using the same runtimeType. For example:
+
+```json
+{
+  "runtimes": {
+    "gvisor-foo": {
+      "runtimeType": "io.containerd.runsc.v1",
+      "options": {
+        "TypeUrl": "io.containerd.runsc.v1.options",
+        "ConfigPath": "/etc/containerd/runsc-foo.toml"
+      }
     },
+    "gvisor-bar": {
+      "runtimeType": "io.containerd.runsc.v1",
+      "options": {
+        "TypeUrl": "io.containerd.runsc.v1.options",
+        "ConfigPath": "/etc/containerd/runsc-bar.toml"
+      }
+    }
+  }
+}
+```
+
+The `options` field takes a special set of configuration parameters when used
+with `"runtimeType": "io.containerd.runc.v2"`. For more information about runc
+parameters, refer to the runc configuration section in
+[CRI Plugin Config Guide](https://github.com/containerd/containerd/blob/v1.7.2/docs/cri/config.md#full-configuration).
+
+##### Configure runc drop-in replacements
+
+If the runtime that you want to register can act as a drop-in replacement for
+runc, you can register the runtime either using the daemon configuration file, 
+or using the `--add-runtime` flag for the `dockerd` cli.
+
+When you use the configuration file, the entry uses the following format:
+
+```json
+{
+  "runtimes": {
+    "<runtime>": {
+      "path": "/path/to/binary",
+      "runtimeArgs": ["...args"]
+    }
+  }
+}
+```
+
+Where `path` is either the absolute path to the runtime executable, or the name
+of an executable installed on `PATH`:
+
+```json
+{
+  "runtimes": {
     "runc": {
       "path": "runc"
     }
@@ -976,24 +1026,58 @@ The following is an example adding 2 runtimes via the configuration:
 }
 ```
 
-This is the same example via the command line:
+And `runtimeArgs` lets you optionally pass additional arguments to the runtime.
+Entries with this format use the containerd runc shim to invoke a custom
+runtime binary.
+
+When you use the `--add-runtime` CLI flag, use the following format:
 
 ```console
-$ sudo dockerd --add-runtime runc=runc --add-runtime custom=/usr/local/bin/my-runc-replacement
+$ sudo dockerd --add-runtime <runtime>=<path>
 ```
 
-> **Note**
->
-> Defining runtime arguments via the command line is not supported.
+Defining runtime arguments via the command line is not supported.
 
-#### Options for the runtime
+For an example configuration for a runc drop-in replacment, see
+[Alternative container runtimes > youki](https://docs.docker.com/engine/alternative-runtimes/#youki)
 
-You can configure the runtime using options specified
-with the `--exec-opt` flag. All the flag's options have the `native` prefix. A
-single `native.cgroupdriver` option is available.
+##### Configure the default container runtime
 
-The `native.cgroupdriver` option specifies the management of the container's
-cgroups. You can only specify `cgroupfs` or `systemd`. If you specify
+You can specify either the name of a fully qualified containerd runtime shim,
+or the name of a registered runtime. You can specify the default runtime either
+using the daemon configuration file, or using the `--default-runtime` flag for
+the `dockerd` cli.
+
+When you use the configuration file, the entry uses the following format:
+
+```json
+{
+  "default-runtime": "io.containerd.runsc.v1"
+}
+```
+
+When you use the `--default-runtime` CLI flag, use the following format:
+
+```console
+$ dockerd --default-runtime io.containerd.runsc.v1
+```
+
+#### Run containerd standalone
+
+By default, the Docker daemon automatically starts `containerd`. If you want to
+control `containerd` startup, manually start `containerd` and pass the path to
+the `containerd` socket using the `--containerd` flag. For example:
+
+```console
+$ sudo dockerd --containerd /run/containerd/containerd.sock
+```
+
+#### Configure cgroup driver
+
+You can configure how the runtime should manage container cgroups, using the
+`--exec-opt native.cgroupdriver` CLI flag.
+
+You can only specify `cgroupfs` or `systemd`. If you specify
 `systemd` and it is not available, the system errors out. If you omit the
 `native.cgroupdriver` option,` cgroupfs` is used on cgroup v1 hosts, `systemd`
 is used on cgroup v2 hosts with systemd available.
@@ -1006,16 +1090,19 @@ $ sudo dockerd --exec-opt native.cgroupdriver=systemd
 
 Setting this option applies to all containers the daemon launches.
 
-Also Windows Container makes use of `--exec-opt` for special purpose. Docker user
-can specify default container isolation technology with this, for example:
+#### Configure container isolation technology (Windows)
+
+For Windows containers, you can specify the default container isolation
+technology to use, using the `--exec-opt isolation` flag. 
+
+The following example makes `hyperv` the default isolation technology:
 
 ```console
 > dockerd --exec-opt isolation=hyperv
 ```
 
-Will make `hyperv` the default isolation technology on Windows. If no isolation
-value is specified on daemon start, on Windows client, the default is
-`hyperv`, and on Windows server, the default is `process`.
+If no isolation value is specified on daemon start, on Windows client,
+the default is `hyperv`, and on Windows server, the default is `process`.
 
 ### Daemon DNS options
 
@@ -1137,41 +1224,6 @@ these defaults are not set, `ulimit` settings will be inherited, if not set on
 Be careful setting `nproc` with the `ulimit` flag as `nproc` is designed by Linux to
 set the maximum number of processes available to a user, not to a container. For details
 please check the [run](run.md) reference.
-
-### Node discovery
-
-The `--cluster-advertise` option specifies the `host:port` or `interface:port`
-combination that this particular daemon instance should use when advertising
-itself to the cluster. The daemon is reached by remote hosts through this value.
-If you  specify an interface, make sure it includes the IP address of the actual
-Docker host. For Engine installation created through `docker-machine`, the
-interface is typically `eth1`.
-
-The daemon uses [libkv](https://github.com/docker/libkv/) to advertise
-the node within the cluster. Some key-value backends support mutual
-TLS. To configure the client TLS settings used by the daemon can be configured
-using the `--cluster-store-opt` flag, specifying the paths to PEM encoded
-files. For example:
-
-```console
-$ sudo dockerd \
-    --cluster-advertise 192.168.1.2:2376 \
-    --cluster-store etcd://192.168.1.2:2379 \
-    --cluster-store-opt kv.cacertfile=/path/to/ca.pem \
-    --cluster-store-opt kv.certfile=/path/to/cert.pem \
-    --cluster-store-opt kv.keyfile=/path/to/key.pem
-```
-
-The currently supported cluster store options are:
-
-| Option                | Description                                                                                                                                                                                                                   |
-|:----------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `discovery.heartbeat` | Specifies the heartbeat timer in seconds which is used by the daemon as a `keepalive` mechanism to make sure discovery module treats the node as alive in the cluster. If not configured, the default value is 20 seconds.    |
-| `discovery.ttl`       | Specifies the TTL (time-to-live) in seconds which is used by the discovery module to timeout a node if a valid heartbeat is not received within the configured ttl value. If not configured, the default value is 60 seconds. |
-| `kv.cacertfile`       | Specifies the path to a local file with PEM encoded CA certificates to trust.                                                                                                                                                 |
-| `kv.certfile`         | Specifies the path to a local file with a PEM encoded certificate. This certificate is used as the client cert for communication with the Key/Value store.                                                                    |
-| `kv.keyfile`          | Specifies the path to a local file with a PEM encoded private key. This private key is used as the client key for communication with the Key/Value store.                                                                     |
-| `kv.path`             | Specifies the path in the Key/Value store. If not configured, the default value is 'docker/nodes'.                                                                                                                            |
 
 ### Access authorization
 
@@ -1319,11 +1371,30 @@ of the flag name, e.g., `labels` for the `label` flag.
 
 The options set in the configuration file must not conflict with options set
 via flags. The docker daemon fails to start if an option is duplicated between
-the file and the flags, regardless their value. We do this to avoid
+the file and the flags, regardless of their value. We do this to avoid
 silently ignore changes introduced in configuration reloads.
 For example, the daemon fails to start if you set daemon labels
 in the configuration file and also set daemon labels via the `--label` flag.
 Options that are not present in the file are ignored when the daemon starts.
+
+The `--validate` option allows to validate a configuration file without
+starting the Docker daemon. A non-zero exit code is returned for invalid
+configuration files.
+
+```console
+$ dockerd --validate --config-file=/tmp/valid-config.json
+configuration OK
+
+$ echo $?
+0
+
+$ dockerd --validate --config-file /tmp/invalid-config.json
+unable to configure the Docker daemon with file /tmp/invalid-config.json: the following directives don't match any configuration option: unknown-option
+
+$ echo $?
+1
+```
+
 
 ##### On Linux
 
@@ -1341,9 +1412,6 @@ This is a full example of the allowed configuration options on Linux:
   "bip": "",
   "bridge": "",
   "cgroup-parent": "",
-  "cluster-advertise": "",
-  "cluster-store": "",
-  "cluster-store-opts": {},
   "containerd": "/run/containerd/containerd.sock",
   "containerd-namespace": "docker",
   "containerd-plugin-namespace": "docker-plugins",
@@ -1382,6 +1450,11 @@ This is a full example of the allowed configuration options on Linux:
   "fixed-cidr-v6": "",
   "group": "",
   "hosts": [],
+  "proxies": {
+    "http-proxy": "http://proxy.example.com:80",
+    "https-proxy": "https://proxy.example.com:443",
+    "no-proxy": "*.test.example.com,.example.org",
+  },
   "icc": false,
   "init": false,
   "init-path": "/usr/libexec/docker-init",
@@ -1415,7 +1488,7 @@ This is a full example of the allowed configuration options on Linux:
     "NVIDIA-GPU=UUID1",
     "NVIDIA-GPU=UUID2"
   ],
-  "oom-score-adjust": -500,
+  "oom-score-adjust": 0,
   "pidfile": "",
   "raw-logs": false,
   "registry-mirrors": [],
@@ -1469,13 +1542,12 @@ This is a full example of the allowed configuration options on Windows:
   "allow-nondistributable-artifacts": [],
   "authorization-plugins": [],
   "bridge": "",
-  "cluster-advertise": "",
-  "cluster-store": "",
   "containerd": "\\\\.\\pipe\\containerd-containerd",
   "containerd-namespace": "docker",
   "containerd-plugin-namespace": "docker-plugins",
   "data-root": "",
   "debug": true,
+  "default-runtime": "",
   "default-ulimits": {},
   "dns": [],
   "dns-opts": [],
@@ -1508,6 +1580,13 @@ This is a full example of the allowed configuration options on Windows:
 }
 ```
 
+The `default-runtime` option is by default unset, in which case dockerd will auto-detect the runtime. This detection is currently based on if the `containerd` flag is set.
+
+Accepted values:
+
+- `com.docker.hcsshim.v1` - This is the built-in runtime that Docker has used since Windows supported was first added and uses the v1 HCS API's in Windows.
+- `io.containerd.runhcs.v1` - This is uses the containerd `runhcs` shim to run the container and uses the v2 HCS API's in Windows.
+
 #### Feature options
 The optional field `features` in `daemon.json` allows users to enable or disable specific
 daemon features. For example, `{"features":{"buildkit": true}}` enables `buildkit` as the
@@ -1530,9 +1609,6 @@ if there are conflicts, but it won't stop execution.
 The list of currently supported options that can be reconfigured is this:
 
 - `debug`: it changes the daemon to debug mode when set to true.
-- `cluster-store`: it reloads the discovery store with the new address.
-- `cluster-store-opts`: it uses the new options to reload the discovery store.
-- `cluster-advertise`: it modifies the address advertised after reloading.
 - `labels`: it replaces the daemon labels with a new set of labels.
 - `live-restore`: Enables [keeping containers alive during daemon downtime](https://docs.docker.com/config/containers/live-restore/).
 - `max-concurrent-downloads`: it updates the max concurrent downloads for each pull.
@@ -1549,15 +1625,6 @@ The list of currently supported options that can be reconfigured is this:
 - `registry-mirrors`: it replaces the daemon registry mirrors with a new set of registry mirrors. If some existing registry mirrors in daemon's configuration are not in newly reloaded registry mirrors, these existing ones will be removed from daemon's config.
 - `shutdown-timeout`: it replaces the daemon's existing configuration timeout with a new timeout for shutting down all containers.
 - `features`: it explicitly enables or disables specific features.
-
-Updating and reloading the cluster configurations such as `--cluster-store`,
-`--cluster-advertise` and `--cluster-store-opts` will take effect only if
-these configurations were not previously configured. If `--cluster-store`
-has been provided in flags and `cluster-advertise` not, `cluster-advertise`
-can be added in the configuration file without accompanied by `--cluster-store`.
-Configuration reload will log a warning message if it detects a change in
-previously configured cluster configurations.
-
 
 ### Run multiple daemons
 

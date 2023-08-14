@@ -1,20 +1,16 @@
----
-title: "trust inspect"
-description: "The inspect command description and usage"
-keywords: "inspect, notary, trust"
----
-
 # trust inspect
 
-```markdown
-Usage:  docker trust inspect IMAGE[:TAG] [IMAGE[:TAG]...]
-
+<!---MARKER_GEN_START-->
 Return low-level information about keys and signatures
 
-Options:
-      --help            Print usage
-      --pretty          Print the information in a human friendly format
-```
+### Options
+
+| Name       | Type | Default | Description                                      |
+|:-----------|:-----|:--------|:-------------------------------------------------|
+| `--pretty` |      |         | Print the information in a human friendly format |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -160,7 +156,7 @@ display any signed tags.
 ```console
 $ docker trust inspect unsigned-img
 
-No signatures or cannot access unsigned-img
+no signatures or cannot access unsigned-img
 ```
 
 However, if other tags are signed in the same image repository,

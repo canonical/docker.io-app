@@ -1,19 +1,19 @@
 package daemon // import "github.com/docker/docker/daemon"
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
-	"github.com/Microsoft/hcsshim/osversion"
+	coci "github.com/containerd/containerd/oci"
 	containertypes "github.com/docker/docker/api/types/container"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/oci"
-	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -27,14 +27,20 @@ const (
 	credentialSpecFileLocation     = "CredentialSpecs"
 )
 
-func (daemon *Daemon) createSpec(c *container.Container) (*specs.Spec, error) {
-
-	img, err := daemon.imageService.GetImage(string(c.ImageID), nil)
+func (daemon *Daemon) createSpec(ctx context.Context, c *container.Container) (*specs.Spec, error) {
+	img, err := daemon.imageService.GetImage(ctx, string(c.ImageID), imagetypes.GetImageOpts{})
 	if err != nil {
 		return nil, err
 	}
+	if !system.IsOSSupported(img.OperatingSystem()) {
+		return nil, system.ErrNotSupportedOperatingSystem
+	}
 
-	s := oci.DefaultOSSpec(img.OS)
+	s := oci.DefaultSpec()
+
+	if err := coci.WithAnnotations(c.HostConfig.Annotations)(ctx, nil, nil, &s); err != nil {
+		return nil, err
+	}
 
 	linkedEnv, err := daemon.setupLinkedContainers(c)
 	if err != nil {
@@ -116,11 +122,6 @@ func (daemon *Daemon) createSpec(c *container.Container) (*specs.Spec, error) {
 		if !mount.Writable {
 			m.Options = append(m.Options, "ro")
 		}
-		if img.OS != runtime.GOOS {
-			m.Type = "bind"
-			m.Options = append(m.Options, "rbind")
-			m.Options = append(m.Options, fmt.Sprintf("uvmpath=/tmp/gcs/%s/binds", c.ID))
-		}
 		s.Mounts = append(s.Mounts, m)
 	}
 
@@ -200,20 +201,8 @@ func (daemon *Daemon) createSpec(c *container.Container) (*specs.Spec, error) {
 		NetworkSharedContainerName: networkSharedContainerID,
 	}
 
-	switch img.OS {
-	case "windows":
-		if err := daemon.createSpecWindowsFields(c, &s, isHyperV); err != nil {
-			return nil, err
-		}
-	case "linux":
-		if !system.LCOWSupported() {
-			return nil, fmt.Errorf("Linux containers on Windows are not supported")
-		}
-		if err := daemon.createSpecLinuxFields(c, &s); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("Unsupported platform %q", img.OS)
+	if err := daemon.createSpecWindowsFields(c, &s, isHyperV); err != nil {
+		return nil, err
 	}
 
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
@@ -222,7 +211,7 @@ func (daemon *Daemon) createSpec(c *container.Container) (*specs.Spec, error) {
 		}
 	}
 
-	return (*specs.Spec)(&s), nil
+	return &s, nil
 }
 
 // Sets the Windows-specific fields of the OCI spec
@@ -251,11 +240,11 @@ func (daemon *Daemon) createSpecWindowsFields(c *container.Container, s *specs.S
 	}
 	s.Root.Readonly = false // Windows does not support a read-only root filesystem
 	if !isHyperV {
-		if c.BaseFS == nil {
-			return errors.New("createSpecWindowsFields: BaseFS of container " + c.ID + " is unexpectedly nil")
+		if c.BaseFS == "" {
+			return errors.New("createSpecWindowsFields: BaseFS of container " + c.ID + " is unexpectedly empty")
 		}
 
-		s.Root.Path = c.BaseFS.Path() // This is not set for Hyper-V containers
+		s.Root.Path = c.BaseFS // This is not set for Hyper-V containers
 		if !strings.HasSuffix(s.Root.Path, `\`) {
 			s.Root.Path = s.Root.Path + `\` // Ensure a correctly formatted volume GUID path \\?\Volume{GUID}\
 		}
@@ -271,29 +260,12 @@ func (daemon *Daemon) createSpecWindowsFields(c *container.Container, s *specs.S
 		return err
 	}
 
-	// Do we have any assigned devices?
-	if len(c.HostConfig.Devices) > 0 {
-		if isHyperV {
-			return errors.New("device assignment is not supported for HyperV containers")
-		}
-		if osversion.Build() < osversion.RS5 {
-			return errors.New("device assignment requires Windows builds RS5 (17763+) or later")
-		}
-		for _, deviceMapping := range c.HostConfig.Devices {
-			srcParts := strings.SplitN(deviceMapping.PathOnHost, "/", 2)
-			if len(srcParts) != 2 {
-				return errors.New("invalid device assignment path")
-			}
-			if srcParts[0] != "class" {
-				return errors.Errorf("invalid device assignment type: '%s' should be 'class'", srcParts[0])
-			}
-			wd := specs.WindowsDevice{
-				ID:     srcParts[1],
-				IDType: srcParts[0],
-			}
-			s.Windows.Devices = append(s.Windows.Devices, wd)
-		}
+	devices, err := setupWindowsDevices(c.HostConfig.Devices)
+	if err != nil {
+		return err
 	}
+
+	s.Windows.Devices = append(s.Windows.Devices, devices...)
 
 	return nil
 }
@@ -312,29 +284,31 @@ func (daemon *Daemon) setWindowsCredentialSpec(c *container.Container, s *specs.
 	// this doesn't seem like a great idea?
 	credentialSpec := ""
 
+	// TODO(thaJeztah): extract validating and parsing SecurityOpt to a reusable function.
 	for _, secOpt := range c.HostConfig.SecurityOpt {
-		optSplits := strings.SplitN(secOpt, "=", 2)
-		if len(optSplits) != 2 {
+		k, v, ok := strings.Cut(secOpt, "=")
+		if !ok {
 			return errdefs.InvalidParameter(fmt.Errorf("invalid security option: no equals sign in supplied value %s", secOpt))
 		}
-		if !strings.EqualFold(optSplits[0], "credentialspec") {
-			return errdefs.InvalidParameter(fmt.Errorf("security option not supported: %s", optSplits[0]))
+		// FIXME(thaJeztah): options should not be case-insensitive
+		if !strings.EqualFold(k, "credentialspec") {
+			return errdefs.InvalidParameter(fmt.Errorf("security option not supported: %s", k))
 		}
 
-		credSpecSplits := strings.SplitN(optSplits[1], "://", 2)
-		if len(credSpecSplits) != 2 || credSpecSplits[1] == "" {
+		scheme, value, ok := strings.Cut(v, "://")
+		if !ok || value == "" {
 			return errInvalidCredentialSpecSecOpt
 		}
-		value := credSpecSplits[1]
-
 		var err error
-		switch strings.ToLower(credSpecSplits[0]) {
+		switch strings.ToLower(scheme) {
 		case "file":
-			if credentialSpec, err = readCredentialSpecFile(c.ID, daemon.root, filepath.Clean(value)); err != nil {
+			credentialSpec, err = readCredentialSpecFile(c.ID, daemon.root, filepath.Clean(value))
+			if err != nil {
 				return errdefs.InvalidParameter(err)
 			}
 		case "registry":
-			if credentialSpec, err = readCredentialSpecRegistry(c.ID, value); err != nil {
+			credentialSpec, err = readCredentialSpecRegistry(c.ID, value)
+			if err != nil {
 				return errdefs.InvalidParameter(err)
 			}
 		case "config":
@@ -367,41 +341,6 @@ func (daemon *Daemon) setWindowsCredentialSpec(c *container.Container, s *specs.
 		s.Windows.CredentialSpec = credentialSpec
 	}
 
-	return nil
-}
-
-// Sets the Linux-specific fields of the OCI spec
-// TODO: LCOW Support. We need to do a lot more pulling in what can
-// be pulled in from oci_linux.go.
-func (daemon *Daemon) createSpecLinuxFields(c *container.Container, s *specs.Spec) error {
-	s.Root = &specs.Root{
-		Path:     "rootfs",
-		Readonly: c.HostConfig.ReadonlyRootfs,
-	}
-
-	s.Hostname = c.Config.Hostname
-	setLinuxDomainname(c, s)
-
-	if len(s.Process.Cwd) == 0 {
-		s.Process.Cwd = `/`
-	}
-	s.Process.Args = append([]string{c.Path}, c.Args...)
-
-	// Note these are against the UVM.
-	setResourcesInSpec(c, s, true) // LCOW is Hyper-V only
-
-	capabilities, err := caps.TweakCapabilities(caps.DefaultCapabilities(), c.HostConfig.CapAdd, c.HostConfig.CapDrop, c.HostConfig.Privileged)
-	if err != nil {
-		return fmt.Errorf("linux spec capabilities: %v", err)
-	}
-	if err := oci.SetCapabilities(s, capabilities); err != nil {
-		return fmt.Errorf("linux spec capabilities: %v", err)
-	}
-	devPermissions, err := oci.AppendDevicePermissionsFromCgroupRules(nil, c.HostConfig.DeviceCgroupRules)
-	if err != nil {
-		return fmt.Errorf("linux runtime spec devices: %v", err)
-	}
-	s.Linux.Resources.Devices = devPermissions
 	return nil
 }
 
@@ -507,16 +446,41 @@ func readCredentialSpecRegistry(id, name string) (string, error) {
 // This allows for staging on machines which do not have the necessary components.
 func readCredentialSpecFile(id, root, location string) (string, error) {
 	if filepath.IsAbs(location) {
-		return "", fmt.Errorf("invalid credential spec - file:// path cannot be absolute")
+		return "", fmt.Errorf("invalid credential spec: file:// path cannot be absolute")
 	}
 	base := filepath.Join(root, credentialSpecFileLocation)
 	full := filepath.Join(base, location)
 	if !strings.HasPrefix(full, base) {
-		return "", fmt.Errorf("invalid credential spec - file:// path must be under %s", base)
+		return "", fmt.Errorf("invalid credential spec: file:// path must be under %s", base)
 	}
 	bcontents, err := os.ReadFile(full)
 	if err != nil {
-		return "", errors.Wrapf(err, "credential spec for container %s could not be read from file %q", id, full)
+		return "", errors.Wrapf(err, "failed to load credential spec for container %s", id)
 	}
 	return string(bcontents[:]), nil
+}
+
+func setupWindowsDevices(devices []containertypes.DeviceMapping) (specDevices []specs.WindowsDevice, err error) {
+	for _, deviceMapping := range devices {
+		if strings.HasPrefix(deviceMapping.PathOnHost, "class/") {
+			specDevices = append(specDevices, specs.WindowsDevice{
+				ID:     strings.TrimPrefix(deviceMapping.PathOnHost, "class/"),
+				IDType: "class",
+			})
+		} else {
+			idType, id, ok := strings.Cut(deviceMapping.PathOnHost, "://")
+			if !ok {
+				return nil, errors.Errorf("invalid device assignment path: '%s', must be 'class/ID' or 'IDType://ID'", deviceMapping.PathOnHost)
+			}
+			if idType == "" {
+				return nil, errors.Errorf("invalid device assignment path: '%s', IDType cannot be empty", deviceMapping.PathOnHost)
+			}
+			specDevices = append(specDevices, specs.WindowsDevice{
+				ID:     id,
+				IDType: idType,
+			})
+		}
+	}
+
+	return specDevices, nil
 }

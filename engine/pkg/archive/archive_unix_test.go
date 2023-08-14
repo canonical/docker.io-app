@@ -15,26 +15,13 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/pkg/userns"
 	"github.com/docker/docker/pkg/system"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
-
-func TestCanonicalTarNameForPath(t *testing.T) {
-	cases := []struct{ in, expected string }{
-		{"foo", "foo"},
-		{"foo/bar", "foo/bar"},
-		{"foo/dir/", "foo/dir/"},
-	}
-	for _, v := range cases {
-		if CanonicalTarNameForPath(v.in) != v.expected {
-			t.Fatalf("wrong canonical tar name. expected:%s got:%s", v.expected, CanonicalTarNameForPath(v.in))
-		}
-	}
-}
 
 func TestCanonicalTarName(t *testing.T) {
 	cases := []struct {
@@ -205,7 +192,7 @@ func getInode(path string) (uint64, error) {
 
 func TestTarWithBlockCharFifo(t *testing.T) {
 	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
-	skip.If(t, sys.RunningInUserNS(), "skipping test that requires initial userns")
+	skip.If(t, userns.RunningInUserNS(), "skipping test that requires initial userns")
 	origin, err := os.MkdirTemp("", "docker-test-tar-hardlink")
 	assert.NilError(t, err)
 

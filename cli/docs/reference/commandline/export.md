@@ -1,20 +1,20 @@
----
-title: "export"
-description: "The export command description and usage"
-keywords: "export, file, system, container"
----
-
 # export
 
-```markdown
-Usage:  docker export [OPTIONS] CONTAINER
-
+<!---MARKER_GEN_START-->
 Export a container's filesystem as a tar archive
 
-Options:
-      --help            Print usage
-  -o, --output string   Write to a file, instead of STDOUT
-```
+### Aliases
+
+`docker container export`, `docker export`
+
+### Options
+
+| Name             | Type     | Default | Description                        |
+|:-----------------|:---------|:--------|:-----------------------------------|
+| `-o`, `--output` | `string` |         | Write to a file, instead of STDOUT |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 

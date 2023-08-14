@@ -2,78 +2,96 @@ package ociindex
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"os"
+	"path"
 
 	"github.com/gofrs/flock"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
 const (
-	// IndexJSONLockFileSuffix is the suffix of the lock file
-	IndexJSONLockFileSuffix = ".lock"
+	// indexFile is the name of the index file
+	indexFile = "index.json"
+
+	// lockFileSuffix is the suffix of the lock file
+	lockFileSuffix = ".lock"
 )
 
-// PutDescToIndex puts desc to index with tag.
-// Existing manifests with the same tag will be removed from the index.
-func PutDescToIndex(index *v1.Index, desc v1.Descriptor, tag string) error {
-	if index == nil {
-		index = &v1.Index{}
-	}
-	if index.SchemaVersion == 0 {
-		index.SchemaVersion = 2
-	}
-	if tag != "" {
-		if desc.Annotations == nil {
-			desc.Annotations = make(map[string]string)
-		}
-		desc.Annotations[v1.AnnotationRefName] = tag
-		// remove existing manifests with the same tag
-		var manifests []v1.Descriptor
-		for _, m := range index.Manifests {
-			if m.Annotations[v1.AnnotationRefName] != tag {
-				manifests = append(manifests, m)
-			}
-		}
-		index.Manifests = manifests
-	}
-	index.Manifests = append(index.Manifests, desc)
-	return nil
+type StoreIndex struct {
+	indexPath string
+	lockPath  string
 }
 
-func PutDescToIndexJSONFileLocked(indexJSONPath string, desc v1.Descriptor, tag string) error {
-	lockPath := indexJSONPath + IndexJSONLockFileSuffix
-	lock := flock.New(lockPath)
-	locked, err := lock.TryLock()
+func NewStoreIndex(storePath string) StoreIndex {
+	indexPath := path.Join(storePath, indexFile)
+	return StoreIndex{
+		indexPath: indexPath,
+		lockPath:  indexPath + lockFileSuffix,
+	}
+}
+
+func (s StoreIndex) Read() (*ocispecs.Index, error) {
+	lock := flock.New(s.lockPath)
+	locked, err := lock.TryRLock()
 	if err != nil {
-		return errors.Wrapf(err, "could not lock %s", lockPath)
+		return nil, errors.Wrapf(err, "could not lock %s", s.lockPath)
 	}
 	if !locked {
-		return errors.Errorf("could not lock %s", lockPath)
+		return nil, errors.Errorf("could not lock %s", s.lockPath)
 	}
 	defer func() {
 		lock.Unlock()
-		os.RemoveAll(lockPath)
+		os.RemoveAll(s.lockPath)
 	}()
-	f, err := os.OpenFile(indexJSONPath, os.O_RDWR|os.O_CREATE, 0644)
+
+	b, err := os.ReadFile(s.indexPath)
 	if err != nil {
-		return errors.Wrapf(err, "could not open %s", indexJSONPath)
+		return nil, errors.Wrapf(err, "could not read %s", s.indexPath)
+	}
+	var idx ocispecs.Index
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return nil, errors.Wrapf(err, "could not unmarshal %s (%q)", s.indexPath, string(b))
+	}
+	return &idx, nil
+}
+
+func (s StoreIndex) Put(tag string, desc ocispecs.Descriptor) error {
+	lock := flock.New(s.lockPath)
+	locked, err := lock.TryLock()
+	if err != nil {
+		return errors.Wrapf(err, "could not lock %s", s.lockPath)
+	}
+	if !locked {
+		return errors.Errorf("could not lock %s", s.lockPath)
+	}
+	defer func() {
+		lock.Unlock()
+		os.RemoveAll(s.lockPath)
+	}()
+
+	f, err := os.OpenFile(s.indexPath, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return errors.Wrapf(err, "could not open %s", s.indexPath)
 	}
 	defer f.Close()
-	var idx v1.Index
-	b, err := ioutil.ReadAll(f)
+
+	var idx ocispecs.Index
+	b, err := io.ReadAll(f)
 	if err != nil {
-		return errors.Wrapf(err, "could not read %s", indexJSONPath)
+		return errors.Wrapf(err, "could not read %s", s.indexPath)
 	}
 	if len(b) > 0 {
 		if err := json.Unmarshal(b, &idx); err != nil {
-			return errors.Wrapf(err, "could not unmarshal %s (%q)", indexJSONPath, string(b))
+			return errors.Wrapf(err, "could not unmarshal %s (%q)", s.indexPath, string(b))
 		}
 	}
-	if err = PutDescToIndex(&idx, desc, tag); err != nil {
+
+	if err = insertDesc(&idx, desc, tag); err != nil {
 		return err
 	}
+
 	b, err = json.Marshal(idx)
 	if err != nil {
 		return err
@@ -87,27 +105,56 @@ func PutDescToIndexJSONFileLocked(indexJSONPath string, desc v1.Descriptor, tag 
 	return nil
 }
 
-func ReadIndexJSONFileLocked(indexJSONPath string) (*v1.Index, error) {
-	lockPath := indexJSONPath + IndexJSONLockFileSuffix
-	lock := flock.New(lockPath)
-	locked, err := lock.TryRLock()
+func (s StoreIndex) Get(tag string) (*ocispecs.Descriptor, error) {
+	idx, err := s.Read()
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not lock %s", lockPath)
+		return nil, err
 	}
-	if !locked {
-		return nil, errors.Errorf("could not lock %s", lockPath)
+
+	for _, m := range idx.Manifests {
+		if t, ok := m.Annotations[ocispecs.AnnotationRefName]; ok && t == tag {
+			return &m, nil
+		}
 	}
-	defer func() {
-		lock.Unlock()
-		os.RemoveAll(lockPath)
-	}()
-	b, err := ioutil.ReadFile(indexJSONPath)
+	return nil, nil
+}
+
+func (s StoreIndex) GetSingle() (*ocispecs.Descriptor, error) {
+	idx, err := s.Read()
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not read %s", indexJSONPath)
+		return nil, err
 	}
-	var idx v1.Index
-	if err := json.Unmarshal(b, &idx); err != nil {
-		return nil, errors.Wrapf(err, "could not unmarshal %s (%q)", indexJSONPath, string(b))
+
+	if len(idx.Manifests) == 1 {
+		return &idx.Manifests[0], nil
 	}
-	return &idx, nil
+	return nil, nil
+}
+
+// insertDesc puts desc to index with tag.
+// Existing manifests with the same tag will be removed from the index.
+func insertDesc(index *ocispecs.Index, desc ocispecs.Descriptor, tag string) error {
+	if index == nil {
+		return nil
+	}
+
+	if index.SchemaVersion == 0 {
+		index.SchemaVersion = 2
+	}
+	if tag != "" {
+		if desc.Annotations == nil {
+			desc.Annotations = make(map[string]string)
+		}
+		desc.Annotations[ocispecs.AnnotationRefName] = tag
+		// remove existing manifests with the same tag
+		var manifests []ocispecs.Descriptor
+		for _, m := range index.Manifests {
+			if m.Annotations[ocispecs.AnnotationRefName] != tag {
+				manifests = append(manifests, m)
+			}
+		}
+		index.Manifests = manifests
+	}
+	index.Manifests = append(index.Manifests, desc)
+	return nil
 }

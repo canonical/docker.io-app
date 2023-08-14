@@ -38,7 +38,7 @@ func NewLogStreams(ctx context.Context, printOutput bool) (io.WriteCloser, io.Wr
 }
 
 func newStreamWriter(ctx context.Context, stream int, printOutput bool) *streamWriter {
-	pw, _, _ := progress.FromContext(ctx)
+	pw, _, _ := progress.NewFromContext(ctx)
 	return &streamWriter{
 		pw:          pw,
 		stream:      stream,
@@ -78,15 +78,16 @@ func (sw *streamWriter) checkLimit(n int) int {
 		maxSize = int(math.Ceil(time.Since(sw.created).Seconds())) * defaultMaxLogSpeed
 		sw.clipReasonSpeed = true
 	}
-	if maxSize > defaultMaxLogSize {
+	if maxSize == -1 || maxSize > defaultMaxLogSize {
 		maxSize = defaultMaxLogSize
 		sw.clipReasonSpeed = false
 	}
-	if maxSize < oldSize {
-		return 0
-	}
 
 	if maxSize != -1 {
+		if maxSize < oldSize {
+			return 0
+		}
+
 		if sw.size > maxSize {
 			return maxSize - oldSize
 		}
@@ -167,7 +168,7 @@ func (sw *streamWriter) Close() error {
 
 func LoggerFromContext(ctx context.Context) func([]byte) {
 	return func(dt []byte) {
-		pw, _, _ := progress.FromContext(ctx)
+		pw, _, _ := progress.NewFromContext(ctx)
 		defer pw.Close()
 		pw.Write(identity.NewID(), client.VertexLog{
 			Stream: stderr,

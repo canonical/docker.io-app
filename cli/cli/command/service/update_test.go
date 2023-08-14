@@ -504,19 +504,23 @@ type secretAPIClientMock struct {
 	listResult []swarm.Secret
 }
 
-func (s secretAPIClientMock) SecretList(ctx context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+func (s secretAPIClientMock) SecretList(context.Context, types.SecretListOptions) ([]swarm.Secret, error) {
 	return s.listResult, nil
 }
-func (s secretAPIClientMock) SecretCreate(ctx context.Context, secret swarm.SecretSpec) (types.SecretCreateResponse, error) {
+
+func (s secretAPIClientMock) SecretCreate(context.Context, swarm.SecretSpec) (types.SecretCreateResponse, error) {
 	return types.SecretCreateResponse{}, nil
 }
-func (s secretAPIClientMock) SecretRemove(ctx context.Context, id string) error {
+
+func (s secretAPIClientMock) SecretRemove(context.Context, string) error {
 	return nil
 }
-func (s secretAPIClientMock) SecretInspectWithRaw(ctx context.Context, name string) (swarm.Secret, []byte, error) {
+
+func (s secretAPIClientMock) SecretInspectWithRaw(context.Context, string) (swarm.Secret, []byte, error) {
 	return swarm.Secret{}, []byte{}, nil
 }
-func (s secretAPIClientMock) SecretUpdate(ctx context.Context, id string, version swarm.Version, secret swarm.SecretSpec) error {
+
+func (s secretAPIClientMock) SecretUpdate(context.Context, string, swarm.Version, swarm.SecretSpec) error {
 	return nil
 }
 
@@ -1062,7 +1066,7 @@ func TestUpdateGetUpdatedConfigs(t *testing.T) {
 				Name: "foo",
 				UID:  "0",
 				GID:  "0",
-				Mode: 0444,
+				Mode: 0o444,
 			},
 		},
 		"barRef": {
@@ -1072,7 +1076,7 @@ func TestUpdateGetUpdatedConfigs(t *testing.T) {
 				Name: "bar",
 				UID:  "0",
 				GID:  "0",
-				Mode: 0444,
+				Mode: 0o444,
 			},
 		},
 		"bazRef": {
@@ -1082,7 +1086,7 @@ func TestUpdateGetUpdatedConfigs(t *testing.T) {
 				Name: "baz",
 				UID:  "0",
 				GID:  "0",
-				Mode: 0444,
+				Mode: 0o444,
 			},
 		},
 		"credRef": {
@@ -1279,7 +1283,7 @@ func TestUpdateCredSpec(t *testing.T) {
 			spec:     &swarm.ContainerSpec{},
 			expected: nil,
 		}, {
-			name:    "add a config credenital spec",
+			name:    "add a config credential spec",
 			flagVal: "config://someConfigName",
 			spec: &swarm.ContainerSpec{
 				Configs: []*swarm.ConfigReference{

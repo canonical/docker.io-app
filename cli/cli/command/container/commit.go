@@ -6,6 +6,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types"
 	"github.com/spf13/cobra"
@@ -36,6 +37,10 @@ func NewCommitCommand(dockerCli command.Cli) *cobra.Command {
 			}
 			return runCommit(dockerCli, &options)
 		},
+		Annotations: map[string]string{
+			"aliases": "docker container commit, docker commit",
+		},
+		ValidArgsFunction: completion.ContainerNames(dockerCli, false),
 	}
 
 	flags := cmd.Flags()
@@ -43,7 +48,7 @@ func NewCommitCommand(dockerCli command.Cli) *cobra.Command {
 
 	flags.BoolVarP(&options.pause, "pause", "p", true, "Pause container during commit")
 	flags.StringVarP(&options.comment, "message", "m", "", "Commit message")
-	flags.StringVarP(&options.author, "author", "a", "", "Author (e.g., \"John Hannibal Smith <hannibal@a-team.com>\")")
+	flags.StringVarP(&options.author, "author", "a", "", `Author (e.g., "John Hannibal Smith <hannibal@a-team.com>")`)
 
 	options.changes = opts.NewListOpts(nil)
 	flags.VarP(&options.changes, "change", "c", "Apply Dockerfile instruction to the created image")

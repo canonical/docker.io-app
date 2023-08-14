@@ -5,6 +5,7 @@ package copy // import "github.com/docker/docker/daemon/graphdriver/copy"
 
 import (
 	"container/list"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/pkg/userns"
 	"github.com/docker/docker/pkg/pools"
 	"github.com/docker/docker/pkg/system"
 	"golang.org/x/sys/unix"
@@ -90,6 +91,11 @@ func legacyCopy(srcFile io.Reader, dstFile io.Writer) error {
 func copyXattr(srcPath, dstPath, attr string) error {
 	data, err := system.Lgetxattr(srcPath, attr)
 	if err != nil {
+		if errors.Is(err, syscall.EOPNOTSUPP) {
+			// Task failed successfully: there is no xattr to copy
+			// if the source filesystem doesn't support xattrs.
+			return nil
+		}
 		return err
 	}
 	if data != nil {
@@ -187,7 +193,7 @@ func DirCopy(srcDir, dstDir string, copyMode Mode, copyOpaqueXattrs bool) error 
 			}
 
 		case mode&os.ModeDevice != 0:
-			if sys.RunningInUserNS() {
+			if userns.RunningInUserNS() {
 				// cannot create a device if running in user namespace
 				return nil
 			}
@@ -234,8 +240,8 @@ func DirCopy(srcDir, dstDir string, copyMode Mode, copyOpaqueXattrs bool) error 
 		if f.IsDir() {
 			dirsToSetMtimes.PushFront(&dirMtimeInfo{dstPath: &dstPath, stat: stat})
 		} else if !isSymlink {
-			aTime := time.Unix(int64(stat.Atim.Sec), int64(stat.Atim.Nsec))
-			mTime := time.Unix(int64(stat.Mtim.Sec), int64(stat.Mtim.Nsec))
+			aTime := time.Unix(stat.Atim.Unix())
+			mTime := time.Unix(stat.Mtim.Unix())
 			if err := system.Chtimes(dstPath, aTime, mTime); err != nil {
 				return err
 			}

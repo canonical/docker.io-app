@@ -6,7 +6,9 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
+	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
 	"github.com/fvbommel/sortorder"
 	"github.com/spf13/cobra"
@@ -30,14 +32,15 @@ func newListCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList(dockerCli, options)
 		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
 
 	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Only display plugin IDs")
 	flags.BoolVar(&options.noTrunc, "no-trunc", false, "Don't truncate output")
-	flags.StringVar(&options.format, "format", "", "Pretty-print plugins using a Go template")
-	flags.VarP(&options.filter, "filter", "f", "Provide filter values (e.g. 'enabled=true')")
+	flags.StringVar(&options.format, "format", "", flagsHelper.FormatHelp)
+	flags.VarP(&options.filter, "filter", "f", `Provide filter values (e.g. "enabled=true")`)
 
 	return cmd
 }

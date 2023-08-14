@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strconv"
-	"syscall"
 
 	"github.com/containerd/containerd/platforms"
 	"github.com/docker/docker/api/server/httpstatus"
@@ -16,12 +16,12 @@ import (
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/versions"
 	containerpkg "github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/pkg/signal"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/websocket"
@@ -44,21 +44,23 @@ func (s *containerRouter) postCommit(ctx context.Context, w http.ResponseWriter,
 	}
 
 	config, _, _, err := s.decoder.DecodeConfig(r.Body)
-	if err != nil && err != io.EOF { // Do not fail if body is empty.
+	if err != nil && !errors.Is(err, io.EOF) { // Do not fail if body is empty.
 		return err
 	}
 
-	commitCfg := &backend.CreateImageConfig{
+	ref, err := httputils.RepoTagReference(r.Form.Get("repo"), r.Form.Get("tag"))
+	if err != nil {
+		return errdefs.InvalidParameter(err)
+	}
+
+	imgID, err := s.backend.CreateImageFromContainer(ctx, r.Form.Get("container"), &backend.CreateImageConfig{
 		Pause:   pause,
-		Repo:    r.Form.Get("repo"),
-		Tag:     r.Form.Get("tag"),
+		Tag:     ref,
 		Author:  r.Form.Get("author"),
 		Comment: r.Form.Get("comment"),
 		Config:  config,
 		Changes: r.Form["changes"],
-	}
-
-	imgID, err := s.backend.CreateImageFromContainer(r.Form.Get("container"), commitCfg)
+	})
 	if err != nil {
 		return err
 	}
@@ -91,7 +93,7 @@ func (s *containerRouter) getContainersJSON(ctx context.Context, w http.Response
 		config.Limit = limit
 	}
 
-	containers, err := s.backend.Containers(config)
+	containers, err := s.backend.Containers(ctx, config)
 	if err != nil {
 		return err
 	}
@@ -155,6 +157,12 @@ func (s *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 		return err
 	}
 
+	contentType := types.MediaTypeRawStream
+	if !tty && versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.42") {
+		contentType = types.MediaTypeMultiplexedStream
+	}
+	w.Header().Set("Content-Type", contentType)
+
 	// if has a tty, we're not muxing streams. if it doesn't, we are. simple.
 	// this is the point of no return for writing a response. once we call
 	// WriteLogStream, the response has been started and errors will be
@@ -164,7 +172,7 @@ func (s *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 }
 
 func (s *containerRouter) getContainersExport(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	return s.backend.ContainerExport(vars["name"], w)
+	return s.backend.ContainerExport(ctx, vars["name"], w)
 }
 
 type bodyOnStartError struct{}
@@ -208,7 +216,7 @@ func (s *containerRouter) postContainersStart(ctx context.Context, w http.Respon
 
 	checkpoint := r.Form.Get("checkpoint")
 	checkpointDir := r.Form.Get("checkpoint-dir")
-	if err := s.backend.ContainerStart(vars["name"], hostConfig, checkpoint, checkpointDir); err != nil {
+	if err := s.backend.ContainerStart(ctx, vars["name"], hostConfig, checkpoint, checkpointDir); err != nil {
 		return err
 	}
 
@@ -221,20 +229,26 @@ func (s *containerRouter) postContainersStop(ctx context.Context, w http.Respons
 		return err
 	}
 
-	var seconds *int
+	var (
+		options container.StopOptions
+		version = httputils.VersionFromContext(ctx)
+	)
+	if versions.GreaterThanOrEqualTo(version, "1.42") {
+		options.Signal = r.Form.Get("signal")
+	}
 	if tmpSeconds := r.Form.Get("t"); tmpSeconds != "" {
 		valSeconds, err := strconv.Atoi(tmpSeconds)
 		if err != nil {
 			return err
 		}
-		seconds = &valSeconds
+		options.Timeout = &valSeconds
 	}
 
-	if err := s.backend.ContainerStop(vars["name"], seconds); err != nil {
+	if err := s.backend.ContainerStop(ctx, vars["name"], options); err != nil {
 		return err
 	}
-	w.WriteHeader(http.StatusNoContent)
 
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 
@@ -243,18 +257,8 @@ func (s *containerRouter) postContainersKill(ctx context.Context, w http.Respons
 		return err
 	}
 
-	var sig syscall.Signal
 	name := vars["name"]
-
-	// If we have a signal, look at it. Otherwise, do nothing
-	if sigStr := r.Form.Get("signal"); sigStr != "" {
-		var err error
-		if sig, err = signal.ParseSignal(sigStr); err != nil {
-			return errdefs.InvalidParameter(err)
-		}
-	}
-
-	if err := s.backend.ContainerKill(name, uint64(sig)); err != nil {
+	if err := s.backend.ContainerKill(name, r.Form.Get("signal")); err != nil {
 		var isStopped bool
 		if errdefs.IsConflict(err) {
 			isStopped = true
@@ -278,21 +282,26 @@ func (s *containerRouter) postContainersRestart(ctx context.Context, w http.Resp
 		return err
 	}
 
-	var seconds *int
+	var (
+		options container.StopOptions
+		version = httputils.VersionFromContext(ctx)
+	)
+	if versions.GreaterThanOrEqualTo(version, "1.42") {
+		options.Signal = r.Form.Get("signal")
+	}
 	if tmpSeconds := r.Form.Get("t"); tmpSeconds != "" {
 		valSeconds, err := strconv.Atoi(tmpSeconds)
 		if err != nil {
 			return err
 		}
-		seconds = &valSeconds
+		options.Timeout = &valSeconds
 	}
 
-	if err := s.backend.ContainerRestart(vars["name"], seconds); err != nil {
+	if err := s.backend.ContainerRestart(ctx, vars["name"], options); err != nil {
 		return err
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-
 	return nil
 }
 
@@ -337,12 +346,18 @@ func (s *containerRouter) postContainersWait(ctx context.Context, w http.Respons
 		if err := httputils.ParseForm(r); err != nil {
 			return err
 		}
-		switch container.WaitCondition(r.Form.Get("condition")) {
-		case container.WaitConditionNextExit:
-			waitCondition = containerpkg.WaitConditionNextExit
-		case container.WaitConditionRemoved:
-			waitCondition = containerpkg.WaitConditionRemoved
-			legacyRemovalWaitPre134 = versions.LessThan(version, "1.34")
+		if v := r.Form.Get("condition"); v != "" {
+			switch container.WaitCondition(v) {
+			case container.WaitConditionNotRunning:
+				waitCondition = containerpkg.WaitConditionNotRunning
+			case container.WaitConditionNextExit:
+				waitCondition = containerpkg.WaitConditionNextExit
+			case container.WaitConditionRemoved:
+				waitCondition = containerpkg.WaitConditionRemoved
+				legacyRemovalWaitPre134 = versions.LessThan(version, "1.34")
+			default:
+				return errdefs.InvalidParameter(errors.Errorf("invalid condition: %q", v))
+			}
 		}
 	}
 
@@ -372,19 +387,19 @@ func (s *containerRouter) postContainersWait(ctx context.Context, w http.Respons
 		return nil
 	}
 
-	var waitError *container.ContainerWaitOKBodyError
+	var waitError *container.WaitExitError
 	if status.Err() != nil {
-		waitError = &container.ContainerWaitOKBodyError{Message: status.Err().Error()}
+		waitError = &container.WaitExitError{Message: status.Err().Error()}
 	}
 
-	return json.NewEncoder(w).Encode(&container.ContainerWaitOKBody{
+	return json.NewEncoder(w).Encode(&container.WaitResponse{
 		StatusCode: int64(status.ExitCode()),
 		Error:      waitError,
 	})
 }
 
 func (s *containerRouter) getContainersChanges(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	changes, err := s.backend.ContainerChanges(vars["name"])
+	changes, err := s.backend.ContainerChanges(ctx, vars["name"])
 	if err != nil {
 		return err
 	}
@@ -423,19 +438,20 @@ func (s *containerRouter) postContainerUpdate(ctx context.Context, w http.Respon
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
-	if err := httputils.CheckForJSON(r); err != nil {
-		return err
-	}
 
 	var updateConfig container.UpdateConfig
-
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&updateConfig); err != nil {
+	if err := httputils.ReadJSON(r, &updateConfig); err != nil {
 		return err
 	}
 	if versions.LessThan(httputils.VersionFromContext(ctx), "1.40") {
 		updateConfig.PidsLimit = nil
 	}
+
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.42") {
+		// Ignore KernelMemory removed in API 1.42.
+		updateConfig.KernelMemory = 0
+	}
+
 	if updateConfig.PidsLimit != nil && *updateConfig.PidsLimit <= 0 {
 		// Both `0` and `-1` are accepted to set "unlimited" when updating.
 		// Historically, any negative value was accepted, so treat them as
@@ -470,6 +486,9 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 
 	config, hostConfig, networkingConfig, err := s.decoder.DecodeConfig(r.Body)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return errdefs.InvalidParameter(errors.New("invalid JSON: got EOF while reading request body"))
+		}
 		return err
 	}
 	version := httputils.VersionFromContext(ctx)
@@ -492,17 +511,65 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 
 		// Older clients (API < 1.40) expects the default to be shareable, make them happy
 		if hostConfig.IpcMode.IsEmpty() {
-			hostConfig.IpcMode = container.IpcMode("shareable")
+			hostConfig.IpcMode = container.IPCModeShareable
 		}
 	}
 	if hostConfig != nil && versions.LessThan(version, "1.41") && !s.cgroup2 {
 		// Older clients expect the default to be "host" on cgroup v1 hosts
 		if hostConfig.CgroupnsMode.IsEmpty() {
-			hostConfig.CgroupnsMode = container.CgroupnsMode("host")
+			hostConfig.CgroupnsMode = container.CgroupnsModeHost
 		}
 	}
 
-	var platform *specs.Platform
+	if hostConfig != nil && versions.LessThan(version, "1.42") {
+		for _, m := range hostConfig.Mounts {
+			// Ignore BindOptions.CreateMountpoint because it was added in API 1.42.
+			if bo := m.BindOptions; bo != nil {
+				bo.CreateMountpoint = false
+			}
+
+			// These combinations are invalid, but weren't validated in API < 1.42.
+			// We reset them here, so that validation doesn't produce an error.
+			if o := m.VolumeOptions; o != nil && m.Type != mount.TypeVolume {
+				m.VolumeOptions = nil
+			}
+			if o := m.TmpfsOptions; o != nil && m.Type != mount.TypeTmpfs {
+				m.TmpfsOptions = nil
+			}
+			if bo := m.BindOptions; bo != nil {
+				// Ignore BindOptions.CreateMountpoint because it was added in API 1.42.
+				bo.CreateMountpoint = false
+			}
+		}
+	}
+
+	if hostConfig != nil && versions.GreaterThanOrEqualTo(version, "1.42") {
+		// Ignore KernelMemory removed in API 1.42.
+		hostConfig.KernelMemory = 0
+		for _, m := range hostConfig.Mounts {
+			if o := m.VolumeOptions; o != nil && m.Type != mount.TypeVolume {
+				return errdefs.InvalidParameter(fmt.Errorf("VolumeOptions must not be specified on mount type %q", m.Type))
+			}
+			if o := m.BindOptions; o != nil && m.Type != mount.TypeBind {
+				return errdefs.InvalidParameter(fmt.Errorf("BindOptions must not be specified on mount type %q", m.Type))
+			}
+			if o := m.TmpfsOptions; o != nil && m.Type != mount.TypeTmpfs {
+				return errdefs.InvalidParameter(fmt.Errorf("TmpfsOptions must not be specified on mount type %q", m.Type))
+			}
+		}
+	}
+
+	if hostConfig != nil && runtime.GOOS == "linux" && versions.LessThan(version, "1.42") {
+		// ConsoleSize is not respected by Linux daemon before API 1.42
+		hostConfig.ConsoleSize = [2]uint{0, 0}
+	}
+
+	if hostConfig != nil && versions.LessThan(version, "1.43") {
+		// Ignore Annotations because it was added in API v1.43.
+		hostConfig.Annotations = nil
+	}
+
+	var platform *ocispec.Platform
 	if versions.GreaterThanOrEqualTo(version, "1.41") {
 		if v := r.Form.Get("platform"); v != "" {
 			p, err := platforms.Parse(v)
@@ -521,7 +588,7 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 		hostConfig.PidsLimit = nil
 	}
 
-	ccr, err := s.backend.ContainerCreate(types.ContainerCreateConfig{
+	ccr, err := s.backend.ContainerCreate(ctx, types.ContainerCreateConfig{
 		Name:             name,
 		Config:           config,
 		HostConfig:       hostConfig,
@@ -589,7 +656,8 @@ func (s *containerRouter) postContainersAttach(ctx context.Context, w http.Respo
 		return errdefs.InvalidParameter(errors.Errorf("error attaching to container %s, hijack connection missing", containerName))
 	}
 
-	setupStreams := func() (io.ReadCloser, io.Writer, io.Writer, error) {
+	contentType := types.MediaTypeRawStream
+	setupStreams := func(multiplexed bool) (io.ReadCloser, io.Writer, io.Writer, error) {
 		conn, _, err := hijacker.Hijack()
 		if err != nil {
 			return nil, nil, nil, err
@@ -599,7 +667,10 @@ func (s *containerRouter) postContainersAttach(ctx context.Context, w http.Respo
 		conn.Write([]byte{})
 
 		if upgrade {
-			fmt.Fprintf(conn, "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			if multiplexed && versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.42") {
+				contentType = types.MediaTypeMultiplexedStream
+			}
+			fmt.Fprintf(conn, "HTTP/1.1 101 UPGRADED\r\nContent-Type: "+contentType+"\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 		} else {
 			fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
 		}
@@ -623,16 +694,16 @@ func (s *containerRouter) postContainersAttach(ctx context.Context, w http.Respo
 	}
 
 	if err = s.backend.ContainerAttach(containerName, attachConfig); err != nil {
-		logrus.Errorf("Handler for %s %s returned error: %v", r.Method, r.URL.Path, err)
+		logrus.WithError(err).Errorf("Handler for %s %s returned error", r.Method, r.URL.Path)
 		// Remember to close stream if error happens
 		conn, _, errHijack := hijacker.Hijack()
-		if errHijack == nil {
+		if errHijack != nil {
+			logrus.WithError(err).Errorf("Handler for %s %s: unable to close stream; error when hijacking connection", r.Method, r.URL.Path)
+		} else {
 			statusCode := httpstatus.FromError(err)
 			statusText := http.StatusText(statusCode)
-			fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n%s\r\n", statusCode, statusText, err.Error())
+			fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\n\r\n%s\r\n", statusCode, statusText, contentType, err.Error())
 			httputils.CloseStreams(conn)
-		} else {
-			logrus.Errorf("Error Hijacking: %v", err)
 		}
 	}
 	return nil
@@ -652,7 +723,7 @@ func (s *containerRouter) wsContainersAttach(ctx context.Context, w http.Respons
 
 	version := httputils.VersionFromContext(ctx)
 
-	setupStreams := func() (io.ReadCloser, io.Writer, io.Writer, error) {
+	setupStreams := func(multiplexed bool) (io.ReadCloser, io.Writer, io.Writer, error) {
 		wsChan := make(chan *websocket.Conn)
 		h := func(conn *websocket.Conn) {
 			wsChan <- conn
@@ -674,15 +745,22 @@ func (s *containerRouter) wsContainersAttach(ctx context.Context, w http.Respons
 		return conn, conn, conn, nil
 	}
 
+	useStdin, useStdout, useStderr := true, true, true
+	if versions.GreaterThanOrEqualTo(version, "1.42") {
+		useStdin = httputils.BoolValue(r, "stdin")
+		useStdout = httputils.BoolValue(r, "stdout")
+		useStderr = httputils.BoolValue(r, "stderr")
+	}
+
 	attachConfig := &backend.ContainerAttachConfig{
 		GetStreams: setupStreams,
+		UseStdin:   useStdin,
+		UseStdout:  useStdout,
+		UseStderr:  useStderr,
 		Logs:       httputils.BoolValue(r, "logs"),
 		Stream:     httputils.BoolValue(r, "stream"),
 		DetachKeys: detachKeys,
-		UseStdin:   true,
-		UseStdout:  true,
-		UseStderr:  true,
-		MuxStreams: false, // TODO: this should be true since it's a single stream for both stdout and stderr
+		MuxStreams: false, // never multiplex, as we rely on websocket to manage distinct streams
 	}
 
 	err = s.backend.ContainerAttach(containerName, attachConfig)
@@ -707,7 +785,7 @@ func (s *containerRouter) postContainersPrune(ctx context.Context, w http.Respon
 
 	pruneFilters, err := filters.FromJSON(r.Form.Get("filters"))
 	if err != nil {
-		return errdefs.InvalidParameter(err)
+		return err
 	}
 
 	pruneReport, err := s.backend.ContainersPrune(ctx, pruneFilters)

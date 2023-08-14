@@ -1,27 +1,20 @@
----
-title: "stack ps"
-description: "The stack ps command description and usage"
-keywords: "stack, ps"
----
-
 # stack ps
 
-```markdown
-Usage:  docker stack ps [OPTIONS] STACK
-
+<!---MARKER_GEN_START-->
 List the tasks in the stack
 
-Options:
-  -f, --filter filter         Filter output based on conditions provided
-      --format string         Pretty-print tasks using a Go template
-      --help                  Print usage
-      --kubeconfig string     Kubernetes config file
-      --namespace string      Kubernetes namespace to use
-      --no-resolve            Do not map IDs to Names
-      --no-trunc              Do not truncate output
-      --orchestrator string   Orchestrator to use (swarm|kubernetes|all)
-  -q, --quiet                 Only display task IDs
-```
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| [`--no-resolve`](#no-resolve)          |          |         | Do not map IDs to Names                                                                                                                                                                                                                                                                                                                                                                                                              |
+| [`--no-trunc`](#no-trunc)              |          |         | Do not truncate output                                                                                                                                                                                                                                                                                                                                                                                                               |
+| [`-q`](#quiet), [`--quiet`](#quiet)    |          |         | Only display task IDs                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -158,6 +151,14 @@ voting_redis.1: redis:alpine
 voting_visualizer.1: dockersamples/visualizer:stable
 voting_vote.2: dockersamples/examplevotingapp_vote:before
 voting_redis.2: redis:alpine
+```
+
+To list all tasks in JSON format, use the `json` directive:
+```console
+$ docker stack ps --format json myapp
+{"CurrentState":"Preparing 23 seconds ago","DesiredState":"Running","Error":"","ID":"2ufjubh79tn0","Image":"localstack/localstack:latest","Name":"myapp_localstack.1","Node":"docker-desktop","Ports":""}
+{"CurrentState":"Running 20 seconds ago","DesiredState":"Running","Error":"","ID":"roee387ngf5r","Image":"redis:6.0.9-alpine3.12","Name":"myapp_redis.1","Node":"docker-desktop","Ports":""}
+{"CurrentState":"Preparing 13 seconds ago","DesiredState":"Running","Error":"","ID":"yte68ouq7glh","Image":"postgres:13.2-alpine","Name":"myapp_repos-db.1","Node":"docker-desktop","Ports":""}
 ```
 
 ### <a name="no-resolve"></a> Do not map IDs to Names (--no-resolve)

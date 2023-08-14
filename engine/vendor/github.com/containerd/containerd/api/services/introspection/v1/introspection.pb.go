@@ -115,7 +115,7 @@ type PluginsRequest struct {
 	// filters. Expanded, plugins that match the following will be
 	// returned:
 	//
-	//   filters[0] or filters[1] or ... or filters[n-1] or filters[n]
+	//	filters[0] or filters[1] or ... or filters[n-1] or filters[n]
 	//
 	// If filters is zero-length or nil, all items will be returned.
 	Filters              []string `protobuf:"bytes,1,rep,name=filters,proto3" json:"filters,omitempty"`
@@ -1098,7 +1098,7 @@ func (m *Plugin) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthIntrospection
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -1183,10 +1183,7 @@ func (m *Plugin) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthIntrospection
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthIntrospection
 			}
 			if (iNdEx + skippy) > l {
@@ -1269,10 +1266,7 @@ func (m *PluginsRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthIntrospection
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthIntrospection
 			}
 			if (iNdEx + skippy) > l {
@@ -1357,10 +1351,7 @@ func (m *PluginsResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthIntrospection
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthIntrospection
 			}
 			if (iNdEx + skippy) > l {
@@ -1443,10 +1434,7 @@ func (m *ServerResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthIntrospection
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthIntrospection
 			}
 			if (iNdEx + skippy) > l {

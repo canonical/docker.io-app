@@ -17,7 +17,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	ctr "github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/oci"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -25,7 +25,7 @@ import (
 )
 
 func TestCreateFailsWhenIdentifierDoesNotExist(t *testing.T) {
-	defer setupTest(t)()
+	t.Cleanup(setupTest(t))
 	client := testEnv.APIClient()
 
 	testCases := []struct {
@@ -91,7 +91,7 @@ func TestCreateLinkToNonExistingContainer(t *testing.T) {
 }
 
 func TestCreateWithInvalidEnv(t *testing.T) {
-	defer setupTest(t)()
+	t.Cleanup(setupTest(t))
 	client := testEnv.APIClient()
 
 	testCases := []struct {
@@ -337,7 +337,7 @@ func TestCreateWithCustomReadonlyPaths(t *testing.T) {
 }
 
 func TestCreateWithInvalidHealthcheckParams(t *testing.T) {
-	defer setupTest(t)()
+	t.Cleanup(setupTest(t))
 	client := testEnv.APIClient()
 	ctx := context.Background()
 
@@ -475,7 +475,7 @@ func TestCreateDifferentPlatform(t *testing.T) {
 	assert.Assert(t, img.Architecture != "")
 
 	t.Run("different os", func(t *testing.T) {
-		p := specs.Platform{
+		p := ocispec.Platform{
 			OS:           img.Os + "DifferentOS",
 			Architecture: img.Architecture,
 			Variant:      img.Variant,
@@ -484,7 +484,7 @@ func TestCreateDifferentPlatform(t *testing.T) {
 		assert.Assert(t, client.IsErrNotFound(err), err)
 	})
 	t.Run("different cpu arch", func(t *testing.T) {
-		p := specs.Platform{
+		p := ocispec.Platform{
 			OS:           img.Os,
 			Architecture: img.Architecture + "DifferentArch",
 			Variant:      img.Variant,
@@ -527,4 +527,58 @@ func TestCreatePlatformSpecificImageNoPlatform(t *testing.T) {
 		"",
 	)
 	assert.NilError(t, err)
+}
+
+func TestCreateInvalidHostConfig(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
+
+	t.Cleanup(setupTest(t))
+	apiClient := testEnv.APIClient()
+	ctx := context.Background()
+
+	testCases := []struct {
+		doc         string
+		hc          containertypes.HostConfig
+		expectedErr string
+	}{
+		{
+			doc:         "invalid IpcMode",
+			hc:          containertypes.HostConfig{IpcMode: "invalid"},
+			expectedErr: "Error response from daemon: invalid IPC mode: invalid",
+		},
+		{
+			doc:         "invalid PidMode",
+			hc:          containertypes.HostConfig{PidMode: "invalid"},
+			expectedErr: "Error response from daemon: invalid PID mode: invalid",
+		},
+		{
+			doc:         "invalid PidMode without container ID",
+			hc:          containertypes.HostConfig{PidMode: "container"},
+			expectedErr: "Error response from daemon: invalid PID mode: container",
+		},
+		{
+			doc:         "invalid UTSMode",
+			hc:          containertypes.HostConfig{UTSMode: "invalid"},
+			expectedErr: "Error response from daemon: invalid UTS mode: invalid",
+		},
+		{
+			doc:         "invalid Annotations",
+			hc:          containertypes.HostConfig{Annotations: map[string]string{"": "a"}},
+			expectedErr: "Error response from daemon: invalid Annotations: the empty string is not permitted as an annotation key",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.doc, func(t *testing.T) {
+			t.Parallel()
+			cfg := container.Config{
+				Image: "busybox",
+			}
+			resp, err := apiClient.ContainerCreate(ctx, &cfg, &tc.hc, nil, nil, "")
+			assert.Check(t, is.Equal(len(resp.Warnings), 0))
+			assert.Check(t, errdefs.IsInvalidParameter(err), "got: %T", err)
+			assert.Error(t, err, tc.expectedErr)
+		})
+	}
 }

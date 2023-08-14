@@ -5,11 +5,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/pkg/containerfs"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/pkg/system"
 	v2 "github.com/docker/docker/plugin/v2"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
@@ -24,7 +25,7 @@ func TestManagerWithPluginMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer system.EnsureRemoveAll(root)
+	defer containerfs.EnsureRemoveAll(root)
 
 	s := NewStore()
 	managerRoot := filepath.Join(root, "manager")
@@ -87,22 +88,11 @@ func newTestPlugin(t *testing.T, name, cap, root string) *v2.Plugin {
 }
 
 type simpleExecutor struct {
+	Executor
 }
 
 func (e *simpleExecutor) Create(id string, spec specs.Spec, stdout, stderr io.WriteCloser) error {
 	return errors.New("Create failed")
-}
-
-func (e *simpleExecutor) Restore(id string, stdout, stderr io.WriteCloser) (bool, error) {
-	return false, nil
-}
-
-func (e *simpleExecutor) IsRunning(id string) (bool, error) {
-	return false, nil
-}
-
-func (e *simpleExecutor) Signal(id string, signal int) error {
-	return nil
 }
 
 func TestCreateFailed(t *testing.T) {
@@ -110,7 +100,7 @@ func TestCreateFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer system.EnsureRemoveAll(root)
+	defer containerfs.EnsureRemoveAll(root)
 
 	s := NewStore()
 	managerRoot := filepath.Join(root, "manager")
@@ -165,7 +155,7 @@ func (e *executorWithRunning) Restore(id string, stdout, stderr io.WriteCloser) 
 	return true, nil
 }
 
-func (e *executorWithRunning) Signal(id string, signal int) error {
+func (e *executorWithRunning) Signal(id string, signal syscall.Signal) error {
 	ch := e.exitChans[id]
 	ch <- struct{}{}
 	<-ch
@@ -181,7 +171,7 @@ func TestPluginAlreadyRunningOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer system.EnsureRemoveAll(root)
+	defer containerfs.EnsureRemoveAll(root)
 
 	for _, test := range []struct {
 		desc   string
@@ -237,7 +227,7 @@ func TestPluginAlreadyRunningOnStartup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer system.EnsureRemoveAll(config.ExecRoot)
+			defer containerfs.EnsureRemoveAll(config.ExecRoot)
 
 			m, err := NewManager(config)
 			if err != nil {

@@ -1,68 +1,56 @@
----
-title: "build"
-description: "The build command description and usage"
-keywords: "build, docker, image"
----
-
 # build
 
-```markdown
-Usage:  docker build [OPTIONS] PATH | URL | -
-
+<!---MARKER_GEN_START-->
 Build an image from a Dockerfile
 
-Options:
-      --add-host value          Add a custom host-to-IP mapping (host:ip) (default [])
-      --build-arg value         Set build-time variables (default [])
-      --cache-from value        Images to consider as cache sources (default [])
-      --cgroup-parent string    Optional parent cgroup for the container
-      --compress                Compress the build context using gzip
-      --cpu-period int          Limit the CPU CFS (Completely Fair Scheduler) period
-      --cpu-quota int           Limit the CPU CFS (Completely Fair Scheduler) quota
-  -c, --cpu-shares int          CPU shares (relative weight)
-      --cpuset-cpus string      CPUs in which to allow execution (0-3, 0,1)
-      --cpuset-mems string      MEMs in which to allow execution (0-3, 0,1)
-      --disable-content-trust   Skip image verification (default true)
-  -f, --file string             Name of the Dockerfile (Default is 'PATH/Dockerfile')
-      --force-rm                Always remove intermediate containers
-      --help                    Print usage
-      --iidfile string          Write the image ID to the file
-      --isolation string        Container isolation technology
-      --label value             Set metadata for an image (default [])
-  -m, --memory string           Memory limit
-      --memory-swap string      Swap limit equal to memory plus swap: '-1' to enable unlimited swap
-      --network string          Set the networking mode for the RUN instructions during build
-                                'bridge': use default Docker bridge
-                                'none': no networking
-                                'container:<name|id>': reuse another container's network stack
-                                'host': use the Docker host network stack
-                                '<network-name>|<network-id>': connect to a user-defined network
-      --no-cache                Do not use cache when building the image
-  -o, --output                  Output destination (format: type=local,dest=path)
-      --pull                    Always attempt to pull a newer version of the image
-      --progress                Set type of progress output (only if BuildKit enabled) (auto, plain, tty).
-                                Use plain to show container output
-  -q, --quiet                   Suppress the build output and print image ID on success
-      --rm                      Remove intermediate containers after a successful build (default true)
-      --secret                  Secret file to expose to the build (only if BuildKit enabled): id=mysecret,src=/local/secret"
-      --security-opt value      Security Options (default [])
-      --shm-size bytes          Size of /dev/shm
-                                The format is `<number><unit>`. `number` must be greater than `0`.
-                                Unit is optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes),
-                                or `g` (gigabytes). If you omit the unit, the system uses bytes.
-      --squash                  Squash newly built layers into a single new layer (**Experimental Only**)
-      --ssh                     SSH agent socket or keys to expose to the build (only if BuildKit enabled) (format: default|<id>[=<socket>|<key>[,<key>]])
-  -t, --tag value               Name and optionally a tag in the 'name:tag' format (default [])
-      --target string           Set the target build stage to build.
-      --ulimit value            Ulimit options (default [])
-```
+### Aliases
+
+`docker image build`, `docker build`, `docker buildx build`, `docker builder build`
+
+### Options
+
+| Name                                | Type          | Default   | Description                                                       |
+|:------------------------------------|:--------------|:----------|:------------------------------------------------------------------|
+| [`--add-host`](#add-host)           | `list`        |           | Add a custom host-to-IP mapping (`host:ip`)                       |
+| [`--build-arg`](#build-arg)         | `list`        |           | Set build-time variables                                          |
+| [`--cache-from`](#cache-from)       | `stringSlice` |           | Images to consider as cache sources                               |
+| [`--cgroup-parent`](#cgroup-parent) | `string`      |           | Optional parent cgroup for the container                          |
+| `--compress`                        |               |           | Compress the build context using gzip                             |
+| `--cpu-period`                      | `int64`       | `0`       | Limit the CPU CFS (Completely Fair Scheduler) period              |
+| `--cpu-quota`                       | `int64`       | `0`       | Limit the CPU CFS (Completely Fair Scheduler) quota               |
+| `-c`, `--cpu-shares`                | `int64`       | `0`       | CPU shares (relative weight)                                      |
+| `--cpuset-cpus`                     | `string`      |           | CPUs in which to allow execution (0-3, 0,1)                       |
+| `--cpuset-mems`                     | `string`      |           | MEMs in which to allow execution (0-3, 0,1)                       |
+| `--disable-content-trust`           |               |           | Skip image verification                                           |
+| [`-f`](#file), [`--file`](#file)    | `string`      |           | Name of the Dockerfile (Default is `PATH/Dockerfile`)             |
+| `--force-rm`                        |               |           | Always remove intermediate containers                             |
+| `--iidfile`                         | `string`      |           | Write the image ID to the file                                    |
+| [`--isolation`](#isolation)         | `string`      |           | Container isolation technology                                    |
+| `--label`                           | `list`        |           | Set metadata for an image                                         |
+| `-m`, `--memory`                    | `bytes`       | `0`       | Memory limit                                                      |
+| `--memory-swap`                     | `bytes`       | `0`       | Swap limit equal to memory plus swap: -1 to enable unlimited swap |
+| `--network`                         | `string`      | `default` | Set the networking mode for the RUN instructions during build     |
+| `--no-cache`                        |               |           | Do not use cache when building the image                          |
+| `--platform`                        | `string`      |           | Set platform if server is multi-platform capable                  |
+| `--pull`                            |               |           | Always attempt to pull a newer version of the image               |
+| `-q`, `--quiet`                     |               |           | Suppress the build output and print image ID on success           |
+| `--rm`                              |               |           | Remove intermediate containers after a successful build           |
+| [`--security-opt`](#security-opt)   | `stringSlice` |           | Security options                                                  |
+| `--shm-size`                        | `bytes`       | `0`       | Size of `/dev/shm`                                                |
+| [`--squash`](#squash)               |               |           | Squash newly built layers into a single new layer                 |
+| [`-t`](#tag), [`--tag`](#tag)       | `list`        |           | Name and optionally a tag in the `name:tag` format                |
+| [`--target`](#target)               | `string`      |           | Set the target build stage to build.                              |
+| [`--ulimit`](#ulimit)               | `ulimit`      |           | Ulimit options                                                    |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
 The `docker build` command builds Docker images from a Dockerfile and a
 "context". A build's context is the set of files located in the specified
 `PATH` or `URL`. The build process can refer to any of the files in the
-context. For example, your build can use a [*COPY*](../builder.md#copy)
+context. For example, your build can use a [*COPY*](https://docs.docker.com/engine/reference/builder/#copy)
 instruction to reference a file in the context.
 
 The `URL` parameter can refer to three kinds of resources: Git repositories,
@@ -110,12 +98,6 @@ contexts:
 | `myrepo.git#mytag:myfolder`    | `refs/tags/mytag`     | `/myfolder`        |
 | `myrepo.git#mybranch:myfolder` | `refs/heads/mybranch` | `/myfolder`        |
 
-> **Note**
->
-> You cannot specify the build-context directory (`myfolder` in the examples above)
-> when using BuildKit as builder (`DOCKER_BUILDKIT=1`). Support for this feature
-> is tracked in [buildkit#1684](https://github.com/moby/buildkit/issues/1684).
-
 ### Tarball contexts
 
 If you pass an URL to a remote tarball, the URL itself is sent to the daemon:
@@ -161,7 +143,7 @@ In most cases, it's best to put each Dockerfile in an empty directory. Then,
 add to that directory only the files needed for building the Dockerfile. To
 increase the build's performance, you can exclude files and directories by
 adding a `.dockerignore` file to that directory as well. For information on
-creating one, see the [.dockerignore file](../builder.md#dockerignore-file).
+creating one, see the [.dockerignore file](https://docs.docker.com/engine/reference/builder/#dockerignore-file).
 
 If the Docker client loses connection to the daemon, the build is canceled.
 This happens if you interrupt the Docker client with `CTRL-c` or if the Docker
@@ -192,7 +174,7 @@ $ echo $?
 
 See also:
 
-[*Dockerfile Reference*](../builder.md).
+[*Dockerfile Reference*](https://docs.docker.com/engine/reference/builder/).
 
 ## Examples
 
@@ -233,7 +215,8 @@ where to find the files for the "context" of the build on the Docker daemon.
 Remember that the daemon could be running on a remote machine and that no
 parsing of the Dockerfile happens at the client side (where you're running
 `docker build`). That means that *all* the files at `PATH` get sent, not just
-the ones listed to [*ADD*](../builder.md#add) in the Dockerfile.
+the ones listed to [*ADD*](https://docs.docker.com/engine/reference/builder/#add)
+in the Dockerfile.
 
 The transfer of context from the local machine to the Docker daemon is what the
 `docker` client means when you see the "Sending build context" message.
@@ -321,15 +304,15 @@ Successfully built 99cc1ad10469
 This example shows the use of the `.dockerignore` file to exclude the `.git`
 directory from the context. Its effect can be seen in the changed size of the
 uploaded context. The builder reference contains detailed information on
-[creating a .dockerignore file](../builder.md#dockerignore-file).
+[creating a .dockerignore file](https://docs.docker.com/engine/reference/builder/#dockerignore-file).
 
 When using the [BuildKit backend](https://docs.docker.com/build/buildkit/),
 `docker build` searches for a `.dockerignore` file relative to the Dockerfile
 name. For example, running `docker build -f myapp.Dockerfile .` will first look
 for an ignore file named `myapp.Dockerfile.dockerignore`. If such a file is not
 found, the `.dockerignore` file is used if present. Using a Dockerfile based
-`.dockerignore` is useful if a project contains multiple Dockerfiles that
-expect to ignore different sets of files.
+`.dockerignore` is useful if a project contains multiple Dockerfiles that expect
+to ignore different sets of files.
 
 
 ### <a name="tag"></a> Tag an image (-t, --tag)
@@ -433,7 +416,7 @@ Using this flag will not alter the output you see when the `ARG` lines from the
 Dockerfile are echoed during the build process.
 
 For detailed information on using `ARG` and `ENV` instructions, see the
-[Dockerfile reference](../builder.md).
+[Dockerfile reference](https://docs.docker.com/engine/reference/builder/).
 
 You may also use the `--build-arg` flag without a value, in which case the value
 from the local environment will be propagated into the Docker container being
@@ -553,7 +536,7 @@ $ docker build -o - . > out.tar
 
 The `--output` option exports all files from the target stage. A common pattern
 for exporting only specific files is to do multi-stage builds and to copy the
-desired files to a new scratch stage with [`COPY --from`](../builder.md#copy).
+desired files to a new scratch stage with [`COPY --from`](https://docs.docker.com/engine/reference/builder/#copy).
 
 The example `Dockerfile` below uses a separate stage to collect the
 build-artifacts for exporting:
@@ -678,7 +661,7 @@ The `--squash` option has a number of known limitations:
 
 #### Prerequisites
 
-The example on this page is using experimental mode in Docker 19.03.
+The example on this page is using experimental mode in Docker 23.03.
 
 Experimental mode can be enabled by using the `--experimental` flag when starting
 the Docker daemon or setting `experimental: true` in the `daemon.json` configuration
@@ -690,21 +673,21 @@ line in the `Engine` section:
 
 ```console
 Client: Docker Engine - Community
- Version:           19.03.8
- API version:       1.40
- Go version:        go1.12.17
- Git commit:        afacb8b
- Built:             Wed Mar 11 01:21:11 2020
+ Version:           23.0.3
+ API version:       1.42
+ Go version:        go1.19.7
+ Git commit:        3e7cbfd
+ Built:             Tue Apr  4 22:05:41 2023
  OS/Arch:           darwin/amd64
- Experimental:      false
+ Context:           default
 
 Server: Docker Engine - Community
  Engine:
-  Version:          19.03.8
-  API version:      1.40 (minimum version 1.12)
-  Go version:       go1.12.17
-  Git commit:       afacb8b
-  Built:            Wed Mar 11 01:29:16 2020
+  Version:          23.0.3
+  API version:      1.42 (minimum version 1.12)
+  Go version:       go1.19.7
+  Git commit:       59118bf
+  Built:            Tue Apr  4 22:05:41 2023
   OS/Arch:          linux/amd64
   Experimental:     true
  [...]

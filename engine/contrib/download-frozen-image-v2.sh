@@ -245,7 +245,7 @@ get_target_arch() {
 				;;
 			mips*)
 				echo >&2 "I see you are running on mips but I don't know how to determine endianness yet, so I cannot select a correct arch to fetch."
-				echo >&2 "Consider installing \"go\" on the system which I can use to determine the correct arch or specify it explictly by setting TARGETARCH"
+				echo >&2 "Consider installing \"go\" on the system which I can use to determine the correct arch or specify it explicitly by setting TARGETARCH"
 				exit 1
 				;;
 			*)
@@ -259,6 +259,10 @@ get_target_arch() {
 	# default value
 	echo >&2 "Unable to determine CPU arch, falling back to amd64. You can specify a target arch by setting TARGETARCH"
 	echo amd64
+}
+
+get_target_variant() {
+	echo "${TARGETVARIANT:-}"
 }
 
 while [ $# -gt 0 ]; do
@@ -311,11 +315,13 @@ while [ $# -gt 0 ]; do
 
 					found=""
 					targetArch="$(get_target_arch)"
+					targetVariant="$(get_target_variant)"
 					# parse first level multi-arch manifest
 					for i in "${!layers[@]}"; do
 						layerMeta="${layers[$i]}"
 						maniArch="$(echo "$layerMeta" | jq --raw-output '.platform.architecture')"
-						if [ "$maniArch" = "${targetArch}" ]; then
+						maniVariant="$(echo "$layerMeta" | jq --raw-output '.platform.variant')"
+						if [[ "$maniArch" = "${targetArch}" ]] && [[ -z "${targetVariant}" || "$maniVariant" = "${targetVariant}" ]]; then
 							digest="$(echo "$layerMeta" | jq --raw-output '.digest')"
 							# get second level single manifest
 							submanifestJson="$(
@@ -332,7 +338,7 @@ while [ $# -gt 0 ]; do
 						fi
 					done
 					if [ -z "$found" ]; then
-						echo >&2 "error: manifest for $maniArch is not found"
+						echo >&2 "error: manifest for ${targetArch}${targetVariant:+/${targetVariant}} is not found"
 						exit 1
 					fi
 					;;

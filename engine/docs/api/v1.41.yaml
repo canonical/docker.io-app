@@ -773,11 +773,13 @@ definitions:
           The time to wait between checks in nanoseconds. It should be 0 or at
           least 1000000 (1 ms). 0 means inherit.
         type: "integer"
+        format: "int64"
       Timeout:
         description: |
           The time to wait before considering the check to have hung. It should
           be 0 or at least 1000000 (1 ms). 0 means inherit.
         type: "integer"
+        format: "int64"
       Retries:
         description: |
           The number of consecutive failures needed to consider a container as
@@ -789,6 +791,7 @@ definitions:
           health-retries countdown in nanoseconds. It should be 0 or at least
           1000000 (1 ms). 0 means inherit.
         type: "integer"
+        format: "int64"
 
   Health:
     description: |
@@ -820,13 +823,13 @@ definitions:
         description: |
           Log contains the last few results (oldest first)
         items:
-          x-nullable: true
           $ref: "#/definitions/HealthcheckResult"
 
   HealthcheckResult:
     description: |
       HealthcheckResult stores information about a single run of a healthcheck probe
     type: "object"
+    x-nullable: true
     properties:
       Start:
         description: |
@@ -1107,6 +1110,7 @@ definitions:
               remapping option is enabled.
           ShmSize:
             type: "integer"
+            format: "int64"
             description: |
               Size of `/dev/shm` in bytes. If omitted, the system uses 64MB.
             minimum: 0
@@ -1363,7 +1367,7 @@ definitions:
     type: "object"
     properties:
       Bridge:
-        description: Name of the network'a bridge (for example, `docker0`).
+        description: Name of the network's bridge (for example, `docker0`).
         type: "string"
         example: "docker0"
       SandboxID:
@@ -1627,7 +1631,7 @@ definitions:
           List of image names/tags in the local image cache that reference this
           image.
 
-          Multiple image tags can refer to the same imagem and this list may be
+          Multiple image tags can refer to the same image, and this list may be
           empty if no tags reference the image, in which case the image is
           "untagged", in which case it can still be referenced by its ID.
         type: "array"
@@ -1828,7 +1832,7 @@ definitions:
           List of image names/tags in the local image cache that reference this
           image.
 
-          Multiple image tags can refer to the same imagem and this list may be
+          Multiple image tags can refer to the same image, and this list may be
           empty if no tags reference the image, in which case the image is
           "untagged", in which case it can still be referenced by its ID.
         type: "array"
@@ -1878,6 +1882,7 @@ definitions:
           This size is not calculated by default. `-1` indicates that the value
           has not been set / calculated.
         type: "integer"
+        format: "int64"
         x-nullable: false
         example: 1239828
       VirtualSize:
@@ -2022,6 +2027,7 @@ definitions:
         properties:
           Size:
             type: "integer"
+            format: "int64"
             default: -1
             description: |
               Amount of disk space used by the volume (in bytes). This information
@@ -2031,6 +2037,7 @@ definitions:
             x-nullable: false
           RefCount:
             type: "integer"
+            format: "int64"
             default: -1
             description: |
               The number of containers referencing this volume. This field
@@ -2074,6 +2081,25 @@ definitions:
         example:
           com.example.some-label: "some-value"
           com.example.some-other-label: "some-other-value"
+
+  VolumeListResponse:
+    type: "object"
+    title: "VolumeListResponse"
+    x-go-name: "VolumeListOKBody"
+    description: "Volume list response"
+    properties:
+      Volumes:
+        type: "array"
+        description: "List of volumes"
+        items:
+          $ref: "#/definitions/Volume"
+      Warnings:
+        type: "array"
+        description: |
+          Warnings that occurred when fetching the list of volumes.
+        items:
+          type: "string"
+        example: []
 
   Network:
     type: "object"
@@ -2299,6 +2325,8 @@ definitions:
         type: "string"
       error:
         type: "string"
+      errorDetail:
+        $ref: "#/definitions/ErrorDetail"
       status:
         type: "string"
       progress:
@@ -4573,6 +4601,7 @@ definitions:
       ContainerState stores container's running state. It's part of ContainerJSONBase
       and will be returned by the "inspect" command.
     type: "object"
+    x-nullable: true
     properties:
       Status:
         description: |
@@ -4630,7 +4659,6 @@ definitions:
         type: "string"
         example: "2020-01-06T09:07:59.461876391Z"
       Health:
-        x-nullable: true
         $ref: "#/definitions/Health"
 
   ContainerWaitResponse:
@@ -4643,6 +4671,7 @@ definitions:
       StatusCode:
         description: "Exit code of the container"
         type: "integer"
+        format: "int64"
         x-nullable: false
       Error:
         $ref: "#/definitions/ContainerWaitExitError"
@@ -5071,12 +5100,8 @@ definitions:
       ServerVersion:
         description: |
           Version string of the daemon.
-
-          > **Note**: the [standalone Swarm API](https://docs.docker.com/swarm/swarm-api/)
-          > returns the Swarm version instead of the daemon  version, for example
-          > `swarm/1.2.8`.
         type: "string"
-        example: "17.06.0-ce"
+        example: "20.10.25"
       ClusterStore:
         description: |
           URL of the distributed storage backend.
@@ -6197,7 +6222,6 @@ paths:
                 items:
                   type: "string"
               State:
-                x-nullable: true
                 $ref: "#/definitions/ContainerState"
               Image:
                 description: "The container's image ID"
@@ -7009,7 +7033,8 @@ paths:
           type: "string"
         - name: "signal"
           in: "query"
-          description: "Signal to send to the container as an integer or string (e.g. `SIGINT`)"
+          description: |
+            Signal to send to the container as an integer or string (e.g. `SIGINT`).
           type: "string"
           default: "SIGKILL"
       tags: ["Container"]
@@ -8404,6 +8429,10 @@ paths:
               IdentityToken: "9cbaf023786cd7..."
         204:
           description: "No error"
+        401:
+          description: "Auth error"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
         500:
           description: "Server error"
           schema:
@@ -9146,24 +9175,7 @@ paths:
         200:
           description: "Summary volume data that matches the query"
           schema:
-            type: "object"
-            title: "VolumeListResponse"
-            description: "Volume list response"
-            required: [Volumes, Warnings]
-            properties:
-              Volumes:
-                type: "array"
-                x-nullable: false
-                description: "List of volumes"
-                items:
-                  $ref: "#/definitions/Volume"
-              Warnings:
-                type: "array"
-                x-nullable: false
-                description: |
-                  Warnings that occurred when fetching the list of volumes.
-                items:
-                  type: "string"
+            $ref: "#/definitions/VolumeListResponse"
         500:
           description: "Server error"
           schema:
@@ -9268,6 +9280,7 @@ paths:
           type: "boolean"
           default: false
       tags: ["Volume"]
+
   /volumes/prune:
     post:
       summary: "Delete unused volumes"
@@ -9950,6 +9963,12 @@ paths:
             default if omitted.
           required: true
           type: "string"
+        - name: "force"
+          in: "query"
+          description: |
+            Force disable a plugin even if still in use.
+          required: false
+          type: "boolean"
       tags: ["Plugin"]
   /plugins/{name}/upgrade:
     post:
@@ -10406,7 +10425,7 @@ paths:
                 description: |
                   Address or interface to use for data path traffic (format:
                   `<ip|interface>`), for example,  `192.168.1.1`, or an interface,
-                  like `eth0`. If `DataPathAddr` is unspecified, the same addres
+                  like `eth0`. If `DataPathAddr` is unspecified, the same address
                   as `AdvertiseAddr` is used.
 
                   The `DataPathAddr` specifies the address that global scope

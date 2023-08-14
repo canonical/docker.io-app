@@ -72,7 +72,7 @@ anybody starts working on it.
 We are always thrilled to receive pull requests. We do our best to process them
 quickly. If your pull request is not accepted on the first try,
 don't get discouraged! Our contributor's guide explains [the review process we
-use for simple changes](https://docs.docker.com/opensource/workflow/make-a-contribution/).
+use for simple changes](https://docs.docker.com/contribute/overview/).
 
 ### Design and cleanup proposals
 
@@ -101,9 +101,8 @@ the contributors guide.
     <td>
       <p>
         Register for the Docker Community Slack at
-	<a href="https://community.docker.com/registrations/groups/4316" target="_blank">https://community.docker.com/registrations/groups/4316</a>.
+	<a href="https://dockr.ly/slack" target="_blank">https://dockr.ly/slack</a>.
         We use the #moby-project channel for general discussion, and there are separate channels for other Moby projects such as #containerd.
-	Archives are available at <a href="https://dockercommunity.slackarchive.io/" target="_blank">https://dockercommunity.slackarchive.io/</a>.
       </p>
     </td>
   </tr>
@@ -309,36 +308,6 @@ file in this repository.
 Don't forget: being a maintainer is a time investment. Make sure you
 will have time to make yourself available. You don't have to be a
 maintainer to make a difference on the project!
-
-### Manage issues and pull requests using the Derek bot
-
-If you want to help label, assign, close or reopen issues or pull requests
-without commit rights, ask a maintainer to add your Github handle to the 
-`.DEREK.yml` file. [Derek](https://github.com/alexellis/derek) is a bot that extends
-Github's user permissions to help non-committers to manage issues and pull requests simply by commenting.
-
-For example:
-
-* Labels
-
-```
-Derek add label: kind/question
-Derek remove label: status/claimed
-```
-
-* Assign work
-
-```
-Derek assign: username
-Derek unassign: me
-```
-
-* Manage issues and PRs
-
-```
-Derek close
-Derek reopen
-```
 
 ## Moby community guidelines
 

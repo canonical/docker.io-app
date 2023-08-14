@@ -12,7 +12,6 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/pkg/stringid"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/skip"
 )
 
 type historyCase struct {
@@ -52,8 +51,8 @@ func TestHistoryContext_ID(t *testing.T) {
 }
 
 func TestHistoryContext_CreatedSince(t *testing.T) {
-	skip.If(t, notUTCTimezone, "expected output requires UTC timezone")
-	dateStr := "2009-11-10T23:00:00Z"
+	longerAgo := time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
+	dateStr := longerAgo.Local().Format(time.RFC3339)
 	var ctx historyContext
 	cases := []historyCase{
 		{
@@ -65,10 +64,34 @@ func TestHistoryContext_CreatedSince(t *testing.T) {
 		},
 		{
 			historyContext{
-				h:     image.HistoryResponseItem{Created: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC).Unix()},
+				h:     image.HistoryResponseItem{Created: longerAgo.Unix()},
 				trunc: false,
 				human: false,
 			}, dateStr, ctx.CreatedSince,
+		},
+		{
+			// The zero time is not displayed.
+			historyContext{
+				h:     image.HistoryResponseItem{Created: 0},
+				trunc: false,
+				human: true,
+			}, "N/A", ctx.CreatedSince,
+		},
+		{
+			// A time before the year 2000 is not displayed.
+			historyContext{
+				h:     image.HistoryResponseItem{Created: time.Date(1980, time.November, 10, 10, 23, 0, 0, time.UTC).Unix()},
+				trunc: false,
+				human: true,
+			}, "N/A", ctx.CreatedSince,
+		},
+		{
+			// A time after 2000 is displayed.
+			historyContext{
+				h:     image.HistoryResponseItem{Created: time.Now().AddDate(-11, 0, 0).Unix()},
+				trunc: false,
+				human: true,
+			}, "11 years ago", ctx.CreatedSince,
 		},
 	}
 
@@ -78,7 +101,7 @@ func TestHistoryContext_CreatedSince(t *testing.T) {
 		if strings.Contains(v, ",") {
 			test.CompareMultipleValues(t, v, c.expValue)
 		} else if v != c.expValue {
-			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
+			t.Fatalf("Expected %q, was %q\n", c.expValue, v)
 		}
 	}
 }
@@ -173,6 +196,7 @@ func TestHistoryContext_Comment(t *testing.T) {
 func TestHistoryContext_Table(t *testing.T) {
 	out := bytes.NewBufferString("")
 	unixTime := time.Now().AddDate(0, 0, -1).Unix()
+	oldDate := time.Now().AddDate(-17, 0, 0).Unix()
 	histories := []image.HistoryResponseItem{
 		{
 			ID:        "imageID1",
@@ -185,36 +209,45 @@ func TestHistoryContext_Table(t *testing.T) {
 		{ID: "imageID2", Created: unixTime, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
 		{ID: "imageID3", Created: unixTime, CreatedBy: "/bin/bash ls", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
 		{ID: "imageID4", Created: unixTime, CreatedBy: "/bin/bash grep", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+		{ID: "imageID5", Created: 0, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+		{ID: "imageID6", Created: oldDate, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
 	}
-	expectedNoTrunc := `IMAGE      CREATED        CREATED BY                                                                                                                     SIZE      COMMENT
+
+	const expectedNoTrunc = `IMAGE      CREATED        CREATED BY                                                                                                                     SIZE      COMMENT
 imageID1   24 hours ago   /bin/bash ls && npm i && npm run test && karma -c karma.conf.js start && npm start && more commands here && the list goes on   183MB     Hi
 imageID2   24 hours ago   /bin/bash echo                                                                                                                 183MB     Hi
 imageID3   24 hours ago   /bin/bash ls                                                                                                                   183MB     Hi
 imageID4   24 hours ago   /bin/bash grep                                                                                                                 183MB     Hi
+imageID5   N/A            /bin/bash echo                                                                                                                 183MB     Hi
+imageID6   17 years ago   /bin/bash echo                                                                                                                 183MB     Hi
 `
-	expectedTrunc := `IMAGE      CREATED        CREATED BY                                      SIZE      COMMENT
+	const expectedTrunc = `IMAGE      CREATED        CREATED BY                                      SIZE      COMMENT
 imageID1   24 hours ago   /bin/bash ls && npm i && npm run test && kar…   183MB     Hi
 imageID2   24 hours ago   /bin/bash echo                                  183MB     Hi
 imageID3   24 hours ago   /bin/bash ls                                    183MB     Hi
 imageID4   24 hours ago   /bin/bash grep                                  183MB     Hi
+imageID5   N/A            /bin/bash echo                                  183MB     Hi
+imageID6   17 years ago   /bin/bash echo                                  183MB     Hi
 `
 
 	cases := []struct {
 		context  formatter.Context
 		expected string
 	}{
-		{formatter.Context{
-			Format: NewHistoryFormat("table", false, true),
-			Trunc:  true,
-			Output: out,
-		},
+		{
+			formatter.Context{
+				Format: NewHistoryFormat("table", false, true),
+				Trunc:  true,
+				Output: out,
+			},
 			expectedTrunc,
 		},
-		{formatter.Context{
-			Format: NewHistoryFormat("table", false, true),
-			Trunc:  false,
-			Output: out,
-		},
+		{
+			formatter.Context{
+				Format: NewHistoryFormat("table", false, true),
+				Trunc:  false,
+				Output: out,
+			},
 			expectedNoTrunc,
 		},
 	}

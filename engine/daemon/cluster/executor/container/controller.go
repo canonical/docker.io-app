@@ -11,12 +11,12 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	executorpkg "github.com/docker/docker/daemon/cluster/executor"
+	"github.com/docker/docker/libnetwork"
 	"github.com/docker/go-connections/nat"
-	"github.com/docker/libnetwork"
-	"github.com/docker/swarmkit/agent/exec"
-	"github.com/docker/swarmkit/api"
-	"github.com/docker/swarmkit/log"
 	gogotypes "github.com/gogo/protobuf/types"
+	"github.com/moby/swarmkit/v2/agent/exec"
+	"github.com/moby/swarmkit/v2/api"
+	"github.com/moby/swarmkit/v2/log"
 	"github.com/pkg/errors"
 	"golang.org/x/time/rate"
 )
@@ -118,6 +118,15 @@ func (r *controller) Prepare(ctx context.Context) error {
 	waitNodeAttachmentsContext, waitCancel := context.WithTimeout(ctx, waitNodeAttachmentsTimeout)
 	defer waitCancel()
 	if err := r.adapter.waitNodeAttachments(waitNodeAttachmentsContext); err != nil {
+		return err
+	}
+
+	// could take a while for the cluster volumes to become available. set for
+	// 5 minutes, I guess?
+	// TODO(dperny): do this more intelligently. return a better error.
+	waitClusterVolumesCtx, wcvcancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer wcvcancel()
+	if err := r.adapter.waitClusterVolumes(waitClusterVolumesCtx); err != nil {
 		return err
 	}
 
@@ -628,18 +637,18 @@ func parsePortMap(portMap nat.PortMap) ([]*api.PortConfig, error) {
 	exposedPorts := make([]*api.PortConfig, 0, len(portMap))
 
 	for portProtocol, mapping := range portMap {
-		parts := strings.SplitN(string(portProtocol), "/", 2)
-		if len(parts) != 2 {
+		p, proto, ok := strings.Cut(string(portProtocol), "/")
+		if !ok {
 			return nil, fmt.Errorf("invalid port mapping: %s", portProtocol)
 		}
 
-		port, err := strconv.ParseUint(parts[0], 10, 16)
+		port, err := strconv.ParseUint(p, 10, 16)
 		if err != nil {
 			return nil, err
 		}
 
 		var protocol api.PortConfig_Protocol
-		switch strings.ToLower(parts[1]) {
+		switch strings.ToLower(proto) {
 		case "tcp":
 			protocol = api.ProtocolTCP
 		case "udp":
@@ -647,7 +656,7 @@ func parsePortMap(portMap nat.PortMap) ([]*api.PortConfig, error) {
 		case "sctp":
 			protocol = api.ProtocolSCTP
 		default:
-			return nil, fmt.Errorf("invalid protocol: %s", parts[1])
+			return nil, fmt.Errorf("invalid protocol: %s", proto)
 		}
 
 		for _, binding := range mapping {

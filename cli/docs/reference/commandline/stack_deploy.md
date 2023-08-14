@@ -1,30 +1,23 @@
----
-title: "stack deploy"
-description: "The stack deploy command description and usage"
-keywords: "stack, deploy, up"
----
-
 # stack deploy
 
-```markdown
-Usage:  docker stack deploy [OPTIONS] STACK
-
+<!---MARKER_GEN_START-->
 Deploy a new stack or update an existing stack
 
-Aliases:
-  deploy, up
+### Aliases
 
-Options:
-  -c, --compose-file strings  Path to a Compose file, or "-" to read from stdin
-      --help                  Print usage
-      --kubeconfig string     Kubernetes config file
-      --namespace string      Kubernetes namespace to use
-      --orchestrator string   Orchestrator to use (swarm|kubernetes|all)
-      --prune                 Prune services that are no longer referenced
-      --resolve-image string  Query the registry to resolve image digest and supported platforms
-                              ("always"|"changed"|"never") (default "always")
-      --with-registry-auth    Send registry authentication details to Swarm agents
-```
+`docker stack deploy`, `docker stack up`
+
+### Options
+
+| Name                                                     | Type          | Default  | Description                                                                                       |
+|:---------------------------------------------------------|:--------------|:---------|:--------------------------------------------------------------------------------------------------|
+| [`-c`](#compose-file), [`--compose-file`](#compose-file) | `stringSlice` |          | Path to a Compose file, or `-` to read from stdin                                                 |
+| `--prune`                                                |               |          | Prune services that are no longer referenced                                                      |
+| `--resolve-image`                                        | `string`      | `always` | Query the registry to resolve image digest and supported platforms (`always`, `changed`, `never`) |
+| `--with-registry-auth`                                   |               |          | Send registry authentication details to Swarm agents                                              |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -114,3 +107,4 @@ axqh55ipl40h  vossibility_vossibility-collector  replicated  1/1       icecrime/
 * [stack ps](stack_ps.md)
 * [stack rm](stack_rm.md)
 * [stack services](stack_services.md)
+* [stack config](stack_config.md)

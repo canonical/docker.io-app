@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/notary"
@@ -18,6 +20,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/google/go-cmp/cmp"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
@@ -88,18 +91,18 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 	cases := []struct {
 		PullPolicy      string
 		ExpectedPulls   int
-		ExpectedBody    container.ContainerCreateCreatedBody
+		ExpectedBody    container.CreateResponse
 		ExpectedErrMsg  string
 		ResponseCounter int
 	}{
 		{
 			PullPolicy:    PullImageMissing,
 			ExpectedPulls: 1,
-			ExpectedBody:  container.ContainerCreateCreatedBody{ID: containerID},
+			ExpectedBody:  container.CreateResponse{ID: containerID},
 		}, {
 			PullPolicy:      PullImageAlways,
 			ExpectedPulls:   1,
-			ExpectedBody:    container.ContainerCreateCreatedBody{ID: containerID},
+			ExpectedBody:    container.CreateResponse{ID: containerID},
 			ResponseCounter: 1, // This lets us return a container on the first pull
 		}, {
 			PullPolicy:     PullImageNever,
@@ -118,13 +121,13 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 				networkingConfig *network.NetworkingConfig,
 				platform *specs.Platform,
 				containerName string,
-			) (container.ContainerCreateCreatedBody, error) {
+			) (container.CreateResponse, error) {
 				defer func() { c.ResponseCounter++ }()
 				switch c.ResponseCounter {
 				case 0:
-					return container.ContainerCreateCreatedBody{}, fakeNotFound{}
+					return container.CreateResponse{}, fakeNotFound{}
 				default:
-					return container.ContainerCreateCreatedBody{ID: containerID}, nil
+					return container.CreateResponse{ID: containerID}, nil
 				}
 			},
 			imageCreateFunc: func(parentReference string, options types.ImageCreateOptions) (io.ReadCloser, error) {
@@ -153,6 +156,40 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 		assert.Check(t, is.Equal(c.ExpectedPulls, pullCounter))
 	}
 }
+
+func TestCreateContainerImagePullPolicyInvalid(t *testing.T) {
+	cases := []struct {
+		PullPolicy     string
+		ExpectedErrMsg string
+	}{
+		{
+			PullPolicy:     "busybox:latest",
+			ExpectedErrMsg: `invalid pull option: 'busybox:latest': must be one of "always", "missing" or "never"`,
+		},
+		{
+			PullPolicy:     "--network=foo",
+			ExpectedErrMsg: `invalid pull option: '--network=foo': must be one of "always", "missing" or "never"`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.PullPolicy, func(t *testing.T) {
+			dockerCli := test.NewFakeCli(&fakeClient{})
+			err := runCreate(
+				dockerCli,
+				&pflag.FlagSet{},
+				&createOptions{pull: tc.PullPolicy},
+				&containerOptions{},
+			)
+
+			statusErr := cli.StatusError{}
+			assert.Check(t, errors.As(err, &statusErr))
+			assert.Equal(t, statusErr.StatusCode, 125)
+			assert.Check(t, is.Contains(dockerCli.ErrBuffer().String(), tc.ExpectedErrMsg))
+		})
+	}
+}
+
 func TestNewCreateCommandWithContentTrustErrors(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -187,8 +224,8 @@ func TestNewCreateCommandWithContentTrustErrors(t *testing.T) {
 				networkingConfig *network.NetworkingConfig,
 				platform *specs.Platform,
 				containerName string,
-			) (container.ContainerCreateCreatedBody, error) {
-				return container.ContainerCreateCreatedBody{}, fmt.Errorf("shouldn't try to pull image")
+			) (container.CreateResponse, error) {
+				return container.CreateResponse{}, fmt.Errorf("shouldn't try to pull image")
 			},
 		}, test.EnableContentTrust)
 		cli.SetNotaryClient(tc.notaryFunc)
@@ -248,8 +285,8 @@ func TestNewCreateCommandWithWarnings(t *testing.T) {
 					networkingConfig *network.NetworkingConfig,
 					platform *specs.Platform,
 					containerName string,
-				) (container.ContainerCreateCreatedBody, error) {
-					return container.ContainerCreateCreatedBody{}, nil
+				) (container.CreateResponse, error) {
+					return container.CreateResponse{}, nil
 				},
 			})
 			cmd := NewCreateCommand(cli)
@@ -276,6 +313,8 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 		"no_proxy=noProxy",
 		"FTP_PROXY=ftpProxy",
 		"ftp_proxy=ftpProxy",
+		"ALL_PROXY=allProxy",
+		"all_proxy=allProxy",
 	}
 	sort.Strings(expected)
 
@@ -285,10 +324,10 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 			networkingConfig *network.NetworkingConfig,
 			platform *specs.Platform,
 			containerName string,
-		) (container.ContainerCreateCreatedBody, error) {
+		) (container.CreateResponse, error) {
 			sort.Strings(config.Env)
 			assert.DeepEqual(t, config.Env, expected)
-			return container.ContainerCreateCreatedBody{}, nil
+			return container.CreateResponse{}, nil
 		},
 	})
 	cli.SetConfigFile(&configfile.ConfigFile{
@@ -298,6 +337,7 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 				HTTPSProxy: "httpsProxy",
 				NoProxy:    "noProxy",
 				FTPProxy:   "ftpProxy",
+				AllProxy:   "allProxy",
 			},
 		},
 	})

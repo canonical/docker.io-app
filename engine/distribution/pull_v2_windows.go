@@ -18,20 +18,20 @@ import (
 	"github.com/docker/distribution/manifest/schema2"
 	"github.com/docker/distribution/registry/client/transport"
 	"github.com/docker/docker/pkg/system"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 )
 
-var _ distribution.Describable = &v2LayerDescriptor{}
+var _ distribution.Describable = &layerDescriptor{}
 
-func (ld *v2LayerDescriptor) Descriptor() distribution.Descriptor {
+func (ld *layerDescriptor) Descriptor() distribution.Descriptor {
 	if ld.src.MediaType == schema2.MediaTypeForeignLayer && len(ld.src.URLs) > 0 {
 		return ld.src
 	}
 	return distribution.Descriptor{}
 }
 
-func (ld *v2LayerDescriptor) open(ctx context.Context) (distribution.ReadSeekCloser, error) {
+func (ld *layerDescriptor) open(ctx context.Context) (distribution.ReadSeekCloser, error) {
 	blobs := ld.repo.Blobs(ctx)
 	rsc, err := blobs.Open(ctx, ld.digest)
 
@@ -65,7 +65,7 @@ func (ld *v2LayerDescriptor) open(ctx context.Context) (distribution.ReadSeekClo
 	return rsc, err
 }
 
-func filterManifests(manifests []manifestlist.ManifestDescriptor, p specs.Platform) []manifestlist.ManifestDescriptor {
+func filterManifests(manifests []manifestlist.ManifestDescriptor, p ocispec.Platform) []manifestlist.ManifestDescriptor {
 	version := osversion.Get()
 	osVersion := fmt.Sprintf("%d.%d.%d", version.MajorVersion, version.MinorVersion, version.Build)
 	logrus.Debugf("will prefer Windows entries with version %s", osVersion)
@@ -139,7 +139,7 @@ func checkImageCompatibility(imageOS, imageOSVersion string) error {
 	return nil
 }
 
-func formatPlatform(platform specs.Platform) string {
+func formatPlatform(platform ocispec.Platform) string {
 	if platform.OS == "" {
 		platform = platforms.DefaultSpec()
 	}

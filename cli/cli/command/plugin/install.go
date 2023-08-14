@@ -10,6 +10,7 @@ import (
 	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
@@ -54,26 +55,6 @@ func newInstallCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-type pluginRegistryService struct {
-	registry.Service
-}
-
-func (s pluginRegistryService) ResolveRepository(name reference.Named) (*registry.RepositoryInfo, error) {
-	repoInfo, err := s.Service.ResolveRepository(name)
-	if repoInfo != nil {
-		repoInfo.Class = "plugin"
-	}
-	return repoInfo, err
-}
-
-func newRegistryService() (registry.Service, error) {
-	svc, err := registry.NewService(registry.ServiceOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return pluginRegistryService{Service: svc}, nil
-}
-
 func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOptions, cmdName string) (types.PluginInstallOptions, error) {
 	// Names with both tag and digest will be treated by the daemon
 	// as a pull by digest with a local name for the tag
@@ -98,12 +79,7 @@ func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOpti
 			return types.PluginInstallOptions{}, errors.Errorf("invalid name: %s", ref.String())
 		}
 
-		ctx := context.Background()
-		svc, err := newRegistryService()
-		if err != nil {
-			return types.PluginInstallOptions{}, err
-		}
-		trusted, err := image.TrustedReference(ctx, dockerCli, nt, svc)
+		trusted, err := image.TrustedReference(context.Background(), dockerCli, nt)
 		if err != nil {
 			return types.PluginInstallOptions{}, err
 		}
@@ -111,8 +87,7 @@ func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOpti
 	}
 
 	authConfig := command.ResolveAuthConfig(ctx, dockerCli, repoInfo.Index)
-
-	encodedAuth, err := command.EncodeAuthToBase64(authConfig)
+	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
 	if err != nil {
 		return types.PluginInstallOptions{}, err
 	}

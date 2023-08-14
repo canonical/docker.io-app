@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/errdefs"
+	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/remotes"
 	"github.com/docker/distribution"
@@ -17,8 +17,8 @@ import (
 	"github.com/docker/distribution/manifest/schema2"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/registry"
-	digest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -97,7 +97,7 @@ func hasDistributionSource(label, repo string) bool {
 	return false
 }
 
-func (m *manifestStore) getLocal(ctx context.Context, desc specs.Descriptor, ref reference.Named) (distribution.Manifest, error) {
+func (m *manifestStore) getLocal(ctx context.Context, desc ocispec.Descriptor, ref reference.Named) (distribution.Manifest, error) {
 	ra, err := m.local.ReaderAt(ctx, desc)
 	if err != nil {
 		return nil, errors.Wrap(err, "error getting content store reader")
@@ -124,7 +124,7 @@ func (m *manifestStore) getLocal(ctx context.Context, desc specs.Descriptor, ref
 			}
 
 			if !exists {
-				return nil, errors.Wrapf(errdefs.ErrNotFound, "manifest %v not found", desc.Digest)
+				return nil, errors.Wrapf(cerrdefs.ErrNotFound, "manifest %v not found", desc.Digest)
 			}
 
 		}
@@ -153,7 +153,7 @@ func (m *manifestStore) getLocal(ctx context.Context, desc specs.Descriptor, ref
 	return manifest, nil
 }
 
-func (m *manifestStore) getMediaType(ctx context.Context, desc specs.Descriptor) (string, error) {
+func (m *manifestStore) getMediaType(ctx context.Context, desc ocispec.Descriptor) (string, error) {
 	ra, err := m.local.ReaderAt(ctx, desc)
 	if err != nil {
 		return "", errors.Wrap(err, "error getting reader to detect media type")
@@ -167,7 +167,7 @@ func (m *manifestStore) getMediaType(ctx context.Context, desc specs.Descriptor)
 	return mt, nil
 }
 
-func (m *manifestStore) Get(ctx context.Context, desc specs.Descriptor, ref reference.Named) (distribution.Manifest, error) {
+func (m *manifestStore) Get(ctx context.Context, desc ocispec.Descriptor, ref reference.Named) (distribution.Manifest, error) {
 	l := log.G(ctx)
 
 	if desc.MediaType == "" {
@@ -180,7 +180,7 @@ func (m *manifestStore) Get(ctx context.Context, desc specs.Descriptor, ref refe
 		// here. We may not even have the content locally, and this is fine, but
 		// if we do we should determine that.
 		mt, err := m.getMediaType(ctx, desc)
-		if err != nil && !errdefs.IsNotFound(err) {
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			l.WithError(err).Warn("Error looking up media type of content")
 		}
 		desc.MediaType = mt
@@ -193,7 +193,7 @@ func (m *manifestStore) Get(ctx context.Context, desc specs.Descriptor, ref refe
 	// ref count on the content.
 	w, err := m.local.Writer(ctx, content.WithDescriptor(desc), content.WithRef(key))
 	if err != nil {
-		if errdefs.IsAlreadyExists(err) {
+		if cerrdefs.IsAlreadyExists(err) {
 			var manifest distribution.Manifest
 			if manifest, err = m.getLocal(ctx, desc, ref); err == nil {
 				return manifest, nil
@@ -227,7 +227,7 @@ func (m *manifestStore) Get(ctx context.Context, desc specs.Descriptor, ref refe
 	return manifest, nil
 }
 
-func (m *manifestStore) Put(ctx context.Context, manifest distribution.Manifest, desc specs.Descriptor, w content.Writer, ref reference.Named) error {
+func (m *manifestStore) Put(ctx context.Context, manifest distribution.Manifest, desc ocispec.Descriptor, w content.Writer, ref reference.Named) error {
 	mt, payload, err := manifest.Payload()
 	if err != nil {
 		return err
@@ -282,12 +282,12 @@ func detectManifestBlobMediaType(dt []byte) (string, error) {
 	// So pretty much if we don't have a media type we can fall back to OCI.
 	// This does have a special fallback for schema1 manifests just because it is easy to detect.
 	switch mfst.MediaType {
-	case schema2.MediaTypeManifest, specs.MediaTypeImageManifest:
+	case schema2.MediaTypeManifest, ocispec.MediaTypeImageManifest:
 		if mfst.Manifests != nil || mfst.FSLayers != nil {
 			return "", fmt.Errorf(`media-type: %q should not have "manifests" or "fsLayers"`, mfst.MediaType)
 		}
 		return mfst.MediaType, nil
-	case manifestlist.MediaTypeManifestList, specs.MediaTypeImageIndex:
+	case manifestlist.MediaTypeManifestList, ocispec.MediaTypeImageIndex:
 		if mfst.Config != nil || mfst.Layers != nil || mfst.FSLayers != nil {
 			return "", fmt.Errorf(`media-type: %q should not have "config", "layers", or "fsLayers"`, mfst.MediaType)
 		}
@@ -307,10 +307,10 @@ func detectManifestBlobMediaType(dt []byte) (string, error) {
 		return schema1.MediaTypeManifest, nil
 	case mfst.Config != nil && mfst.Manifests == nil && mfst.FSLayers == nil,
 		mfst.Layers != nil && mfst.Manifests == nil && mfst.FSLayers == nil:
-		return specs.MediaTypeImageManifest, nil
+		return ocispec.MediaTypeImageManifest, nil
 	case mfst.Config == nil && mfst.Layers == nil && mfst.FSLayers == nil:
 		// fallback to index
-		return specs.MediaTypeImageIndex, nil
+		return ocispec.MediaTypeImageIndex, nil
 	}
 	return "", errors.New("media-type: cannot determine")
 }

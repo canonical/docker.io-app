@@ -1,9 +1,11 @@
 linters:
   enable:
+    - depguard
     - goimports
     - gosec
     - gosimple
     - govet
+    - importas
     - ineffassign
     - misspell
     - revive
@@ -23,8 +25,27 @@ linters:
       - docs
 
 linters-settings:
+  importas:
+    # Do not allow unaliased imports of aliased packages.
+    no-unaliased: true
+
+    alias:
+      # Enforce alias to prevent it accidentally being used instead of our
+      # own errdefs package (or vice-versa).
+      - pkg: github.com/containerd/containerd/errdefs
+        alias: cerrdefs
+      - pkg: github.com/opencontainers/image-spec/specs-go/v1
+        alias: ocispec
+
   govet:
     check-shadowing: false
+  depguard:
+    list-type: blacklist
+    include-go-root: true
+    packages:
+      # The io/ioutil package has been deprecated.
+      # https://go.dev/doc/go1.16#ioutil
+      - io/ioutil
   revive:
     rules:
       # FIXME make sure all packages have a description. Currently, there's many packages without.
@@ -93,12 +114,8 @@ issues:
       path: "api/types/(volume|container)/"
       linters:
         - revive
-    # FIXME: evaluate these and fix where needed: G307: Deferring unsafe method "*os.File" on type "Close" (gosec)
-    - text: "G307: Deferring unsafe method"
-      linters:
-        - gosec
     # FIXME temporarily suppress these. See #39924
-    - text: "SA1019: .*\\.Xattrs is deprecated: Use PAXRecords instead"
+    - text: "SA1019: .*\\.Xattrs has been deprecated since Go 1.10: Use PAXRecords instead"
       linters:
         - staticcheck
     # FIXME temporarily suppress these. See #39926

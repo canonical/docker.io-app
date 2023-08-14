@@ -406,7 +406,7 @@ func convertFileObject(
 	}
 	mode := config.Mode
 	if mode == nil {
-		mode = uint32Ptr(0444)
+		mode = uint32Ptr(0o444)
 	}
 
 	return swarmReferenceObject{
@@ -427,11 +427,11 @@ func uint32Ptr(value uint32) *uint32 {
 // convertExtraHosts converts <host>:<ip> mappings to SwarmKit notation:
 // "IP-address hostname(s)". The original order of mappings is preserved.
 func convertExtraHosts(extraHosts composetypes.HostsList) []string {
-	hosts := []string{}
+	hosts := make([]string, 0, len(extraHosts))
 	for _, hostIP := range extraHosts {
-		if v := strings.SplitN(hostIP, ":", 2); len(v) == 2 {
+		if hostName, ipAddr, ok := strings.Cut(hostIP, ":"); ok {
 			// Convert to SwarmKit notation: IP-address hostname(s)
-			hosts = append(hosts, fmt.Sprintf("%s %s", v[1], v[0]))
+			hosts = append(hosts, ipAddr+" "+hostName)
 		}
 	}
 	return hosts
@@ -616,11 +616,21 @@ func convertDeployMode(mode string, replicas *uint64) (swarm.ServiceMode, error)
 	serviceMode := swarm.ServiceMode{}
 
 	switch mode {
+	case "global-job":
+		if replicas != nil {
+			return serviceMode, errors.Errorf("replicas can only be used with replicated or replicated-job mode")
+		}
+		serviceMode.GlobalJob = &swarm.GlobalJob{}
 	case "global":
 		if replicas != nil {
-			return serviceMode, errors.Errorf("replicas can only be used with replicated mode")
+			return serviceMode, errors.Errorf("replicas can only be used with replicated or replicated-job mode")
 		}
 		serviceMode.Global = &swarm.GlobalService{}
+	case "replicated-job":
+		serviceMode.ReplicatedJob = &swarm.ReplicatedJob{
+			MaxConcurrent:    replicas,
+			TotalCompletions: replicas,
+		}
 	case "replicated", "":
 		serviceMode.Replicated = &swarm.ReplicatedService{Replicas: replicas}
 	default:

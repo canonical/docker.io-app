@@ -16,8 +16,8 @@ func Container(name string, builders ...func(container *types.Container)) *types
 		Names:   []string{"/" + name},
 		Command: "top",
 		Image:   "busybox:latest",
-		Status:  "Up 1 second",
-		Created: time.Now().Unix(),
+		Status:  "Up 1 minute",
+		Created: time.Now().Add(-1 * time.Minute).Unix(),
 	}
 
 	for _, builder := range builders {
@@ -58,6 +58,15 @@ func WithPort(privateport, publicport uint16, builders ...func(*types.Port)) fun
 			builder(port)
 		}
 		c.Ports = append(c.Ports, *port)
+	}
+}
+
+// WithSize adds size in bytes to the container
+func WithSize(size int64) func(*types.Container) {
+	return func(c *types.Container) {
+		if size >= 0 {
+			c.SizeRw = size
+		}
 	}
 }
 

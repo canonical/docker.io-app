@@ -28,29 +28,34 @@ func TestValidateIPAddress(t *testing.T) {
 	if ret, err := ValidateIPAddress(`random invalid string`); err == nil || ret != "" {
 		t.Fatalf("ValidateIPAddress(`random invalid string`) got %s %s", ret, err)
 	}
-
 }
 
 func TestMapOpts(t *testing.T) {
 	tmpMap := make(map[string]string)
-	o := NewMapOpts(tmpMap, logOptsValidator)
-	o.Set("max-size=1")
-	if o.String() != "map[max-size:1]" {
-		t.Errorf("%s != [map[max-size:1]", o.String())
+	o := NewMapOpts(tmpMap, sampleValidator)
+	err := o.Set("valid-option=1")
+	if err != nil {
+		t.Error(err)
+	}
+	if o.String() != "map[valid-option:1]" {
+		t.Errorf("%s != [map[valid-option:1]", o.String())
 	}
 
-	o.Set("max-file=2")
+	err = o.Set("valid-option2=2")
+	if err != nil {
+		t.Error(err)
+	}
 	if len(tmpMap) != 2 {
 		t.Errorf("map length %d != 2", len(tmpMap))
 	}
 
-	if tmpMap["max-file"] != "2" {
-		t.Errorf("max-file = %s != 2", tmpMap["max-file"])
+	if tmpMap["valid-option"] != "1" {
+		t.Errorf("valid-option = %s != 1", tmpMap["valid-option"])
+	}
+	if tmpMap["valid-option2"] != "2" {
+		t.Errorf("valid-option2 = %s != 2", tmpMap["valid-option2"])
 	}
 
-	if tmpMap["max-size"] != "1" {
-		t.Errorf("max-size = %s != 1", tmpMap["max-size"])
-	}
 	if o.Set("dummy-val=3") == nil {
 		t.Error("validator is not being called")
 	}
@@ -58,15 +63,24 @@ func TestMapOpts(t *testing.T) {
 
 func TestListOptsWithoutValidator(t *testing.T) {
 	o := NewListOpts(nil)
-	o.Set("foo")
+	err := o.Set("foo")
+	if err != nil {
+		t.Error(err)
+	}
 	if o.String() != "[foo]" {
 		t.Errorf("%s != [foo]", o.String())
 	}
-	o.Set("bar")
+	err = o.Set("bar")
+	if err != nil {
+		t.Error(err)
+	}
 	if o.Len() != 2 {
 		t.Errorf("%d != 2", o.Len())
 	}
-	o.Set("bar")
+	err = o.Set("bar")
+	if err != nil {
+		t.Error(err)
+	}
 	if o.Len() != 3 {
 		t.Errorf("%d != 3", o.Len())
 	}
@@ -88,31 +102,38 @@ func TestListOptsWithoutValidator(t *testing.T) {
 	if len(mapListOpts) != 1 {
 		t.Errorf("Expected [map[bar:{}]], got [%v]", mapListOpts)
 	}
-
 }
 
 func TestListOptsWithValidator(t *testing.T) {
-	// Re-using logOptsvalidator (used by MapOpts)
-	o := NewListOpts(logOptsValidator)
-	o.Set("foo")
+	o := NewListOpts(sampleValidator)
+	err := o.Set("foo")
+	if err == nil {
+		t.Error(err)
+	}
 	if o.String() != "" {
 		t.Errorf(`%s != ""`, o.String())
 	}
-	o.Set("foo=bar")
+	err = o.Set("foo=bar")
+	if err == nil {
+		t.Error(err)
+	}
 	if o.String() != "" {
 		t.Errorf(`%s != ""`, o.String())
 	}
-	o.Set("max-file=2")
+	err = o.Set("valid-option2=2")
+	if err != nil {
+		t.Error(err)
+	}
 	if o.Len() != 1 {
 		t.Errorf("%d != 1", o.Len())
 	}
-	if !o.Get("max-file=2") {
-		t.Error("o.Get(\"max-file=2\") == false")
+	if !o.Get("valid-option2=2") {
+		t.Error(`o.Get("valid-option2=2") == false`)
 	}
 	if o.Get("baz") {
-		t.Error("o.Get(\"baz\") == true")
+		t.Error(`o.Get("baz") == true`)
 	}
-	o.Delete("max-file=2")
+	o.Delete("valid-option2=2")
 	if o.String() != "" {
 		t.Errorf(`%s != ""`, o.String())
 	}
@@ -279,13 +300,13 @@ func TestValidateLabel(t *testing.T) {
 	}
 }
 
-func logOptsValidator(val string) (string, error) {
-	allowedKeys := map[string]string{"max-size": "1", "max-file": "2"}
-	vals := strings.Split(val, "=")
-	if allowedKeys[vals[0]] != "" {
+func sampleValidator(val string) (string, error) {
+	allowedKeys := map[string]string{"valid-option": "1", "valid-option2": "2"}
+	k, _, _ := strings.Cut(val, "=")
+	if allowedKeys[k] != "" {
 		return val, nil
 	}
-	return "", fmt.Errorf("invalid key %s", vals[0])
+	return "", fmt.Errorf("invalid key %s", k)
 }
 
 func TestNamedListOpts(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"github.com/pkg/errors"
 	"gotest.tools/v3/icmd"
 	"gotest.tools/v3/poll"
@@ -19,21 +20,15 @@ func Setup() error {
 	if dockerHost == "" {
 		return errors.New("$TEST_DOCKER_HOST must be set")
 	}
-	if err := os.Setenv("DOCKER_HOST", dockerHost); err != nil {
+	if err := os.Setenv(client.EnvOverrideHost, dockerHost); err != nil {
 		return err
 	}
 
 	if dockerCertPath := os.Getenv("TEST_DOCKER_CERT_PATH"); dockerCertPath != "" {
-		if err := os.Setenv("DOCKER_CERT_PATH", dockerCertPath); err != nil {
+		if err := os.Setenv(client.EnvOverrideCertPath, dockerCertPath); err != nil {
 			return err
 		}
-		if err := os.Setenv("DOCKER_TLS_VERIFY", "1"); err != nil {
-			return err
-		}
-	}
-
-	if kubeConfig := os.Getenv("TEST_KUBECONFIG"); kubeConfig != "" {
-		if err := os.Setenv("KUBECONFIG", kubeConfig); err != nil {
+		if err := os.Setenv(client.EnvTLSVerify, "1"); err != nil {
 			return err
 		}
 	}
@@ -51,11 +46,6 @@ func Setup() error {
 	}
 
 	return nil
-}
-
-// KubernetesEnabled returns if Kubernetes testing is enabled
-func KubernetesEnabled() bool {
-	return os.Getenv("KUBECONFIG") != ""
 }
 
 // RemoteDaemon returns true if running against a remote daemon
@@ -107,4 +97,14 @@ func SkipIfCgroupNamespacesNotSupported(t *testing.T) {
 	cgroupNsFound := strings.Contains(result.Stdout(), "name=cgroupns")
 
 	skip.If(t, !cgroupNsFound, fmt.Sprintf("running against a daemon that doesn't support cgroup namespaces (security options: %s)", result.Stdout()))
+}
+
+// SkipIfNotPlatform skips the test if the running docker daemon is not running on a specific platform.
+// platform should be in format os/arch (for example linux/arm64).
+func SkipIfNotPlatform(t *testing.T, platform string) {
+	t.Helper()
+	result := icmd.RunCmd(icmd.Command("docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"))
+	result.Assert(t, icmd.Expected{Err: icmd.None})
+	daemonPlatform := strings.TrimSpace(result.Stdout())
+	skip.If(t, daemonPlatform != platform, "running against a non %s daemon", platform)
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,19 +23,20 @@ const configDataFile = "config-create-with-name.golden"
 func TestConfigCreateErrors(t *testing.T) {
 	testCases := []struct {
 		args             []string
-		configCreateFunc func(swarm.ConfigSpec) (types.ConfigCreateResponse, error)
+		configCreateFunc func(context.Context, swarm.ConfigSpec) (types.ConfigCreateResponse, error)
 		expectedError    string
 	}{
 		{
 			args:          []string{"too_few"},
 			expectedError: "requires exactly 2 arguments",
 		},
-		{args: []string{"too", "many", "arguments"},
+		{
+			args:          []string{"too", "many", "arguments"},
 			expectedError: "requires exactly 2 arguments",
 		},
 		{
 			args: []string{"name", filepath.Join("testdata", configDataFile)},
-			configCreateFunc: func(configSpec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
+			configCreateFunc: func(_ context.Context, configSpec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
 				return types.ConfigCreateResponse{}, errors.Errorf("error creating config")
 			},
 			expectedError: "error creating config",
@@ -56,7 +58,7 @@ func TestConfigCreateWithName(t *testing.T) {
 	name := "foo"
 	var actual []byte
 	cli := test.NewFakeCli(&fakeClient{
-		configCreateFunc: func(spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
+		configCreateFunc: func(_ context.Context, spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
 			if spec.Name != name {
 				return types.ConfigCreateResponse{}, errors.Errorf("expected name %q, got %q", name, spec.Name)
 			}
@@ -95,7 +97,7 @@ func TestConfigCreateWithLabels(t *testing.T) {
 	}
 
 	cli := test.NewFakeCli(&fakeClient{
-		configCreateFunc: func(spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
+		configCreateFunc: func(_ context.Context, spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
 			if !reflect.DeepEqual(spec, expected) {
 				return types.ConfigCreateResponse{}, errors.Errorf("expected %+v, got %+v", expected, spec)
 			}
@@ -121,7 +123,7 @@ func TestConfigCreateWithTemplatingDriver(t *testing.T) {
 	name := "foo"
 
 	cli := test.NewFakeCli(&fakeClient{
-		configCreateFunc: func(spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
+		configCreateFunc: func(_ context.Context, spec swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
 			if spec.Name != name {
 				return types.ConfigCreateResponse{}, errors.Errorf("expected name %q, got %q", name, spec.Name)
 			}

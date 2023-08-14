@@ -6,6 +6,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	cliopts "github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
@@ -29,9 +30,10 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 			}
 			return runCreate(dockerCli, cmd.Flags(), opts)
 		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&opts.mode, flagMode, "replicated", "Service mode (replicated, global, replicated-job, or global-job)")
+	flags.StringVar(&opts.mode, flagMode, "replicated", `Service mode ("replicated", "global", "replicated-job", "global-job")`)
 	flags.StringVar(&opts.name, flagName, "", "Service name")
 
 	addServiceFlags(flags, opts, buildServiceDefaultFlagMapping())

@@ -16,6 +16,7 @@ const (
 	StatusHeader       = "STATUS"
 	PortsHeader        = "PORTS"
 	ImageHeader        = "IMAGE"
+	ErrorHeader        = "ERROR"
 	ContainerIDHeader  = "CONTAINER ID"
 )
 
@@ -44,13 +45,4 @@ type HeaderContext struct {
 // FullHeader returns the header as an interface
 func (c *HeaderContext) FullHeader() interface{} {
 	return c.Header
-}
-
-func stripNamePrefix(ss []string) []string {
-	sss := make([]string, len(ss))
-	for i, s := range ss {
-		sss[i] = s[1:]
-	}
-
-	return sss
 }

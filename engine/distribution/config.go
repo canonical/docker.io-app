@@ -3,13 +3,13 @@ package distribution // import "github.com/docker/docker/distribution"
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"runtime"
 
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/schema2"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/distribution/reference"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
@@ -17,10 +17,10 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/system"
 	refstore "github.com/docker/docker/reference"
-	"github.com/docker/docker/registry"
-	"github.com/docker/libtrust"
-	digest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	registrypkg "github.com/docker/docker/registry"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/pkg/errors"
 )
 
 // Config stores configuration for communicating
@@ -30,13 +30,13 @@ type Config struct {
 	MetaHeaders map[string][]string
 	// AuthConfig holds authentication credentials for authenticating with
 	// the registry.
-	AuthConfig *types.AuthConfig
+	AuthConfig *registry.AuthConfig
 	// ProgressOutput is the interface for showing the status of the pull
 	// operation.
 	ProgressOutput progress.Output
 	// RegistryService is the registry service to use for TLS configuration
 	// and endpoint lookup.
-	RegistryService registry.Service
+	RegistryService RegistryResolver
 	// ImageEventLogger notifies events for a given image
 	ImageEventLogger func(id, name, action string)
 	// MetadataStore is the storage backend for distribution-specific
@@ -47,8 +47,6 @@ type Config struct {
 	// ReferenceStore manages tags. This value is optional, when excluded
 	// content will not be tagged.
 	ReferenceStore refstore.Store
-	// RequireSchema2 ensures that only schema2 manifests are used.
-	RequireSchema2 bool
 }
 
 // ImagePullConfig stores pull configuration.
@@ -56,12 +54,13 @@ type ImagePullConfig struct {
 	Config
 
 	// DownloadManager manages concurrent pulls.
-	DownloadManager RootFSDownloadManager
-	// Schema2Types is the valid schema2 configuration types allowed
-	// by the pull operation.
+	DownloadManager *xfer.LayerDownloadManager
+	// Schema2Types is an optional list of valid schema2 configuration types
+	// allowed by the pull operation. If omitted, the default list of accepted
+	// types is used.
 	Schema2Types []string
 	// Platform is the requested platform of the image being pulled
-	Platform *specs.Platform
+	Platform *ocispec.Platform
 }
 
 // ImagePushConfig stores push configuration.
@@ -71,13 +70,17 @@ type ImagePushConfig struct {
 	// ConfigMediaType is the configuration media type for
 	// schema2 manifests.
 	ConfigMediaType string
-	// LayerStores (indexed by operating system) manages layers.
-	LayerStores map[string]PushLayerProvider
-	// TrustKey is the private key for legacy signatures. This is typically
-	// an ephemeral key, since these signatures are no longer verified.
-	TrustKey libtrust.PrivateKey
+	// LayerStores manages layers.
+	LayerStores PushLayerProvider
 	// UploadManager dispatches uploads.
 	UploadManager *xfer.LayerUploadManager
+}
+
+// RegistryResolver is used for TLS configuration and endpoint lookup.
+type RegistryResolver interface {
+	LookupPushEndpoints(hostname string) (endpoints []registrypkg.APIEndpoint, err error)
+	LookupPullEndpoints(hostname string) (endpoints []registrypkg.APIEndpoint, err error)
+	ResolveRepository(name reference.Named) (*registrypkg.RepositoryInfo, error)
 }
 
 // ImageConfigStore handles storing and getting image configurations
@@ -86,8 +89,6 @@ type ImagePushConfig struct {
 type ImageConfigStore interface {
 	Put(context.Context, []byte) (digest.Digest, error)
 	Get(context.Context, digest.Digest) ([]byte, error)
-	RootFSFromConfig([]byte) (*image.RootFS, error)
-	PlatformFromConfig([]byte) (*specs.Platform, error)
 }
 
 // PushLayerProvider provides layers to be pushed by ChainID.
@@ -102,18 +103,9 @@ type PushLayer interface {
 	DiffID() layer.DiffID
 	Parent() PushLayer
 	Open() (io.ReadCloser, error)
-	Size() (int64, error)
+	Size() int64
 	MediaType() string
 	Release()
-}
-
-// RootFSDownloadManager handles downloading of the rootfs
-type RootFSDownloadManager interface {
-	// Download downloads the layers into the given initial rootfs and
-	// returns the final rootfs.
-	// Given progress output to track download progress
-	// Returns function to release download resources
-	Download(ctx context.Context, initialRootFS image.RootFS, os string, layers []xfer.DownloadDescriptor, progressOutput progress.Output) (image.RootFS, func(), error)
 }
 
 type imageConfigStore struct {
@@ -134,14 +126,14 @@ func (s *imageConfigStore) Put(_ context.Context, c []byte) (digest.Digest, erro
 }
 
 func (s *imageConfigStore) Get(_ context.Context, d digest.Digest) ([]byte, error) {
-	img, err := s.Store.Get(image.IDFromDigest(d))
+	img, err := s.Store.Get(image.ID(d))
 	if err != nil {
 		return nil, err
 	}
 	return img.RawJSON(), nil
 }
 
-func (s *imageConfigStore) RootFSFromConfig(c []byte) (*image.RootFS, error) {
+func rootFSFromConfig(c []byte) (*image.RootFS, error) {
 	var unmarshalledConfig image.Image
 	if err := json.Unmarshal(c, &unmarshalledConfig); err != nil {
 		return nil, err
@@ -149,18 +141,10 @@ func (s *imageConfigStore) RootFSFromConfig(c []byte) (*image.RootFS, error) {
 	return unmarshalledConfig.RootFS, nil
 }
 
-func (s *imageConfigStore) PlatformFromConfig(c []byte) (*specs.Platform, error) {
+func platformFromConfig(c []byte) (*ocispec.Platform, error) {
 	var unmarshalledConfig image.Image
 	if err := json.Unmarshal(c, &unmarshalledConfig); err != nil {
 		return nil, err
-	}
-
-	// fail immediately on Windows when downloading a non-Windows image
-	// and vice versa. Exception on Windows if Linux Containers are enabled.
-	if runtime.GOOS == "windows" && unmarshalledConfig.OS == "linux" && !system.LCOWSupported() {
-		return nil, fmt.Errorf("image operating system %q cannot be used on this platform", unmarshalledConfig.OS)
-	} else if runtime.GOOS != "windows" && unmarshalledConfig.OS == "windows" {
-		return nil, fmt.Errorf("image operating system %q cannot be used on this platform", unmarshalledConfig.OS)
 	}
 
 	os := unmarshalledConfig.OS
@@ -168,24 +152,25 @@ func (s *imageConfigStore) PlatformFromConfig(c []byte) (*specs.Platform, error)
 		os = runtime.GOOS
 	}
 	if !system.IsOSSupported(os) {
-		return nil, system.ErrNotSupportedOperatingSystem
+		return nil, errors.Wrapf(system.ErrNotSupportedOperatingSystem, "image operating system %q cannot be used on this platform", os)
 	}
-	return &specs.Platform{OS: os, Architecture: unmarshalledConfig.Architecture, Variant: unmarshalledConfig.Variant, OSVersion: unmarshalledConfig.OSVersion}, nil
+	return &ocispec.Platform{
+		OS:           os,
+		Architecture: unmarshalledConfig.Architecture,
+		Variant:      unmarshalledConfig.Variant,
+		OSVersion:    unmarshalledConfig.OSVersion,
+	}, nil
 }
 
 type storeLayerProvider struct {
 	ls layer.Store
 }
 
-// NewLayerProvidersFromStores returns layer providers backed by
+// NewLayerProvidersFromStore returns layer providers backed by
 // an instance of LayerStore. Only getting layers as gzipped
 // tars is supported.
-func NewLayerProvidersFromStores(lss map[string]layer.Store) map[string]PushLayerProvider {
-	plps := make(map[string]PushLayerProvider)
-	for os, ls := range lss {
-		plps[os] = &storeLayerProvider{ls: ls}
-	}
-	return plps
+func NewLayerProvidersFromStore(ls layer.Store) PushLayerProvider {
+	return &storeLayerProvider{ls: ls}
 }
 
 func (p *storeLayerProvider) Get(lid layer.ChainID) (PushLayer, error) {
@@ -241,7 +226,7 @@ func (l *storeLayer) Open() (io.ReadCloser, error) {
 	return l.Layer.TarStream()
 }
 
-func (l *storeLayer) Size() (int64, error) {
+func (l *storeLayer) Size() int64 {
 	return l.Layer.DiffSize()
 }
 

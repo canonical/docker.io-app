@@ -47,7 +47,7 @@ func TestValidateMount(t *testing.T) {
 		{mount.Mount{Type: mount.TypeBind, Source: testDir, Target: "/foo"}, nil},
 		{mount.Mount{Type: "invalid", Target: "/foo"}, errors.New("mount type unknown")},
 	}
-	parser := NewParser(runtime.GOOS)
+	parser := NewParser()
 	for i, x := range cases {
 		err := parser.ValidateMountConfig(&x.input)
 		if err == nil && x.expected == nil {
@@ -58,7 +58,7 @@ func TestValidateMount(t *testing.T) {
 		}
 	}
 	if runtime.GOOS == "windows" {
-		parser = &lcowParser{}
+		parser = NewLCOWParser()
 		for i, x := range lcowCases {
 			err := parser.ValidateMountConfig(&x.input)
 			if err == nil && x.expected == nil {

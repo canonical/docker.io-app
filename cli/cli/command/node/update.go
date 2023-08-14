@@ -13,9 +13,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var (
-	errNoRoleChange = errors.New("role was already set to the requested value")
-)
+var errNoRoleChange = errors.New("role was already set to the requested value")
 
 func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	options := newNodeOptions()
@@ -30,9 +28,9 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&options.role, flagRole, "", `Role of the node ("worker"|"manager")`)
-	flags.StringVar(&options.availability, flagAvailability, "", `Availability of the node ("active"|"pause"|"drain")`)
-	flags.Var(&options.annotations.labels, flagLabelAdd, "Add or update a node label (key=value)")
+	flags.StringVar(&options.role, flagRole, "", `Role of the node ("worker", "manager")`)
+	flags.StringVar(&options.availability, flagAvailability, "", `Availability of the node ("active", "pause", "drain")`)
+	flags.Var(&options.annotations.labels, flagLabelAdd, `Add or update a node label ("key=value")`)
 	labelKeys := opts.NewListOpts(nil)
 	flags.Var(&labelKeys, flagLabelRemove, "Remove a node label if exists")
 	return cmd

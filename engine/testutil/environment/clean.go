@@ -8,7 +8,9 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"gotest.tools/v3/assert"
 )
 
@@ -46,11 +48,8 @@ func unpauseAllContainers(t testing.TB, client client.ContainerAPIClient) {
 
 func getPausedContainers(ctx context.Context, t testing.TB, client client.ContainerAPIClient) []types.Container {
 	t.Helper()
-	filter := filters.NewArgs()
-	filter.Add("status", "paused")
 	containers, err := client.ContainerList(ctx, types.ContainerListOptions{
-		Filters: filter,
-		Quiet:   true,
+		Filters: filters.NewArgs(filters.Arg("status", "paused")),
 		All:     true,
 	})
 	assert.Check(t, err, "failed to list containers")
@@ -85,8 +84,7 @@ func deleteAllContainers(t testing.TB, apiclient client.ContainerAPIClient, prot
 func getAllContainers(ctx context.Context, t testing.TB, client client.ContainerAPIClient) []types.Container {
 	t.Helper()
 	containers, err := client.ContainerList(ctx, types.ContainerListOptions{
-		Quiet: true,
-		All:   true,
+		All: true,
 	})
 	assert.Check(t, err, "failed to list containers")
 	return containers
@@ -100,6 +98,9 @@ func deleteAllImages(t testing.TB, apiclient client.ImageAPIClient, protectedIma
 	ctx := context.Background()
 	for _, image := range images {
 		tags := tagsFromImageSummary(image)
+		if _, ok := protectedImages[image.ID]; ok {
+			continue
+		}
 		if len(tags) == 0 {
 			removeImage(ctx, t, apiclient, image.ID)
 			continue
@@ -125,7 +126,7 @@ func removeImage(ctx context.Context, t testing.TB, apiclient client.ImageAPICli
 
 func deleteAllVolumes(t testing.TB, c client.VolumeAPIClient, protectedVolumes map[string]struct{}) {
 	t.Helper()
-	volumes, err := c.VolumeList(context.Background(), filters.Args{})
+	volumes, err := c.VolumeList(context.Background(), volume.ListOptions{})
 	assert.Check(t, err, "failed to list volumes")
 
 	for _, v := range volumes.Volumes {
@@ -166,7 +167,7 @@ func deleteAllPlugins(t testing.TB, c client.PluginAPIClient, protectedPlugins m
 	t.Helper()
 	plugins, err := c.PluginList(context.Background(), filters.Args{})
 	// Docker EE does not allow cluster-wide plugin management.
-	if client.IsErrNotImplemented(err) {
+	if errdefs.IsNotImplemented(err) {
 		return
 	}
 	assert.Check(t, err, "failed to list plugins")

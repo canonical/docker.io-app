@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
-	"github.com/docker/docker/pkg/system"
 	"gotest.tools/v3/assert"
 )
 
-func (s *DockerSuite) TestCpToContainerWithPermissions(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToContainerWithPermissions(c *testing.T) {
 	testRequires(c, testEnv.IsLocalDaemon, DaemonIsLinux)
 
 	tmpDir := getTestDir(c, "test-cp-to-host-with-permissions")
@@ -43,7 +43,7 @@ func (s *DockerSuite) TestCpToContainerWithPermissions(c *testing.T) {
 }
 
 // Check ownership is root, both in non-userns and userns enabled modes
-func (s *DockerSuite) TestCpCheckDestOwnership(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpCheckDestOwnership(c *testing.T) {
 	testRequires(c, DaemonIsLinux, testEnv.IsLocalDaemon)
 	tmpVolDir := getTestDir(c, "test-cp-tmpvol")
 	containerID := makeTestContainer(c,
@@ -59,12 +59,13 @@ func (s *DockerSuite) TestCpCheckDestOwnership(c *testing.T) {
 
 	assert.NilError(c, runDockerCp(c, srcPath, dstPath))
 
-	stat, err := system.Stat(filepath.Join(tmpVolDir, "file1"))
+	stat, err := os.Stat(filepath.Join(tmpVolDir, "file1"))
 	assert.NilError(c, err)
 	uid, gid, err := getRootUIDGID()
 	assert.NilError(c, err)
-	assert.Equal(c, stat.UID(), uint32(uid), "Copied file not owned by container root UID")
-	assert.Equal(c, stat.GID(), uint32(gid), "Copied file not owned by container root GID")
+	fi := stat.Sys().(*syscall.Stat_t)
+	assert.Equal(c, fi.Uid, uint32(uid), "Copied file not owned by container root UID")
+	assert.Equal(c, fi.Gid, uint32(gid), "Copied file not owned by container root GID")
 }
 
 func getRootUIDGID() (int, int, error) {

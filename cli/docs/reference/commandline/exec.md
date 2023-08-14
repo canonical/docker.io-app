@@ -1,28 +1,28 @@
----
-title: "exec"
-description: "The exec command description and usage"
-keywords: "command, container, run, execute"
----
-
 # exec
 
-```markdown
-Usage:  docker exec [OPTIONS] CONTAINER COMMAND [ARG...]
+<!---MARKER_GEN_START-->
+Execute a command in a running container
 
-Run a command in a running container
+### Aliases
 
-Options:
-  -d, --detach         Detached mode: run command in the background
-      --detach-keys    Override the key sequence for detaching a container
-  -e, --env=[]         Set environment variables
-      --env-file       Read in a file of environment variables
-      --help           Print usage
-  -i, --interactive    Keep STDIN open even if not attached
-      --privileged     Give extended privileges to the command
-  -t, --tty            Allocate a pseudo-TTY
-  -u, --user           Username or UID (format: <name|uid>[:<group|gid>])
-  -w, --workdir        Working directory inside the container
-```
+`docker container exec`, `docker exec`
+
+### Options
+
+| Name                                      | Type     | Default | Description                                            |
+|:------------------------------------------|:---------|:--------|:-------------------------------------------------------|
+| `-d`, `--detach`                          |          |         | Detached mode: run command in the background           |
+| `--detach-keys`                           | `string` |         | Override the key sequence for detaching a container    |
+| [`-e`](#env), [`--env`](#env)             | `list`   |         | Set environment variables                              |
+| `--env-file`                              | `list`   |         | Read in a file of environment variables                |
+| `-i`, `--interactive`                     |          |         | Keep STDIN open even if not attached                   |
+| `--privileged`                            |          |         | Give extended privileges to the command                |
+| `-t`, `--tty`                             |          |         | Allocate a pseudo-TTY                                  |
+| `-u`, `--user`                            | `string` |         | Username or UID (format: `<name\|uid>[:<group\|gid>]`) |
+| [`-w`](#workdir), [`--workdir`](#workdir) | `string` |         | Working directory inside the container                 |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -37,7 +37,7 @@ has a custom directory specified with the WORKDIR directive in its Dockerfile,
 this directory is used instead.
 
 COMMAND must be an executable. A chained or a quoted command does not work.
-For example, `docker exec -it my_container sh -c "echo a && echo b"` works,
+For example, `docker exec -it my_container sh -c "echo a && echo b"` does
 work, but `docker exec -it my_container "echo a && echo b"` does not.
 
 ## Examples

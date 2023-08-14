@@ -5,8 +5,10 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/containerd/containerd/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
+	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/directory"
 	"github.com/docker/docker/pkg/idtools"
@@ -23,7 +25,9 @@ type ds interface {
 	GetDriverList() []string
 }
 
-type volumeEventLogger interface {
+// VolumeEventLogger interface provides methods to log volume-related events
+type VolumeEventLogger interface {
+	// LogVolumeEvent generates an event related to a volume.
 	LogVolumeEvent(volumeID, action string, attributes map[string]string)
 }
 
@@ -33,17 +37,17 @@ type VolumesService struct {
 	vs           *VolumeStore
 	ds           ds
 	pruneRunning int32
-	eventLogger  volumeEventLogger
+	eventLogger  VolumeEventLogger
 }
 
 // NewVolumeService creates a new volume service
-func NewVolumeService(root string, pg plugingetter.PluginGetter, rootIDs idtools.Identity, logger volumeEventLogger) (*VolumesService, error) {
+func NewVolumeService(root string, pg plugingetter.PluginGetter, rootIDs idtools.Identity, logger VolumeEventLogger) (*VolumesService, error) {
 	ds := drivers.NewStore(pg)
 	if err := setupDefaultDriver(ds, root, rootIDs); err != nil {
 		return nil, err
 	}
 
-	vs, err := NewStore(root, ds)
+	vs, err := NewStore(root, ds, WithEventLogger(logger))
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +59,10 @@ func (s *VolumesService) GetDriverList() []string {
 	return s.ds.GetDriverList()
 }
 
+// AnonymousLabel is the label used to indicate that a volume is anonymous
+// This is set automatically on a volume when a volume is created without a name specified, and as such an id is generated for it.
+const AnonymousLabel = "com.docker.volume.anonymous"
+
 // Create creates a volume
 // If the caller is creating this volume to be consumed immediately, it is
 // expected that the caller specifies a reference ID.
@@ -62,22 +70,22 @@ func (s *VolumesService) GetDriverList() []string {
 //
 // A good example for a reference ID is a container's ID.
 // When whatever is going to reference this volume is removed the caller should defeference the volume by calling `Release`.
-func (s *VolumesService) Create(ctx context.Context, name, driverName string, opts ...opts.CreateOption) (*types.Volume, error) {
+func (s *VolumesService) Create(ctx context.Context, name, driverName string, options ...opts.CreateOption) (*volumetypes.Volume, error) {
 	if name == "" {
 		name = stringid.GenerateRandomID()
+		options = append(options, opts.WithCreateLabel(AnonymousLabel, ""))
 	}
-	v, err := s.vs.Create(ctx, name, driverName, opts...)
+	v, err := s.vs.Create(ctx, name, driverName, options...)
 	if err != nil {
 		return nil, err
 	}
 
-	s.eventLogger.LogVolumeEvent(v.Name(), "create", map[string]string{"driver": v.DriverName()})
 	apiV := volumeToAPIType(v)
 	return &apiV, nil
 }
 
 // Get returns details about a volume
-func (s *VolumesService) Get(ctx context.Context, name string, getOpts ...opts.GetOption) (*types.Volume, error) {
+func (s *VolumesService) Get(ctx context.Context, name string, getOpts ...opts.GetOption) (*volumetypes.Volume, error) {
 	v, err := s.vs.Get(ctx, name, getOpts...)
 	if err != nil {
 		return nil, err
@@ -104,7 +112,7 @@ func (s *VolumesService) Get(ctx context.Context, name string, getOpts ...opts.G
 // s.Mount(ctx, vol, mountID)
 // s.Unmount(ctx, vol, mountID)
 // ```
-func (s *VolumesService) Mount(ctx context.Context, vol *types.Volume, ref string) (string, error) {
+func (s *VolumesService) Mount(ctx context.Context, vol *volumetypes.Volume, ref string) (string, error) {
 	v, err := s.vs.Get(ctx, vol.Name, opts.WithGetDriver(vol.Driver))
 	if err != nil {
 		if IsNotExist(err) {
@@ -121,7 +129,7 @@ func (s *VolumesService) Mount(ctx context.Context, vol *types.Volume, ref strin
 // The reference specified here should be the same reference specified during `Mount` and should be
 // unique for each mount/unmount pair.
 // See `Mount` documentation for an example.
-func (s *VolumesService) Unmount(ctx context.Context, vol *types.Volume, ref string) error {
+func (s *VolumesService) Unmount(ctx context.Context, vol *volumetypes.Volume, ref string) error {
 	v, err := s.vs.Get(ctx, vol.Name, opts.WithGetDriver(vol.Driver))
 	if err != nil {
 		if IsNotExist(err) {
@@ -161,16 +169,14 @@ func (s *VolumesService) Remove(ctx context.Context, name string, rmOpts ...opts
 	} else if IsNotExist(err) && cfg.PurgeOnError {
 		err = nil
 	}
-
-	if err == nil {
-		s.eventLogger.LogVolumeEvent(v.Name(), "destroy", map[string]string{"driver": v.DriverName()})
-	}
 	return err
 }
 
 var acceptedPruneFilters = map[string]bool{
 	"label":  true,
 	"label!": true,
+	// All tells the filter to consider all volumes not just anonymous ones.
+	"all": true,
 }
 
 var acceptedListFilters = map[string]bool{
@@ -184,7 +190,7 @@ var acceptedListFilters = map[string]bool{
 // Note that this intentionally skips volumes which have mount options. Typically
 // volumes with mount options are not really local even if they are using the
 // local driver.
-func (s *VolumesService) LocalVolumesSize(ctx context.Context) ([]*types.Volume, error) {
+func (s *VolumesService) LocalVolumesSize(ctx context.Context) ([]*volumetypes.Volume, error) {
 	ls, _, err := s.vs.Find(ctx, And(ByDriver(volume.DefaultDriverName), CustomFilter(func(v volume.Volume) bool {
 		dv, ok := v.(volume.DetailedVolume)
 		return ok && len(dv.Options()) == 0
@@ -203,6 +209,10 @@ func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*types
 		return nil, errdefs.Conflict(errors.New("a prune operation is already running"))
 	}
 	defer atomic.StoreInt32(&s.pruneRunning, 0)
+
+	if err := withPrune(filter); err != nil {
+		return nil, err
+	}
 
 	by, err := filtersToBy(filter, acceptedPruneFilters)
 	if err != nil {
@@ -247,7 +257,7 @@ func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*types
 
 // List gets the list of volumes which match the past in filters
 // If filters is nil or empty all volumes are returned.
-func (s *VolumesService) List(ctx context.Context, filter filters.Args) (volumesOut []*types.Volume, warnings []string, err error) {
+func (s *VolumesService) List(ctx context.Context, filter filters.Args) (volumesOut []*volumetypes.Volume, warnings []string, err error) {
 	by, err := filtersToBy(filter, acceptedListFilters)
 	if err != nil {
 		return nil, nil, err
@@ -264,4 +274,19 @@ func (s *VolumesService) List(ctx context.Context, filter filters.Args) (volumes
 // Shutdown shuts down the image service and dependencies
 func (s *VolumesService) Shutdown() error {
 	return s.vs.Shutdown()
+}
+
+// LiveRestoreVolume passes through the LiveRestoreVolume call to the volume if it is implemented
+// otherwise it is a no-op.
+func (s *VolumesService) LiveRestoreVolume(ctx context.Context, vol *volumetypes.Volume, ref string) error {
+	v, err := s.vs.Get(ctx, vol.Name, opts.WithGetDriver(vol.Driver))
+	if err != nil {
+		return err
+	}
+	rlv, ok := v.(volume.LiveRestorer)
+	if !ok {
+		log.G(ctx).WithField("volume", vol.Name).Debugf("volume does not implement LiveRestoreVolume: %T", v)
+		return nil
+	}
+	return rlv.LiveRestoreVolume(ctx, ref)
 }

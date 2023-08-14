@@ -20,7 +20,7 @@ func TestEndpointParse(t *testing.T) {
 		{"http://0.0.0.0:5000/v0/", "http://0.0.0.0:5000/v0/v1/"},
 	}
 	for _, td := range testData {
-		e, err := newV1EndpointFromStr(td.str, nil, "", nil)
+		e, err := newV1EndpointFromStr(td.str, nil, nil)
 		if err != nil {
 			t.Errorf("%q: %s", td.str, err)
 		}
@@ -39,7 +39,7 @@ func TestEndpointParseInvalid(t *testing.T) {
 		"http://0.0.0.0:5000/v2/",
 	}
 	for _, td := range testData {
-		e, err := newV1EndpointFromStr(td, nil, "", nil)
+		e, err := newV1EndpointFromStr(td, nil, nil)
 		if err == nil {
 			t.Errorf("expected error parsing %q: parsed as %q", td, e)
 		}
@@ -63,9 +63,9 @@ func TestValidateEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testEndpoint := V1Endpoint{
+	testEndpoint := v1Endpoint{
 		URL:    testServerURL,
-		client: HTTPClient(NewTransport(nil)),
+		client: httpClient(newTransport(nil)),
 	}
 
 	if err = validateEndpoint(&testEndpoint); err != nil {

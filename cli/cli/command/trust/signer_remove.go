@@ -49,7 +49,7 @@ func removeSigner(cli command.Cli, options signerRemoveOptions) error {
 		}
 	}
 	if len(errRepos) > 0 {
-		return fmt.Errorf("Error removing signer from: %s", strings.Join(errRepos, ", "))
+		return errors.Errorf("error removing signer from: %s", strings.Join(errRepos, ", "))
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ func isLastSignerForReleases(roleWithSig data.Role, allRoles []client.RoleWithSi
 	}
 	counter := len(releasesRoleWithSigs.Signatures)
 	if counter == 0 {
-		return false, fmt.Errorf("All signed tags are currently revoked, use docker trust sign to fix")
+		return false, errors.New("all signed tags are currently revoked, use docker trust sign to fix")
 	}
 	for _, signature := range releasesRoleWithSigs.Signatures {
 		for _, key := range roleWithSig.KeyIDs {
@@ -78,17 +78,16 @@ func isLastSignerForReleases(roleWithSig data.Role, allRoles []client.RoleWithSi
 
 // removeSingleSigner attempts to remove a single signer and returns whether signer removal happened.
 // The signer not being removed doesn't necessarily raise an error e.g. user choosing "No" when prompted for confirmation.
-// nolint: unparam
 func removeSingleSigner(cli command.Cli, repoName, signerName string, forceYes bool) (bool, error) {
 	ctx := context.Background()
-	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, nil, image.AuthResolver(cli), repoName)
+	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, image.AuthResolver(cli), repoName)
 	if err != nil {
 		return false, err
 	}
 
 	signerDelegation := data.RoleName("targets/" + signerName)
 	if signerDelegation == releasesRoleTUFName {
-		return false, fmt.Errorf("releases is a reserved keyword and cannot be removed")
+		return false, errors.Errorf("releases is a reserved keyword and cannot be removed")
 	}
 	notaryRepo, err := cli.NotaryClient(imgRefAndAuth, trust.ActionsPushAndPull)
 	if err != nil {
@@ -106,7 +105,7 @@ func removeSingleSigner(cli command.Cli, repoName, signerName string, forceYes b
 		}
 	}
 	if role.Name == "" {
-		return false, fmt.Errorf("No signer %s for repository %s", signerName, repoName)
+		return false, errors.Errorf("no signer %s for repository %s", signerName, repoName)
 	}
 	allRoles, err := notaryRepo.ListRoles()
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,15 +16,13 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/google/go-cmp/cmp"
-	"github.com/moby/buildkit/session/secrets/secretsprovider"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/env"
 	"gotest.tools/v3/fs"
 	"gotest.tools/v3/skip"
 )
 
 func TestRunBuildDockerfileFromStdinWithCompress(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
+	t.Setenv("DOCKER_BUILDKIT", "0")
 	buffer := new(bytes.Buffer)
 	fakeBuild := newFakeBuild()
 	fakeImageBuild := func(ctx context.Context, context io.Reader, options types.ImageBuildOptions) (types.ImageBuildResponse, error) {
@@ -37,7 +34,7 @@ func TestRunBuildDockerfileFromStdinWithCompress(t *testing.T) {
 
 	cli := test.NewFakeCli(&fakeClient{imageBuildFunc: fakeImageBuild})
 	dockerfile := bytes.NewBufferString(`
-		FROM alpine:3.6
+		FROM alpine:frozen
 		COPY foo /
 	`)
 	cli.SetIn(streams.NewIn(io.NopCloser(dockerfile)))
@@ -61,15 +58,15 @@ func TestRunBuildDockerfileFromStdinWithCompress(t *testing.T) {
 }
 
 func TestRunBuildResetsUidAndGidInContext(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
 	skip.If(t, os.Getuid() != 0, "root is required to chown files")
+	t.Setenv("DOCKER_BUILDKIT", "0")
 	fakeBuild := newFakeBuild()
 	cli := test.NewFakeCli(&fakeClient{imageBuildFunc: fakeBuild.build})
 
 	dir := fs.NewDir(t, "test-build-context",
 		fs.WithFile("foo", "some content", fs.AsUser(65534, 65534)),
 		fs.WithFile("Dockerfile", `
-			FROM alpine:3.6
+			FROM alpine:frozen
 			COPY foo bar /
 		`),
 	)
@@ -85,14 +82,14 @@ func TestRunBuildResetsUidAndGidInContext(t *testing.T) {
 		{Name: "Dockerfile"},
 		{Name: "foo"},
 	}
-	var cmpTarHeaderNameAndOwner = cmp.Comparer(func(x, y tar.Header) bool {
+	cmpTarHeaderNameAndOwner := cmp.Comparer(func(x, y tar.Header) bool {
 		return x.Name == y.Name && x.Uid == y.Uid && x.Gid == y.Gid
 	})
 	assert.DeepEqual(t, expected, headers, cmpTarHeaderNameAndOwner)
 }
 
 func TestRunBuildDockerfileOutsideContext(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
+	t.Setenv("DOCKER_BUILDKIT", "0")
 	dir := fs.NewDir(t, t.Name(),
 		fs.WithFile("data", "data file"))
 	defer dir.Remove()
@@ -125,7 +122,7 @@ COPY data /data
 // TODO: test "context selection" logic directly when runBuild is refactored
 // to support testing (ex: docker/cli#294)
 func TestRunBuildFromGitHubSpecialCase(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
+	t.Setenv("DOCKER_BUILDKIT", "0")
 	cmd := NewBuildCommand(test.NewFakeCli(&fakeClient{}))
 	// Clone a small repo that exists so git doesn't prompt for credentials
 	cmd.SetArgs([]string{"github.com/docker/for-win"})
@@ -139,12 +136,12 @@ func TestRunBuildFromGitHubSpecialCase(t *testing.T) {
 // starting with `github.com` takes precedence over the `github.com` special
 // case.
 func TestRunBuildFromLocalGitHubDir(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
+	t.Setenv("DOCKER_BUILDKIT", "0")
 
 	buildDir := filepath.Join(t.TempDir(), "github.com", "docker", "no-such-repository")
-	err := os.MkdirAll(buildDir, 0777)
+	err := os.MkdirAll(buildDir, 0o777)
 	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte("FROM busybox\n"), 0644)
+	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte("FROM busybox\n"), 0o644)
 	assert.NilError(t, err)
 
 	client := test.NewFakeCli(&fakeClient{})
@@ -156,9 +153,9 @@ func TestRunBuildFromLocalGitHubDir(t *testing.T) {
 }
 
 func TestRunBuildWithSymlinkedContext(t *testing.T) {
-	defer env.Patch(t, "DOCKER_BUILDKIT", "0")()
+	t.Setenv("DOCKER_BUILDKIT", "0")
 	dockerfile := `
-FROM alpine:3.6
+FROM alpine:frozen
 RUN echo hello world
 `
 
@@ -176,75 +173,6 @@ RUN echo hello world
 	assert.NilError(t, runBuild(cli, options))
 
 	assert.DeepEqual(t, fakeBuild.filenames(t), []string{"Dockerfile"})
-}
-
-func TestParseSecret(t *testing.T) {
-	type testcase struct {
-		value       string
-		errExpected bool
-		errMatch    string
-		source      *secretsprovider.Source
-	}
-	var testcases = []testcase{
-		{
-			value:       "",
-			errExpected: true,
-		}, {
-			value:       "foobar",
-			errExpected: true,
-			errMatch:    "must be a key=value pair",
-		}, {
-			value:       "foo,bar",
-			errExpected: true,
-			errMatch:    "must be a key=value pair",
-		}, {
-			value:       "foo=bar",
-			errExpected: true,
-			errMatch:    "unexpected key",
-		}, {
-			value:  "src=somefile",
-			source: &secretsprovider.Source{FilePath: "somefile"},
-		}, {
-			value:  "source=somefile",
-			source: &secretsprovider.Source{FilePath: "somefile"},
-		}, {
-			value:  "id=mysecret",
-			source: &secretsprovider.Source{ID: "mysecret"},
-		}, {
-			value:  "id=mysecret,src=somefile",
-			source: &secretsprovider.Source{ID: "mysecret", FilePath: "somefile"},
-		}, {
-			value:  "id=mysecret,source=somefile,type=file",
-			source: &secretsprovider.Source{ID: "mysecret", FilePath: "somefile"},
-		}, {
-			value:  "id=mysecret,src=somefile,src=othersecretfile",
-			source: &secretsprovider.Source{ID: "mysecret", FilePath: "othersecretfile"},
-		}, {
-			value:  "id=mysecret,src=somefile,env=SECRET",
-			source: &secretsprovider.Source{ID: "mysecret", FilePath: "somefile", Env: "SECRET"},
-		}, {
-			value:  "type=file",
-			source: &secretsprovider.Source{},
-		}, {
-			value:  "type=env",
-			source: &secretsprovider.Source{},
-		}, {
-			value:       "type=invalid",
-			errExpected: true,
-			errMatch:    "unsupported secret type",
-		},
-	}
-
-	for _, tc := range testcases {
-		t.Run(tc.value, func(t *testing.T) {
-			secret, err := parseSecret(tc.value)
-			assert.Equal(t, err != nil, tc.errExpected, fmt.Sprintf("err=%v errExpected=%t", err, tc.errExpected))
-			if tc.errMatch != "" {
-				assert.ErrorContains(t, err, tc.errMatch)
-			}
-			assert.DeepEqual(t, secret, tc.source)
-		})
-	}
 }
 
 type fakeBuild struct {

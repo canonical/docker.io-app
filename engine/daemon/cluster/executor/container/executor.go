@@ -15,14 +15,14 @@ import (
 	"github.com/docker/docker/daemon/cluster/convert"
 	executorpkg "github.com/docker/docker/daemon/cluster/executor"
 	clustertypes "github.com/docker/docker/daemon/cluster/provider"
-	"github.com/docker/libnetwork"
-	networktypes "github.com/docker/libnetwork/types"
-	"github.com/docker/swarmkit/agent"
-	"github.com/docker/swarmkit/agent/exec"
-	"github.com/docker/swarmkit/api"
-	"github.com/docker/swarmkit/api/naming"
-	"github.com/docker/swarmkit/log"
-	"github.com/docker/swarmkit/template"
+	"github.com/docker/docker/libnetwork"
+	networktypes "github.com/docker/docker/libnetwork/types"
+	"github.com/moby/swarmkit/v2/agent"
+	"github.com/moby/swarmkit/v2/agent/exec"
+	"github.com/moby/swarmkit/v2/api"
+	"github.com/moby/swarmkit/v2/api/naming"
+	"github.com/moby/swarmkit/v2/log"
+	"github.com/moby/swarmkit/v2/template"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -52,7 +52,7 @@ func NewExecutor(b executorpkg.Backend, p plugin.Backend, i executorpkg.ImageBac
 		pluginBackend: p,
 		imageBackend:  i,
 		volumeBackend: v,
-		dependencies:  agent.NewDependencyManager(),
+		dependencies:  agent.NewDependencyManager(b.PluginGetter()),
 	}
 }
 
@@ -114,13 +114,16 @@ func (e *executor) Describe(ctx context.Context) (*api.NodeDescription, error) {
 	// parse []string labels into a map[string]string
 	labels := map[string]string{}
 	for _, l := range info.Labels {
-		stringSlice := strings.SplitN(l, "=", 2)
+		k, v, ok := strings.Cut(l, "=")
 		// this will take the last value in the list for a given key
 		// ideally, one shouldn't assign multiple values to the same key
-		if len(stringSlice) > 1 {
-			labels[stringSlice[0]] = stringSlice[1]
+		if ok {
+			labels[k] = v
 		}
 	}
+
+	// TODO(dperny): don't ignore the error here
+	csiInfo, _ := e.Volumes().Plugins().NodeInfo(ctx)
 
 	description := &api.NodeDescription{
 		Hostname: info.Name,
@@ -138,6 +141,7 @@ func (e *executor) Describe(ctx context.Context) (*api.NodeDescription, error) {
 			MemoryBytes: info.MemTotal,
 			Generic:     convert.GenericResourcesToGRPC(info.GenericResources),
 		},
+		CSIInfo: csiInfo,
 	}
 
 	// Save the node information in the executor field
@@ -354,6 +358,10 @@ func (e *executor) Secrets() exec.SecretsManager {
 
 func (e *executor) Configs() exec.ConfigsManager {
 	return e.dependencies.Configs()
+}
+
+func (e *executor) Volumes() exec.VolumesManager {
+	return e.dependencies.Volumes()
 }
 
 type sortedPlugins []api.PluginDescription

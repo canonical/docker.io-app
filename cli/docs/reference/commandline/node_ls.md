@@ -1,25 +1,22 @@
----
-title: "node ls"
-description: "The node ls command description and usage"
-keywords: "node, list"
----
-
 # node ls
 
-```markdown
-Usage:  docker node ls [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List nodes in the swarm
 
-Aliases:
-  ls, list
+### Aliases
 
-Options:
-  -f, --filter filter   Filter output based on conditions provided
-      --format string   Pretty-print nodes using a Go template
-      --help            Print usage
-  -q, --quiet           Only display IDs
-```
+`docker node ls`, `docker node list`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `-q`, `--quiet`                        |          |         | Only display IDs                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -113,10 +110,10 @@ Show all nodes that have a `region` node label set:
 $ docker node ls --filter node.label=region
 
 ID                            HOSTNAME        STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
-yg550ettvsjn6g6t840iaiwgb *   swarm-test-01   Ready     Active         Leader           20.10.2
-2lm9w9kbepgvkzkkeyku40e65     swarm-test-02   Ready     Active         Reachable        20.10.2
-hc0pu7ntc7s4uvj4pv7z7pz15     swarm-test-03   Ready     Active         Reachable        20.10.2
-n41b2cijmhifxxvz56vwrs12q     swarm-test-04   Ready     Active                          20.10.2
+yg550ettvsjn6g6t840iaiwgb *   swarm-test-01   Ready     Active         Leader           23.0.3
+2lm9w9kbepgvkzkkeyku40e65     swarm-test-02   Ready     Active         Reachable        23.0.3
+hc0pu7ntc7s4uvj4pv7z7pz15     swarm-test-03   Ready     Active         Reachable        23.0.3
+n41b2cijmhifxxvz56vwrs12q     swarm-test-04   Ready     Active                          23.0.3
 ```
 
 Show all nodes that have a `region` node label, with value `region-a`:
@@ -125,8 +122,8 @@ Show all nodes that have a `region` node label, with value `region-a`:
 $ docker node ls --filter node.label=region=region-a
 
 ID                            HOSTNAME        STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
-yg550ettvsjn6g6t840iaiwgb *   swarm-test-01   Ready     Active         Leader           20.10.2
-2lm9w9kbepgvkzkkeyku40e65     swarm-test-02   Ready     Active         Reachable        20.10.2
+yg550ettvsjn6g6t840iaiwgb *   swarm-test-01   Ready     Active         Leader           23.0.3
+2lm9w9kbepgvkzkkeyku40e65     swarm-test-02   Ready     Active         Reachable        23.0.3
 ```
 
 #### membership
@@ -203,6 +200,11 @@ e216jshn25ckzbvmwlnh5jr3g: swarm-manager1 Ready
 35o6tiywb700jesrt3dmllaza: swarm-worker1 Needs Rotation
 ```
 
+To list all nodes in JSON format, use the `json` directive:
+```console
+$ docker node ls --format json
+{"Availability":"Active","EngineVersion":"23.0.3","Hostname":"docker-desktop","ID":"k8f4w7qtzpj5sqzclcqafw35g","ManagerStatus":"Leader","Self":true,"Status":"Ready","TLSStatus":"Ready"}
+```
 
 ## Related commands
 

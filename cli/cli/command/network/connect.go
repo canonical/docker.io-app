@@ -7,6 +7,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types/network"
 	"github.com/spf13/cobra"
@@ -37,11 +38,18 @@ func newConnectCommand(dockerCli command.Cli) *cobra.Command {
 			options.container = args[1]
 			return runConnect(dockerCli, options)
 		},
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return completion.NetworkNames(dockerCli)(cmd, args, toComplete)
+			}
+			network := args[0]
+			return completion.ContainerNames(dockerCli, true, not(isConnected(network)))(cmd, args, toComplete)
+		},
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&options.ipaddress, "ip", "", "IPv4 address (e.g., 172.30.100.104)")
-	flags.StringVar(&options.ipv6address, "ip6", "", "IPv6 address (e.g., 2001:db8::33)")
+	flags.StringVar(&options.ipaddress, "ip", "", `IPv4 address (e.g., "172.30.100.104")`)
+	flags.StringVar(&options.ipv6address, "ip6", "", `IPv6 address (e.g., "2001:db8::33")`)
 	flags.Var(&options.links, "link", "Add link to another container")
 	flags.StringSliceVar(&options.aliases, "alias", []string{}, "Add network-scoped alias for the container")
 	flags.StringSliceVar(&options.linklocalips, "link-local-ip", []string{}, "Add a link-local address for the container")
@@ -73,13 +81,13 @@ func runConnect(dockerCli command.Cli, options connectOptions) error {
 func convertDriverOpt(opts []string) (map[string]string, error) {
 	driverOpt := make(map[string]string)
 	for _, opt := range opts {
-		parts := strings.SplitN(opt, "=", 2)
-		if len(parts) != 2 {
+		k, v, ok := strings.Cut(opt, "=")
+		// TODO(thaJeztah): we should probably not accept whitespace here (both for key and value).
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
 			return nil, fmt.Errorf("invalid key/value pair format in driver options")
 		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		driverOpt[key] = value
+		driverOpt[k] = strings.TrimSpace(v)
 	}
 	return driverOpt, nil
 }

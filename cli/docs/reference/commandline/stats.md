@@ -1,23 +1,23 @@
----
-title: "stats"
-description: "The stats command description and usage"
-keywords: "container, resource, statistics"
----
-
 # stats
 
-```markdown
-Usage:  docker stats [OPTIONS] [CONTAINER...]
-
+<!---MARKER_GEN_START-->
 Display a live stream of container(s) resource usage statistics
 
-Options:
-  -a, --all             Show all containers (default shows just running)
-      --format string   Pretty-print images using a Go template
-      --help            Print usage
-      --no-stream       Disable streaming stats and only pull the first result
-      --no-trunc        Don't truncate output
-```
+### Aliases
+
+`docker container stats`, `docker stats`
+
+### Options
+
+| Name                  | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:----------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `-a`, `--all`         |          |         | Show all containers (default shows just running)                                                                                                                                                                                                                                                                                                                                                                                     |
+| [`--format`](#format) | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `--no-stream`         |          |         | Disable streaming stats and only pull the first result                                                                                                                                                                                                                                                                                                                                                                               |
+| `--no-trunc`          |          |         | Do not truncate output                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -71,8 +71,8 @@ following columns are shown.
 | `CONTAINER ID` and `Name` | the ID and name of the container                                                              |
 | `CPU %` and `MEM %`       | the percentage of the host's CPU and memory the container is using                            |
 | `MEM USAGE / LIMIT`       | the total memory the container is using, and the total amount of memory it is allowed to use  |
-| `NET I/O`                 | The amount of data the container has sent and received over its network interface             |
-| `BLOCK I/O`               | The amount of data the container has read to and written from block devices on the host       |
+| `NET I/O`                 | The amount of data the container has received and sent over its network interface             |
+| `BLOCK I/O`               | The amount of data the container has written to and read from block devices on the host       |
 | `PIDs`                    | the number of processes or threads the container has created                                  |
 
 Running `docker stats` on multiple containers by name and id against a Linux daemon.
@@ -95,16 +95,16 @@ $ docker stats nginx --no-stream --format "{{ json . }}"
 Running `docker stats` with customized format on all (Running and Stopped) containers.
 
 ```console
-$ docker stats --all --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}" fervent_panini 5acfcb1b4fd1 drunk_visvesvaraya big_heisenberg
+$ docker stats --all --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}" fervent_panini 5acfcb1b4fd1 humble_visvesvaraya big_heisenberg
 
 CONTAINER                CPU %               MEM USAGE / LIMIT
 fervent_panini           0.00%               56KiB / 15.57GiB
 5acfcb1b4fd1             0.07%               32.86MiB / 15.57GiB
-drunk_visvesvaraya       0.00%               0B / 0B
+humble_visvesvaraya      0.00%               0B / 0B
 big_heisenberg           0.00%               0B / 0B
 ```
 
-`drunk_visvesvaraya` and `big_heisenberg` are stopped containers in the above example.
+`humble_visvesvaraya` and `big_heisenberg` are stopped containers in the above example.
 
 Running `docker stats` on all running containers against a Windows daemon.
 

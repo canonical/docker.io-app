@@ -14,7 +14,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/cli/build"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/go-digest"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -237,7 +237,6 @@ func (s *DockerRegistrySuite) TestListImagesWithoutDigests(c *testing.T) {
 }
 
 func (s *DockerRegistrySuite) TestListImagesWithDigests(c *testing.T) {
-
 	// setup image1
 	digest1, err := setupImageWithTag(c, "tag1")
 	assert.NilError(c, err, "error setting up image")
@@ -330,7 +329,7 @@ func (s *DockerRegistrySuite) TestListDanglingImagesWithDigests(c *testing.T) {
 	assert.Assert(c, re1.MatchString(out), "expected %q: %s", re1.String(), out)
 	// setup image2
 	digest2, err := setupImageWithTag(c, "dangle2")
-	//error setting up image
+	// error setting up image
 	assert.NilError(c, err)
 	imageReference2 := fmt.Sprintf("%s@%s", repoName, digest2)
 	c.Logf("imageReference2 = %s", imageReference2)

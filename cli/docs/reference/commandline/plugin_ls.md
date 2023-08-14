@@ -1,26 +1,23 @@
----
-title: "plugin ls"
-description: "The plugin ls command description and usage"
-keywords: "plugin, list"
----
-
 # plugin ls
 
-```markdown
-Usage:  docker plugin ls [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List plugins
 
-Aliases:
-  ls, list
+### Aliases
 
-Options:
-  -f, --filter filter   Provide filter values (e.g. 'enabled=true')
-      --format string   Pretty-print plugins using a Go template
-      --help            Print usage
-      --no-trunc        Don't truncate output
-  -q, --quiet           Only display plugin IDs
-```
+`docker plugin ls`, `docker plugin list`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Provide filter values (e.g. `enabled=true`)                                                                                                                                                                                                                                                                                                                                                                                          |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `--no-trunc`                           |          |         | Don't truncate output                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `-q`, `--quiet`                        |          |         | Only display plugin IDs                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -94,6 +91,12 @@ The following example uses a template without headers and outputs the
 $ docker plugin ls --format "{{.ID}}: {{.Name}}"
 
 4be01827a72e: vieux/sshfs:latest
+```
+
+To list all plugins in JSON format, use the `json` directive:
+```console
+$ docker plugin ls --format json
+{"Description":"sshFS plugin for Docker","Enabled":false,"ID":"856d89febb1c","Name":"vieux/sshfs:latest","PluginReference":"docker.io/vieux/sshfs:latest"}
 ```
 
 ## Related commands

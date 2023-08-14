@@ -1,20 +1,20 @@
----
-title: "save"
-description: "The save command description and usage"
-keywords: "tarred, repository, backup"
----
-
 # save
 
-```markdown
-Usage:  docker save [OPTIONS] IMAGE [IMAGE...]
-
+<!---MARKER_GEN_START-->
 Save one or more images to a tar archive (streamed to STDOUT by default)
 
-Options:
-      --help            Print usage
-  -o, --output string   Write to a file, instead of STDOUT
-```
+### Aliases
+
+`docker image save`, `docker save`
+
+### Options
+
+| Name             | Type     | Default | Description                        |
+|:-----------------|:---------|:--------|:-----------------------------------|
+| `-o`, `--output` | `string` |         | Write to a file, instead of STDOUT |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 

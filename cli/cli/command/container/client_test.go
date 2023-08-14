@@ -20,14 +20,14 @@ type fakeClient struct {
 		hostConfig *container.HostConfig,
 		networkingConfig *network.NetworkingConfig,
 		platform *specs.Platform,
-		containerName string) (container.ContainerCreateCreatedBody, error)
+		containerName string) (container.CreateResponse, error)
 	containerStartFunc      func(container string, options types.ContainerStartOptions) error
 	imageCreateFunc         func(parentReference string, options types.ImageCreateOptions) (io.ReadCloser, error)
 	infoFunc                func() (types.Info, error)
 	containerStatPathFunc   func(container, path string) (types.ContainerPathStat, error)
 	containerCopyFromFunc   func(container, srcPath string) (io.ReadCloser, types.ContainerPathStat, error)
 	logFunc                 func(string, types.ContainerLogsOptions) (io.ReadCloser, error)
-	waitFunc                func(string) (<-chan container.ContainerWaitOKBody, <-chan error)
+	waitFunc                func(string) (<-chan container.WaitResponse, <-chan error)
 	containerListFunc       func(types.ContainerListOptions) ([]types.Container, error)
 	containerExportFunc     func(string) (io.ReadCloser, error)
 	containerExecResizeFunc func(id string, options types.ResizeOptions) error
@@ -64,7 +64,7 @@ func (f *fakeClient) ContainerExecInspect(_ context.Context, execID string) (typ
 	return types.ContainerExecInspect{}, nil
 }
 
-func (f *fakeClient) ContainerExecStart(ctx context.Context, execID string, config types.ExecStartCheck) error {
+func (f *fakeClient) ContainerExecStart(context.Context, string, types.ExecStartCheck) error {
 	return nil
 }
 
@@ -75,11 +75,11 @@ func (f *fakeClient) ContainerCreate(
 	networkingConfig *network.NetworkingConfig,
 	platform *specs.Platform,
 	containerName string,
-) (container.ContainerCreateCreatedBody, error) {
+) (container.CreateResponse, error) {
 	if f.createContainerFunc != nil {
 		return f.createContainerFunc(config, hostConfig, networkingConfig, platform, containerName)
 	}
-	return container.ContainerCreateCreatedBody{}, nil
+	return container.CreateResponse{}, nil
 }
 
 func (f *fakeClient) ContainerRemove(ctx context.Context, container string, options types.ContainerRemoveOptions) error {
@@ -89,7 +89,7 @@ func (f *fakeClient) ContainerRemove(ctx context.Context, container string, opti
 	return nil
 }
 
-func (f *fakeClient) ImageCreate(ctx context.Context, parentReference string, options types.ImageCreateOptions) (io.ReadCloser, error) {
+func (f *fakeClient) ImageCreate(_ context.Context, parentReference string, options types.ImageCreateOptions) (io.ReadCloser, error) {
 	if f.imageCreateFunc != nil {
 		return f.imageCreateFunc(parentReference, options)
 	}
@@ -128,7 +128,7 @@ func (f *fakeClient) ClientVersion() string {
 	return f.Version
 }
 
-func (f *fakeClient) ContainerWait(_ context.Context, container string, _ container.WaitCondition) (<-chan container.ContainerWaitOKBody, <-chan error) {
+func (f *fakeClient) ContainerWait(_ context.Context, container string, _ container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
 	if f.waitFunc != nil {
 		return f.waitFunc(container)
 	}

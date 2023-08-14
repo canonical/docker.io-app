@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/containerd/containerd/plugin"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/versions"
@@ -27,17 +27,6 @@ func DaemonIsWindows() bool {
 	return testEnv.OSType == "windows"
 }
 
-func DaemonIsWindowsAtLeastBuild(buildNumber int) func() bool {
-	return func() bool {
-		if testEnv.OSType != "windows" {
-			return false
-		}
-		version := testEnv.DaemonInfo.KernelVersion
-		numVersion, _ := strconv.Atoi(strings.Split(version, " ")[1])
-		return numVersion >= buildNumber
-	}
-}
-
 func DaemonIsLinux() bool {
 	return testEnv.OSType == "linux"
 }
@@ -49,11 +38,11 @@ func MinimumAPIVersion(version string) func() bool {
 }
 
 func OnlyDefaultNetworks() bool {
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return false
 	}
-	networks, err := cli.NetworkList(context.TODO(), types.NetworkListOptions{})
+	networks, err := apiClient.NetworkList(context.TODO(), types.NetworkListOptions{})
 	if err != nil || len(networks) > 0 {
 		return false
 	}
@@ -80,16 +69,20 @@ func UnixCli() bool {
 	return isUnixCli
 }
 
+func GitHubActions() bool {
+	return os.Getenv("GITHUB_ACTIONS") != ""
+}
+
 func Network() bool {
 	// Set a timeout on the GET at 15s
 	const timeout = 15 * time.Second
 	const url = "https://hub.docker.com"
 
-	client := http.Client{
+	c := http.Client{
 		Timeout: timeout,
 	}
 
-	resp, err := client.Get(url)
+	resp, err := c.Get(url)
 	if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
 		panic(fmt.Sprintf("Timeout for GET request on %s", url))
 	}
@@ -109,6 +102,17 @@ func Apparmor() bool {
 
 func Devicemapper() bool {
 	return strings.HasPrefix(testEnv.DaemonInfo.Driver, "devicemapper")
+}
+
+// containerdSnapshotterEnabled checks if the daemon in the test-environment is
+// configured with containerd-snapshotters enabled.
+func containerdSnapshotterEnabled() bool {
+	for _, v := range testEnv.DaemonInfo.DriverStatus {
+		if v[0] == "driver-type" {
+			return v[1] == string(plugin.SnapshotPlugin)
+		}
+	}
+	return false
 }
 
 func IPv6() bool {
@@ -154,21 +158,9 @@ func UserNamespaceInKernel() bool {
 
 func IsPausable() bool {
 	if testEnv.OSType == "windows" {
-		return testEnv.DaemonInfo.Isolation == "hyperv"
+		return testEnv.DaemonInfo.Isolation.IsHyperV()
 	}
 	return true
-}
-
-func IsolationIs(expectedIsolation string) bool {
-	return testEnv.OSType == "windows" && string(testEnv.DaemonInfo.Isolation) == expectedIsolation
-}
-
-func IsolationIsHyperv() bool {
-	return IsolationIs("hyperv")
-}
-
-func IsolationIsProcess() bool {
-	return IsolationIs("process")
 }
 
 // RegistryHosting returns whether the host can host a registry (v2) or not
@@ -178,6 +170,10 @@ func RegistryHosting() bool {
 	// registry binary is in PATH.
 	_, err := exec.LookPath(registry.V2binary)
 	return err == nil
+}
+
+func RuntimeIsWindowsContainerd() bool {
+	return os.Getenv("DOCKER_WINDOWS_CONTAINERD_RUNTIME") == "1"
 }
 
 func SwarmInactive() bool {

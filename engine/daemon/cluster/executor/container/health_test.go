@@ -12,11 +12,10 @@ import (
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/daemon/events"
-	"github.com/docker/swarmkit/api"
+	"github.com/moby/swarmkit/v2/api"
 )
 
 func TestHealthStates(t *testing.T) {
-
 	// set up environment: events, task, container ....
 	e := events.New()
 	_, l, _ := e.Subscribe()

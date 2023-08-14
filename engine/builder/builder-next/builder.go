@@ -14,14 +14,18 @@ import (
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	timetypes "github.com/docker/docker/api/types/time"
 	"github.com/docker/docker/builder"
+	"github.com/docker/docker/builder/builder-next/exporter"
+	"github.com/docker/docker/builder/builder-next/exporter/mobyexporter"
+	"github.com/docker/docker/builder/builder-next/exporter/overrides"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/images"
+	"github.com/docker/docker/libnetwork"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/pkg/system"
-	"github.com/docker/libnetwork"
+	"github.com/docker/go-units"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/control"
@@ -51,6 +55,12 @@ func (e errConflictFilter) Error() string {
 
 func (errConflictFilter) InvalidParameter() {}
 
+type errInvalidFilterValue struct {
+	error
+}
+
+func (errInvalidFilterValue) InvalidParameter() {}
+
 var cacheFields = map[string]bool{
 	"id":          true,
 	"parent":      true,
@@ -68,15 +78,21 @@ var cacheFields = map[string]bool{
 type Opt struct {
 	SessionManager      *session.Manager
 	Root                string
+	EngineID            string
 	Dist                images.DistributionServices
-	NetworkController   libnetwork.NetworkController
+	ImageTagger         mobyexporter.ImageTagger
+	NetworkController   *libnetwork.Controller
 	DefaultCgroupParent string
 	RegistryHosts       docker.RegistryHosts
 	BuilderConfig       config.BuilderConfig
 	Rootless            bool
-	IdentityMapping     *idtools.IdentityMapping
+	IdentityMapping     idtools.IdentityMapping
 	DNSConfig           config.DNSConfig
 	ApparmorProfile     string
+	UseSnapshotter      bool
+	Snapshotter         string
+	ContainerdAddress   string
+	ContainerdNamespace string
 }
 
 // Builder can build using BuildKit backend
@@ -85,19 +101,16 @@ type Builder struct {
 	dnsconfig      config.DNSConfig
 	reqBodyHandler *reqBodyHandler
 
-	mu   sync.Mutex
-	jobs map[string]*buildJob
+	mu             sync.Mutex
+	jobs           map[string]*buildJob
+	useSnapshotter bool
 }
 
 // New creates a new builder
-func New(opt Opt) (*Builder, error) {
+func New(ctx context.Context, opt Opt) (*Builder, error) {
 	reqHandler := newReqBodyHandler(tracing.DefaultTransport)
 
-	if opt.IdentityMapping != nil && opt.IdentityMapping.Empty() {
-		opt.IdentityMapping = nil
-	}
-
-	c, err := newController(reqHandler, opt)
+	c, err := newController(ctx, reqHandler, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +119,7 @@ func New(opt Opt) (*Builder, error) {
 		dnsconfig:      opt.DNSConfig,
 		reqBodyHandler: reqHandler,
 		jobs:           map[string]*buildJob{},
+		useSnapshotter: opt.UseSnapshotter,
 	}
 	return b, nil
 }
@@ -136,7 +150,8 @@ func (b *Builder) DiskUsage(ctx context.Context) ([]*types.BuildCache, error) {
 	for _, r := range duResp.Record {
 		items = append(items, &types.BuildCache{
 			ID:          r.ID,
-			Parent:      r.Parent,
+			Parent:      r.Parent, //nolint:staticcheck // ignore SA1019 (Parent field is deprecated)
+			Parents:     r.Parents,
 			Type:        r.RecordType,
 			Description: r.Description,
 			InUse:       r.InUse,
@@ -205,8 +220,11 @@ func (b *Builder) Prune(ctx context.Context, opts types.BuildCachePruneOptions) 
 
 // Build executes a build request
 func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.Result, error) {
-	var rc = opt.Source
+	if len(opt.Options.Outputs) > 1 {
+		return nil, errors.Errorf("multiple outputs not supported")
+	}
 
+	var rc = opt.Source
 	if buildID := opt.Options.BuildID; buildID != "" {
 		b.mu.Lock()
 
@@ -302,11 +320,8 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 	if opt.Options.Platform != "" {
 		// same as in newBuilder in builder/dockerfile.builder.go
 		// TODO: remove once opt.Options.Platform is of type specs.Platform
-		sp, err := platforms.Parse(opt.Options.Platform)
+		_, err := platforms.Parse(opt.Options.Platform)
 		if err != nil {
-			return nil, err
-		}
-		if err := system.ValidatePlatform(sp); err != nil {
 			return nil, err
 		}
 		frontendAttrs["platform"] = opt.Options.Platform
@@ -326,13 +341,21 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 	}
 	frontendAttrs["add-hosts"] = extraHosts
 
+	if opt.Options.ShmSize > 0 {
+		frontendAttrs["shm-size"] = strconv.FormatInt(opt.Options.ShmSize, 10)
+	}
+
+	ulimits, err := toBuildkitUlimits(opt.Options.Ulimits)
+	if err != nil {
+		return nil, err
+	} else if len(ulimits) > 0 {
+		frontendAttrs["ulimit"] = ulimits
+	}
+
 	exporterName := ""
 	exporterAttrs := map[string]string{}
-
-	if len(opt.Options.Outputs) > 1 {
-		return nil, errors.Errorf("multiple outputs not supported")
-	} else if len(opt.Options.Outputs) == 0 {
-		exporterName = "moby"
+	if len(opt.Options.Outputs) == 0 {
+		exporterName = exporter.Moby
 	} else {
 		// cacheonly is a special type for triggering skipping all exporters
 		if opt.Options.Outputs[0].Type != "cacheonly" {
@@ -341,14 +364,18 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 		}
 	}
 
-	if exporterName == "moby" {
-		if len(opt.Options.Tags) > 0 {
-			exporterAttrs["name"] = strings.Join(opt.Options.Tags, ",")
+	if (exporterName == client.ExporterImage || exporterName == exporter.Moby) && len(opt.Options.Tags) > 0 {
+		nameAttr, err := overrides.SanitizeRepoAndTags(opt.Options.Tags)
+		if err != nil {
+			return nil, err
 		}
+		if exporterAttrs == nil {
+			exporterAttrs = make(map[string]string)
+		}
+		exporterAttrs["name"] = strings.Join(nameAttr, ",")
 	}
 
 	cache := controlapi.CacheOptions{}
-
 	if inlineCache := opt.Options.BuildArgs["BUILDKIT_INLINE_CACHE"]; inlineCache != nil {
 		if b, err := strconv.ParseBool(*inlineCache); err == nil && b {
 			cache.Exports = append(cache.Exports, &controlapi.CacheOptionsEntry{
@@ -380,7 +407,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 		if err != nil {
 			return err
 		}
-		if exporterName != "moby" {
+		if exporterName != exporter.Moby && exporterName != client.ExporterImage {
 			return nil
 		}
 		id, ok := resp.ExporterResponse["containerimage.digest"]
@@ -575,6 +602,18 @@ func toBuildkitExtraHosts(inp []string, hostGatewayIP net.IP) (string, error) {
 	return strings.Join(hosts, ","), nil
 }
 
+// toBuildkitUlimits converts ulimits from docker type=soft:hard format to buildkit's csv format
+func toBuildkitUlimits(inp []*units.Ulimit) (string, error) {
+	if len(inp) == 0 {
+		return "", nil
+	}
+	ulimits := make([]string, 0, len(inp))
+	for _, ulimit := range inp {
+		ulimits = append(ulimits, ulimit.String())
+	}
+	return strings.Join(ulimits, ","), nil
+}
+
 func toBuildkitPruneInfo(opts types.BuildCachePruneOptions) (client.PruneInfo, error) {
 	var until time.Duration
 	untilValues := opts.Filters.Get("until")          // canonical
@@ -593,11 +632,20 @@ func toBuildkitPruneInfo(opts types.BuildCachePruneOptions) (client.PruneInfo, e
 	case 0:
 		// nothing to do
 	case 1:
-		var err error
-		until, err = time.ParseDuration(untilValues[0])
+		ts, err := timetypes.GetTimestamp(untilValues[0], time.Now())
 		if err != nil {
-			return client.PruneInfo{}, errors.Wrapf(err, "%q filter expects a duration (e.g., '24h')", filterKey)
+			return client.PruneInfo{}, errInvalidFilterValue{
+				errors.Wrapf(err, "%q filter expects a duration (e.g., '24h') or a timestamp", filterKey),
+			}
 		}
+		seconds, nanoseconds, err := timetypes.ParseTimestamps(ts, 0)
+		if err != nil {
+			return client.PruneInfo{}, errInvalidFilterValue{
+				errors.Wrapf(err, "failed to parse timestamp %q", ts),
+			}
+		}
+
+		until = time.Since(time.Unix(seconds, nanoseconds))
 	default:
 		return client.PruneInfo{}, errMultipleFilterValues{}
 	}

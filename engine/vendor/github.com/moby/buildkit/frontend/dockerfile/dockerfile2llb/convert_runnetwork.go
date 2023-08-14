@@ -1,6 +1,3 @@
-//go:build dfrunnetwork
-// +build dfrunnetwork
-
 package dockerfile2llb
 
 import (
