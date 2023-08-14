@@ -1,21 +1,16 @@
----
-title: "trust sign"
-description: "The sign command description and usage"
-keywords: "sign, notary, trust"
----
-
 # trust sign
 
-```markdown
-Usage:  docker trust sign [OPTIONS] IMAGE:TAG
-
+<!---MARKER_GEN_START-->
 Sign an image
 
-Options:
-      --help    print usage
-      --local   force the signing of a local image
+### Options
 
-```
+| Name      | Type | Default | Description                 |
+|:----------|:-----|:--------|:----------------------------|
+| `--local` |      |         | Sign a locally tagged image |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -137,7 +132,7 @@ When signing an image on a repo for the first time, `docker trust sign` sets up 
 ```console
 $ docker trust inspect --pretty example/trust-demo
 
-No signatures or cannot access example/trust-demo
+no signatures or cannot access example/trust-demo
 ```
 
 ```console

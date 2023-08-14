@@ -1,20 +1,16 @@
----
-title: "signer add"
-description: "The signer add command description and usage"
-keywords: "signer, notary, trust"
----
-
 # trust signer add
 
-```markdown
-Usage:  docker trust signer add [OPTIONS] NAME REPOSITORY [REPOSITORY...]
-
+<!---MARKER_GEN_START-->
 Add a signer
 
-Options:
-      --help       Print usage
-  -k, --key list   Path to the signer's public key file
-```
+### Options
+
+| Name    | Type   | Default | Description                          |
+|:--------|:-------|:--------|:-------------------------------------|
+| `--key` | `list` |         | Path to the signer's public key file |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -77,7 +73,7 @@ When adding a signer on a repo for the first time, `docker trust signer add` set
 ```console
 $ docker trust inspect --pretty example/trust-demo
 
-No signatures or cannot access example/trust-demo
+no signatures or cannot access example/trust-demo
 ```
 
 ```console
@@ -209,5 +205,5 @@ Adding signer "alice" to example/authorized...
 Enter passphrase for repository key with ID c6772a0:
 Successfully added signer: alice to example/authorized
 
-Failed to add signer to: example/unauthorized
+failed to add signer to: example/unauthorized
 ```

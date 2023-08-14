@@ -5,23 +5,22 @@ import (
 	"fmt"
 	"io"
 	nethttp "net/http"
-	"runtime"
-	"strings"
 	"time"
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/rootfs"
 	"github.com/docker/docker/builder/builder-next/adapters/containerimage"
-	"github.com/docker/docker/distribution"
+	mobyexporter "github.com/docker/docker/builder/builder-next/exporter"
 	distmetadata "github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	pkgprogress "github.com/docker/docker/pkg/progress"
 	"github.com/moby/buildkit/cache"
-	"github.com/moby/buildkit/cache/metadata"
+	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/executor"
@@ -40,15 +39,19 @@ import (
 	"github.com/moby/buildkit/source/http"
 	"github.com/moby/buildkit/source/local"
 	"github.com/moby/buildkit/util/archutil"
-	"github.com/moby/buildkit/util/compression"
 	"github.com/moby/buildkit/util/contentutil"
 	"github.com/moby/buildkit/util/progress"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/moby/buildkit/version"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	bolt "go.etcd.io/bbolt"
+	"golang.org/x/sync/semaphore"
 )
+
+func init() {
+	version.Version = "v0.11.6+0a15675913b7"
+}
 
 const labelCreatedAt = "buildkit/createdat"
 
@@ -63,13 +66,13 @@ type Opt struct {
 	ID                string
 	Labels            map[string]string
 	GCPolicy          []client.PruneInfo
-	MetadataStore     *metadata.Store
 	Executor          executor.Executor
 	Snapshotter       snapshot.Snapshotter
 	ContentStore      content.Store
 	CacheManager      cache.Manager
+	LeaseManager      leases.Manager
 	ImageSource       *containerimage.Source
-	DownloadManager   distribution.RootFSDownloadManager
+	DownloadManager   *xfer.LayerDownloadManager
 	V2MetadataService distmetadata.V2MetadataService
 	Transport         nethttp.RoundTripper
 	Exporter          exporter.Exporter
@@ -84,6 +87,10 @@ type Worker struct {
 	SourceManager *source.Manager
 }
 
+var _ interface {
+	GetRemotes(context.Context, cache.ImmutableRef, bool, cacheconfig.RefConfig, bool, session.Group) ([]*solver.Remote, error)
+} = &Worker{}
+
 // NewWorker instantiates a local worker
 func NewWorker(opt Opt) (*Worker, error) {
 	sm, err := source.NewManager()
@@ -96,7 +103,6 @@ func NewWorker(opt Opt) (*Worker, error) {
 
 	gs, err := git.NewSource(git.Opt{
 		CacheAccessor: cm,
-		MetadataStore: opt.MetadataStore,
 	})
 	if err == nil {
 		sm.Register(gs)
@@ -106,7 +112,6 @@ func NewWorker(opt Opt) (*Worker, error) {
 
 	hs, err := http.NewSource(http.Opt{
 		CacheAccessor: cm,
-		MetadataStore: opt.MetadataStore,
 		Transport:     opt.Transport,
 	})
 	if err == nil {
@@ -117,7 +122,6 @@ func NewWorker(opt Opt) (*Worker, error) {
 
 	ss, err := local.NewSource(local.Opt{
 		CacheAccessor: cm,
-		MetadataStore: opt.MetadataStore,
 	})
 	if err == nil {
 		sm.Register(ss)
@@ -149,9 +153,8 @@ func (w *Worker) Platforms(noCache bool) []ocispec.Platform {
 			pm[platforms.Format(p)] = struct{}{}
 		}
 		for _, p := range archutil.SupportedPlatforms(noCache) {
-			if _, ok := pm[p]; !ok {
-				pp, _ := platforms.Parse(p)
-				w.Opt.Platforms = append(w.Opt.Platforms, pp)
+			if _, ok := pm[platforms.Format(p)]; !ok {
+				w.Opt.Platforms = append(w.Opt.Platforms, p)
 			}
 		}
 	}
@@ -166,14 +169,28 @@ func (w *Worker) GCPolicy() []client.PruneInfo {
 	return w.Opt.GCPolicy
 }
 
+// BuildkitVersion returns BuildKit version
+func (w *Worker) BuildkitVersion() client.BuildkitVersion {
+	return client.BuildkitVersion{
+		Package:  version.Package,
+		Version:  version.Version + "-moby",
+		Revision: version.Revision,
+	}
+}
+
+// Close closes the worker and releases all resources
+func (w *Worker) Close() error {
+	return nil
+}
+
 // ContentStore returns content store
 func (w *Worker) ContentStore() content.Store {
 	return w.Opt.ContentStore
 }
 
-// MetadataStore returns the metadata store
-func (w *Worker) MetadataStore() *metadata.Store {
-	return w.Opt.MetadataStore
+// LeaseManager returns leases.Manager for the worker
+func (w *Worker) LeaseManager() leases.Manager {
+	return w.Opt.LeaseManager
 }
 
 // LoadRef loads a reference by ID
@@ -182,21 +199,33 @@ func (w *Worker) LoadRef(ctx context.Context, id string, hidden bool) (cache.Imm
 	if hidden {
 		opts = append(opts, cache.NoUpdateLastUsed)
 	}
-	return w.CacheManager().Get(ctx, id, opts...)
+	if id == "" {
+		// results can have nil refs if they are optimized out to be equal to scratch,
+		// i.e. Diff(A,A) == scratch
+		return nil, nil
+	}
+
+	return w.CacheManager().Get(ctx, id, nil, opts...)
 }
 
 // ResolveOp converts a LLB vertex into a LLB operation
 func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *session.Manager) (solver.Op, error) {
 	if baseOp, ok := v.Sys().(*pb.Op); ok {
+		// TODO do we need to pass a value here? Where should it come from? https://github.com/moby/buildkit/commit/b3cf7c43cfefdfd7a945002c0e76b54e346ab6cf
+		var parallelism *semaphore.Weighted
 		switch op := baseOp.Op.(type) {
 		case *pb.Op_Source:
-			return ops.NewSourceOp(v, op, baseOp.Platform, w.SourceManager, sm, w)
+			return ops.NewSourceOp(v, op, baseOp.Platform, w.SourceManager, parallelism, sm, w)
 		case *pb.Op_Exec:
-			return ops.NewExecOp(v, op, baseOp.Platform, w.CacheManager(), sm, w.Opt.MetadataStore, w.Executor(), w)
+			return ops.NewExecOp(v, op, baseOp.Platform, w.CacheManager(), parallelism, sm, w.Executor(), w)
 		case *pb.Op_File:
-			return ops.NewFileOp(v, op, w.CacheManager(), w.Opt.MetadataStore, w)
+			return ops.NewFileOp(v, op, w.CacheManager(), parallelism, w)
 		case *pb.Op_Build:
 			return ops.NewBuildOp(v, op, s, w)
+		case *pb.Op_Merge:
+			return ops.NewMergeOp(v, op, w)
+		case *pb.Op_Diff:
+			return ops.NewDiffOp(v, op, w)
 		}
 	}
 	return nil, errors.Errorf("could not resolve %v", v)
@@ -220,7 +249,7 @@ func (w *Worker) Prune(ctx context.Context, ch chan client.UsageInfo, info ...cl
 // Exporter returns exporter by name
 func (w *Worker) Exporter(name string, sm *session.Manager) (exporter.Exporter, error) {
 	switch name {
-	case "moby":
+	case mobyexporter.Moby:
 		return w.Opt.Exporter, nil
 	case client.ExporterLocal:
 		return localexporter.New(localexporter.Opt{
@@ -235,8 +264,11 @@ func (w *Worker) Exporter(name string, sm *session.Manager) (exporter.Exporter, 
 	}
 }
 
-// GetRemote returns a remote snapshot reference for a local one
-func (w *Worker) GetRemote(ctx context.Context, ref cache.ImmutableRef, createIfNeeded bool, _ compression.Type, _ session.Group) (*solver.Remote, error) {
+// GetRemotes returns the remote snapshot references given a local reference
+func (w *Worker) GetRemotes(ctx context.Context, ref cache.ImmutableRef, createIfNeeded bool, _ cacheconfig.RefConfig, all bool, s session.Group) ([]*solver.Remote, error) {
+	if ref == nil {
+		return nil, nil
+	}
 	var diffIDs []layer.DiffID
 	var err error
 	if !createIfNeeded {
@@ -245,7 +277,10 @@ func (w *Worker) GetRemote(ctx context.Context, ref cache.ImmutableRef, createIf
 			return nil, err
 		}
 	} else {
-		if err := ref.Finalize(ctx, true); err != nil {
+		if err := ref.Finalize(ctx); err != nil {
+			return nil, err
+		}
+		if err := ref.Extract(ctx, s); err != nil {
 			return nil, err
 		}
 		diffIDs, err = w.Layers.EnsureLayer(ctx, ref.ID())
@@ -263,10 +298,10 @@ func (w *Worker) GetRemote(ctx context.Context, ref cache.ImmutableRef, createIf
 		}
 	}
 
-	return &solver.Remote{
+	return []*solver.Remote{{
 		Descriptors: descriptors,
 		Provider:    &emptyProvider{},
-	}, nil
+	}}, nil
 }
 
 // PruneCacheMounts removes the current cache snapshots for specified IDs
@@ -276,32 +311,20 @@ func (w *Worker) PruneCacheMounts(ctx context.Context, ids []string) error {
 	defer mu.Unlock()
 
 	for _, id := range ids {
-		id = "cache-dir:" + id
-		sis, err := w.Opt.MetadataStore.Search(id)
+		mds, err := mounts.SearchCacheDir(ctx, w.CacheManager(), id)
 		if err != nil {
 			return err
 		}
-		for _, si := range sis {
-			for _, k := range si.Indexes() {
-				if k == id || strings.HasPrefix(k, id+":") {
-					if siCached := w.CacheManager().Metadata(si.ID()); siCached != nil {
-						si = siCached
-					}
-					if err := cache.CachePolicyDefault(si); err != nil {
-						return err
-					}
-					si.Queue(func(b *bolt.Bucket) error {
-						return si.SetValue(b, k, nil)
-					})
-					if err := si.Commit(); err != nil {
-						return err
-					}
-					// if ref is unused try to clean it up right away by releasing it
-					if mref, err := w.CacheManager().GetMutable(ctx, si.ID()); err == nil {
-						go mref.Release(context.TODO())
-					}
-					break
-				}
+		for _, md := range mds {
+			if err := md.SetCachePolicyDefault(); err != nil {
+				return err
+			}
+			if err := md.ClearCacheDirIndex(); err != nil {
+				return err
+			}
+			// if ref is unused try to clean it up right away by releasing it
+			if mref, err := w.CacheManager().GetMutable(ctx, md.ID()); err == nil {
+				go mref.Release(context.TODO())
 			}
 		}
 	}
@@ -354,7 +377,7 @@ func (w *Worker) FromRemote(ctx context.Context, remote *solver.Remote) (cache.I
 	}()
 
 	r := image.NewRootFS()
-	rootFS, release, err := w.DownloadManager.Download(ctx, *r, runtime.GOOS, layers, &discardProgress{})
+	rootFS, release, err := w.DownloadManager.Download(ctx, *r, layers, &discardProgress{})
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +454,7 @@ func (ld *layerDescriptor) Download(ctx context.Context, progressOutput pkgprogr
 
 	// TODO should this write output to progressOutput? Or use something similar to loggerFromContext()? see https://github.com/moby/buildkit/commit/aa29e7729464f3c2a773e27795e584023c751cb8
 	discardLogs := func(_ []byte) {}
-	if err := contentutil.Copy(ctx, ld.w.ContentStore(), ld.provider, ld.desc, discardLogs); err != nil {
+	if err := contentutil.Copy(ctx, ld.w.ContentStore(), ld.provider, ld.desc, "", discardLogs); err != nil {
 		return nil, 0, done(err)
 	}
 	_ = done(nil)
@@ -478,7 +501,7 @@ func getLayers(ctx context.Context, descs []ocispec.Descriptor) ([]rootfs.Layer,
 }
 
 func oneOffProgress(ctx context.Context, id string) func(err error) error {
-	pw, _, _ := progress.FromContext(ctx)
+	pw, _, _ := progress.NewFromContext(ctx)
 	now := time.Now()
 	st := progress.Status{
 		Started: &now,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/pkg/userns"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
 	"gotest.tools/v3/assert"
@@ -135,6 +136,13 @@ func TestDecompressStreamXz(t *testing.T) {
 	testDecompressStream(t, "xz", "xz -f")
 }
 
+func TestDecompressStreamZstd(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed")
+	}
+	testDecompressStream(t, "zst", "zstd -f")
+}
+
 func TestCompressStreamXzUnsupported(t *testing.T) {
 	dest, err := os.Create(tmp + "dest")
 	if err != nil {
@@ -208,6 +216,13 @@ func TestExtensionXz(t *testing.T) {
 	output := compression.Extension()
 	if output != "tar.xz" {
 		t.Fatalf("The extension of a xz archive should be 'tar.xz'")
+	}
+}
+func TestExtensionZstd(t *testing.T) {
+	compression := Zstd
+	output := compression.Extension()
+	if output != "tar.zst" {
+		t.Fatalf("The extension of a zstd archive should be 'tar.zst'")
 	}
 }
 
@@ -686,6 +701,34 @@ func tarUntar(t *testing.T, origin string, options *TarOptions) ([]Change, error
 	return ChangesDirs(origin, tmp)
 }
 
+func TestDetectCompressionZstd(t *testing.T) {
+	// test zstd compression without skippable frames.
+	compressedData := []byte{
+		0x28, 0xb5, 0x2f, 0xfd, // magic number of Zstandard frame: 0xFD2FB528
+		0x04, 0x00, 0x31, 0x00, 0x00, // frame header
+		0x64, 0x6f, 0x63, 0x6b, 0x65, 0x72, // data block "docker"
+		0x16, 0x0e, 0x21, 0xc3, // content checksum
+	}
+	compression := DetectCompression(compressedData)
+	if compression != Zstd {
+		t.Fatal("Unexpected compression")
+	}
+	// test zstd compression with skippable frames.
+	hex := []byte{
+		0x50, 0x2a, 0x4d, 0x18, // magic number of skippable frame: 0x184D2A50 to 0x184D2A5F
+		0x04, 0x00, 0x00, 0x00, // frame size
+		0x5d, 0x00, 0x00, 0x00, // user data
+		0x28, 0xb5, 0x2f, 0xfd, // magic number of Zstandard frame: 0xFD2FB528
+		0x04, 0x00, 0x31, 0x00, 0x00, // frame header
+		0x64, 0x6f, 0x63, 0x6b, 0x65, 0x72, // data block "docker"
+		0x16, 0x0e, 0x21, 0xc3, // content checksum
+	}
+	compression = DetectCompression(hex)
+	if compression != Zstd {
+		t.Fatal("Unexpected compression")
+	}
+}
+
 func TestTarUntar(t *testing.T) {
 	origin, err := os.MkdirTemp("", "docker-test-untar-origin")
 	if err != nil {
@@ -749,7 +792,7 @@ func TestTarWithOptionsChownOptsAlwaysOverridesIdPair(t *testing.T) {
 		expectedGID int
 	}{
 		{&TarOptions{ChownOpts: &idtools.Identity{UID: 1337, GID: 42}}, 1337, 42},
-		{&TarOptions{ChownOpts: &idtools.Identity{UID: 100001, GID: 100001}, UIDMaps: idMaps, GIDMaps: idMaps}, 100001, 100001},
+		{&TarOptions{ChownOpts: &idtools.Identity{UID: 100001, GID: 100001}, IDMap: idtools.IdentityMapping{UIDMaps: idMaps, GIDMaps: idMaps}}, 100001, 100001},
 		{&TarOptions{ChownOpts: &idtools.Identity{UID: 0, GID: 0}, NoLchown: false}, 0, 0},
 		{&TarOptions{ChownOpts: &idtools.Identity{UID: 1, GID: 1}, NoLchown: true}, 1, 1},
 		{&TarOptions{ChownOpts: &idtools.Identity{UID: 1000, GID: 1000}, NoLchown: true}, 1000, 1000},
@@ -1174,7 +1217,7 @@ func TestTempArchiveCloseMultipleTimes(t *testing.T) {
 	}
 }
 
-// TestXGlobalNoParent is a regression test to check parent directories are not crated for PAX headers
+// TestXGlobalNoParent is a regression test to check parent directories are not created for PAX headers
 func TestXGlobalNoParent(t *testing.T) {
 	buf := &bytes.Buffer{}
 	w := tar.NewWriter(buf)
@@ -1192,6 +1235,53 @@ func TestXGlobalNoParent(t *testing.T) {
 	_, err = os.Lstat(filepath.Join(tmpDir, "foo"))
 	assert.Check(t, err != nil)
 	assert.Check(t, errors.Is(err, os.ErrNotExist))
+}
+
+// TestImpliedDirectoryPermissions ensures that directories implied by paths in the tar file, but without their own
+// header entries are created recursively with the default mode (permissions) stored in ImpliedDirectoryMode. This test
+// also verifies that the permissions of explicit directories are respected.
+func TestImpliedDirectoryPermissions(t *testing.T) {
+	skip.If(t, runtime.GOOS == "windows", "skipping test that requires Unix permissions")
+
+	buf := &bytes.Buffer{}
+	headers := []tar.Header{{
+		Name: "deeply/nested/and/implied",
+	}, {
+		Name: "explicit/",
+		Mode: 0644,
+	}, {
+		Name: "explicit/permissions/",
+		Mode: 0600,
+	}, {
+		Name: "explicit/permissions/specified",
+		Mode: 0400,
+	}}
+
+	w := tar.NewWriter(buf)
+	for _, header := range headers {
+		err := w.WriteHeader(&header)
+		assert.NilError(t, err)
+	}
+
+	tmpDir := t.TempDir()
+
+	err := Untar(buf, tmpDir, nil)
+	assert.NilError(t, err)
+
+	assertMode := func(path string, expected uint32) {
+		t.Helper()
+		stat, err := os.Lstat(filepath.Join(tmpDir, path))
+		assert.Check(t, err)
+		assert.Check(t, is.Equal(stat.Mode().Perm(), fs.FileMode(expected)))
+	}
+
+	assertMode("deeply", ImpliedDirectoryMode)
+	assertMode("deeply/nested", ImpliedDirectoryMode)
+	assertMode("deeply/nested/and", ImpliedDirectoryMode)
+
+	assertMode("explicit", 0644)
+	assertMode("explicit/permissions", 0600)
+	assertMode("explicit/permissions/specified", 0400)
 }
 
 func TestReplaceFileTarWrapper(t *testing.T) {
@@ -1250,7 +1340,7 @@ func TestReplaceFileTarWrapper(t *testing.T) {
 // version of this package that was built with <=go17 are still readable.
 func TestPrefixHeaderReadable(t *testing.T) {
 	skip.If(t, runtime.GOOS != "windows" && os.Getuid() != 0, "skipping test that requires root")
-	skip.If(t, sys.RunningInUserNS(), "skipping test that requires more than 010000000 UIDs, which is unlikely to be satisfied when running in userns")
+	skip.If(t, userns.RunningInUserNS(), "skipping test that requires more than 010000000 UIDs, which is unlikely to be satisfied when running in userns")
 	// https://gist.github.com/stevvooe/e2a790ad4e97425896206c0816e1a882#file-out-go
 	var testFile = []byte("\x1f\x8b\x08\x08\x44\x21\x68\x59\x00\x03\x74\x2e\x74\x61\x72\x00\x4b\xcb\xcf\x67\xa0\x35\x30\x80\x00\x86\x06\x10\x47\x01\xc1\x37\x40\x00\x54\xb6\xb1\xa1\xa9\x99\x09\x48\x25\x1d\x40\x69\x71\x49\x62\x91\x02\xe5\x76\xa1\x79\x84\x21\x91\xd6\x80\x72\xaf\x8f\x82\x51\x30\x0a\x46\x36\x00\x00\xf0\x1c\x1e\x95\x00\x06\x00\x00")
 
@@ -1330,8 +1420,7 @@ func TestDisablePigz(t *testing.T) {
 		t.Log("Test will not check full path when Pigz not installed")
 	}
 
-	os.Setenv("MOBY_DISABLE_PIGZ", "true")
-	defer os.Unsetenv("MOBY_DISABLE_PIGZ")
+	t.Setenv("MOBY_DISABLE_PIGZ", "true")
 
 	r := testDecompressStream(t, "gz", "gzip -f")
 	// For the bufio pool
@@ -1359,4 +1448,13 @@ func TestPigz(t *testing.T) {
 		t.Log("Tested whether Pigz is not used, as it not installed")
 		assert.Equal(t, reflect.TypeOf(contextReaderCloserWrapper.Reader), reflect.TypeOf(&gzip.Reader{}))
 	}
+}
+
+func TestNosysFileInfo(t *testing.T) {
+	st, err := os.Stat("archive_test.go")
+	assert.NilError(t, err)
+	h, err := tar.FileInfoHeader(nosysFileInfo{st}, "")
+	assert.NilError(t, err)
+	assert.Check(t, h.Uname == "")
+	assert.Check(t, h.Gname == "")
 }

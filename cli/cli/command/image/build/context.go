@@ -15,12 +15,12 @@ import (
 
 	"github.com/docker/docker/builder/remotecontext/git"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/pools"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/patternmatcher"
 	"github.com/pkg/errors"
 	exec "golang.org/x/sys/execabs"
 )
@@ -41,7 +41,7 @@ func ValidateContextDirectory(srcPath string, excludes []string) error {
 		return err
 	}
 
-	pm, err := fileutils.NewPatternMatcher(excludes)
+	pm, err := patternmatcher.New(excludes)
 	if err != nil {
 		return err
 	}
@@ -86,13 +86,13 @@ func ValidateContextDirectory(srcPath string, excludes []string) error {
 	})
 }
 
-func filepathMatches(matcher *fileutils.PatternMatcher, file string) (bool, error) {
+func filepathMatches(matcher *patternmatcher.PatternMatcher, file string) (bool, error) {
 	file = filepath.Clean(file)
 	if file == "." {
 		// Don't let them exclude everything, kind of silly.
 		return false, nil
 	}
-	return matcher.Matches(file)
+	return matcher.MatchesOrParentMatches(file)
 }
 
 // DetectArchiveReader detects whether the input stream is an archive or a
@@ -377,26 +377,32 @@ func AddDockerfileToBuildContext(dockerfileCtx io.ReadCloser, buildCtx io.ReadCl
 		return nil, "", err
 	}
 	now := time.Now()
-	hdrTmpl := &tar.Header{
-		Mode:       0600,
-		Uid:        0,
-		Gid:        0,
-		ModTime:    now,
-		Typeflag:   tar.TypeReg,
-		AccessTime: now,
-		ChangeTime: now,
-	}
 	randomName := ".dockerfile." + stringid.GenerateRandomID()[:20]
 
 	buildCtx = archive.ReplaceFileTarWrapper(buildCtx, map[string]archive.TarModifierFunc{
 		// Add the dockerfile with a random filename
-		randomName: func(_ string, h *tar.Header, content io.Reader) (*tar.Header, []byte, error) {
-			return hdrTmpl, file, nil
+		randomName: func(_ string, _ *tar.Header, _ io.Reader) (*tar.Header, []byte, error) {
+			header := &tar.Header{
+				Name:       randomName,
+				Mode:       0o600,
+				ModTime:    now,
+				Typeflag:   tar.TypeReg,
+				AccessTime: now,
+				ChangeTime: now,
+			}
+			return header, file, nil
 		},
 		// Update .dockerignore to include the random filename
 		".dockerignore": func(_ string, h *tar.Header, content io.Reader) (*tar.Header, []byte, error) {
 			if h == nil {
-				h = hdrTmpl
+				h = &tar.Header{
+					Name:       ".dockerignore",
+					Mode:       0o600,
+					ModTime:    now,
+					Typeflag:   tar.TypeReg,
+					AccessTime: now,
+					ChangeTime: now,
+				}
 			}
 
 			b := &bytes.Buffer{}

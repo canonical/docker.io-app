@@ -3,7 +3,6 @@ package daemon // import "github.com/docker/docker/testutil/daemon"
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/opts"
+	"github.com/docker/docker/container"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/testutil/request"
@@ -42,6 +41,8 @@ const (
 	defaultDockerdBinary         = "dockerd"
 	defaultContainerdSocket      = "/var/run/docker/containerd/containerd.sock"
 	defaultDockerdRootlessBinary = "dockerd-rootless.sh"
+	defaultUnixSocket            = "/var/run/docker.sock"
+	defaultTLSHost               = "localhost:2376"
 )
 
 var errDaemonNotStarted = errors.New("daemon not started")
@@ -76,6 +77,7 @@ type Daemon struct {
 	log                        LogT
 	pidFile                    string
 	args                       []string
+	extraEnv                   []string
 	containerdSocket           string
 	rootlessUser               *user.User
 	rootlessXDGRuntimeDir      string
@@ -101,7 +103,7 @@ func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 		return nil, errors.Wrapf(err, "failed to create daemon socket root %q", SockRoot)
 	}
 
-	id := fmt.Sprintf("d%s", stringid.TruncateID(stringid.GenerateRandomID()))
+	id := "d" + stringid.TruncateID(stringid.GenerateRandomID())
 	dir := filepath.Join(workingDir, id)
 	daemonFolder, err := filepath.Abs(dir)
 	if err != nil {
@@ -216,6 +218,15 @@ func New(t testing.TB, ops ...Option) *Daemon {
 	return d
 }
 
+// BinaryPath returns the binary and its arguments.
+func (d *Daemon) BinaryPath() (string, error) {
+	dockerdBinary, err := exec.LookPath(d.dockerdBinary)
+	if err != nil {
+		return "", errors.Wrapf(err, "[%s] could not find docker binary in $PATH", d.id)
+	}
+	return dockerdBinary, nil
+}
+
 // ContainersNamespace returns the containerd namespace used for containers.
 func (d *Daemon) ContainersNamespace() string {
 	return d.id
@@ -238,7 +249,7 @@ func (d *Daemon) StorageDriver() string {
 
 // Sock returns the socket path of the daemon
 func (d *Daemon) Sock() string {
-	return fmt.Sprintf("unix://" + d.sockPath())
+	return "unix://" + d.sockPath()
 }
 
 func (d *Daemon) sockPath() string {
@@ -252,6 +263,7 @@ func (d *Daemon) LogFileName() string {
 
 // ReadLogFile returns the content of the daemon log file
 func (d *Daemon) ReadLogFile() ([]byte, error) {
+	_ = d.logFile.Sync()
 	return os.ReadFile(d.logFile.Name())
 }
 
@@ -307,9 +319,9 @@ func (d *Daemon) StartWithError(args ...string) error {
 // StartWithLogFile will start the daemon and attach its streams to a given file.
 func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 	d.handleUserns()
-	dockerdBinary, err := exec.LookPath(d.dockerdBinary)
+	dockerdBinary, err := d.BinaryPath()
 	if err != nil {
-		return errors.Wrapf(err, "[%s] could not find docker binary in $PATH", d.id)
+		return err
 	}
 
 	if d.pidFile == "" {
@@ -324,9 +336,10 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 		dockerdBinary = "sudo"
 		d.args = append(d.args,
 			"-u", d.rootlessUser.Username,
-			"-E", "XDG_RUNTIME_DIR="+d.rootlessXDGRuntimeDir,
-			"-E", "HOME="+d.rootlessUser.HomeDir,
-			"-E", "PATH="+os.Getenv("PATH"),
+			"--preserve-env",
+			"--preserve-env=PATH", // Pass through PATH, overriding secure_path.
+			"XDG_RUNTIME_DIR="+d.rootlessXDGRuntimeDir,
+			"HOME="+d.rootlessUser.HomeDir,
 			"--",
 			defaultDockerdRootlessBinary,
 		)
@@ -336,7 +349,7 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 		"--data-root", d.Root,
 		"--exec-root", d.execRoot,
 		"--pidfile", d.pidFile,
-		fmt.Sprintf("--userland-proxy=%t", d.userlandProxy),
+		"--userland-proxy="+strconv.FormatBool(d.userlandProxy),
 		"--containerd-namespace", d.id,
 		"--containerd-plugins-namespace", d.id+"p",
 	)
@@ -382,6 +395,7 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 	d.args = append(d.args, providedArgs...)
 	cmd := exec.Command(dockerdBinary, d.args...)
 	cmd.Env = append(os.Environ(), "DOCKER_SERVICE_PREFER_OFFLINE_IMAGE=1")
+	cmd.Env = append(cmd.Env, d.extraEnv...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	d.logFile = out
@@ -730,11 +744,11 @@ func (d *Daemon) getClientConfig() (*clientConfig, error) {
 		transport = &http.Transport{
 			TLSClientConfig: tlsConfig,
 		}
-		addr = fmt.Sprintf("%s:%d", opts.DefaultHTTPHost, opts.DefaultTLSHTTPPort)
+		addr = defaultTLSHost
 		scheme = "https"
 		proto = "tcp"
 	} else if d.UseDefaultHost {
-		addr = opts.DefaultUnixSocket
+		addr = defaultUnixSocket
 		proto = "unix"
 		scheme = "http"
 		transport = &http.Transport{}
@@ -810,6 +824,23 @@ func (d *Daemon) Info(t testing.TB) types.Info {
 	assert.NilError(t, err)
 	assert.NilError(t, c.Close())
 	return info
+}
+
+// TamperWithContainerConfig modifies the on-disk config of a container.
+func (d *Daemon) TamperWithContainerConfig(t testing.TB, containerID string, tamper func(*container.Container)) {
+	t.Helper()
+
+	configPath := filepath.Join(d.Root, "containers", containerID, "config.v2.json")
+	configBytes, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+
+	var c container.Container
+	assert.NilError(t, json.Unmarshal(configBytes, &c))
+	c.State = container.NewState()
+	tamper(&c)
+	configBytes, err = json.Marshal(&c)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(configPath, configBytes, 0600))
 }
 
 // cleanupRaftDir removes swarmkit wal files if present

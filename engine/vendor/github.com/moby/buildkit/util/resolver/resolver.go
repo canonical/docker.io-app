@@ -3,7 +3,6 @@ package resolver
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -13,7 +12,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/remotes/docker"
-	"github.com/moby/buildkit/cmd/buildkitd/config"
+	"github.com/moby/buildkit/util/resolver/config"
 	"github.com/moby/buildkit/util/tracing"
 	"github.com/pkg/errors"
 )
@@ -67,7 +66,7 @@ func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHos
 
 func loadTLSConfig(c config.RegistryConfig) (*tls.Config, error) {
 	for _, d := range c.TLSConfigDir {
-		fs, err := ioutil.ReadDir(d)
+		fs, err := os.ReadDir(d)
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
 			return nil, errors.WithStack(err)
 		}
@@ -98,7 +97,7 @@ func loadTLSConfig(c config.RegistryConfig) (*tls.Config, error) {
 	}
 
 	for _, p := range c.RootCAs {
-		dt, err := ioutil.ReadFile(p)
+		dt, err := os.ReadFile(p)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to read %s", p)
 		}
@@ -190,8 +189,9 @@ func newDefaultTransport() *http.Transport {
 			Timeout:   30 * time.Second,
 			KeepAlive: 60 * time.Second,
 		}).DialContext,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          30,
+		IdleConnTimeout:       120 * time.Second,
+		MaxIdleConnsPerHost:   4,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 5 * time.Second,
 		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),

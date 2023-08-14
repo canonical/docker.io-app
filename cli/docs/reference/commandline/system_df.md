@@ -1,21 +1,17 @@
----
-title: "system df"
-description: "The system df command description and usage"
-keywords: "system, data, usage, disk"
----
-
 # system df
 
-```markdown
-Usage:  docker system df [OPTIONS]
+<!---MARKER_GEN_START-->
+Show docker disk usage
 
-Show docker filesystem usage
+### Options
 
-Options:
-      --format string   Pretty-print images using a Go template
-      --help            Print usage
-  -v, --verbose         Show detailed information on space usage
-```
+| Name                  | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:----------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`--format`](#format) | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `-v`, `--verbose`     |          |         | Show detailed information on space usage                                                                                                                                                                                                                                                                                                                                                                                             |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -120,6 +116,16 @@ Images              2.547 GB            2.342 GB (91%)
 Containers          0 B                 0 B
 Local Volumes       150.3 MB            150.3 MB (100%)
 <Paste>
+```
+
+To list all information in JSON format, use the `json` directive:
+
+```console
+$ docker system df --format json
+{"Active":"2","Reclaimable":"2.498GB (94%)","Size":"2.631GB","TotalCount":"6","Type":"Images"}
+{"Active":"1","Reclaimable":"1.114kB (49%)","Size":"2.23kB","TotalCount":"7","Type":"Containers"}
+{"Active":"0","Reclaimable":"256.5MB (100%)","Size":"256.5MB","TotalCount":"1","Type":"Local Volumes"}
+{"Active":"0","Reclaimable":"158B","Size":"158B","TotalCount":"17","Type":"Build Cache"}
 ```
 
 The format option has no effect when the `--verbose` option is used.

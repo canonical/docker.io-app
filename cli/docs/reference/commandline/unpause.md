@@ -1,19 +1,14 @@
----
-title: "unpause"
-description: "The unpause command description and usage"
-keywords: "cgroups, suspend, container"
----
-
 # unpause
 
-```markdown
-Usage:  docker unpause CONTAINER [CONTAINER...]
-
+<!---MARKER_GEN_START-->
 Unpause all processes within one or more containers
 
-Options:
-      --help   Print usage
-```
+### Aliases
+
+`docker container unpause`, `docker unpause`
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 

@@ -49,11 +49,11 @@ func parseRun(args []string) (*container.Config, *container.HostConfig, *network
 		return nil, nil, nil, err
 	}
 	// TODO: fix tests to accept ContainerConfig
-	containerConfig, err := parse(flags, copts, runtime.GOOS)
+	containerCfg, err := parse(flags, copts, runtime.GOOS)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return containerConfig.Config, containerConfig.HostConfig, containerConfig.NetworkingConfig, err
+	return containerCfg.Config, containerCfg.HostConfig, containerCfg.NetworkingConfig, err
 }
 
 func setupRunFlags() (*pflag.FlagSet, *containerOptions) {
@@ -184,7 +184,6 @@ func TestParseRunWithInvalidArgs(t *testing.T) {
 
 //nolint:gocyclo
 func TestParseWithVolumes(t *testing.T) {
-
 	// A single volume
 	arr, tryit := setupPlatformVolume([]string{`/tmp`}, []string{`c:\tmp`})
 	if config, hostConfig := mustParse(t, tryit); hostConfig.Binds != nil {
@@ -252,7 +251,6 @@ func TestParseWithVolumes(t *testing.T) {
 			t.Fatalf("Error parsing %s. Should have a single bind mount and no volumes", arr[0])
 		}
 	}
-
 }
 
 // setupPlatformVolume takes two arrays of volume specs - a Unix style
@@ -453,7 +451,6 @@ func TestParseDevice(t *testing.T) {
 			t.Fatalf("Expected %v, got %v", deviceMapping, hostconfig.Devices)
 		}
 	}
-
 }
 
 func TestParseNetworkConfig(t *testing.T) {
@@ -638,7 +635,7 @@ func TestRunFlagsParseShmSize(t *testing.T) {
 	// shm-size ko
 	flags, _ := setupRunFlags()
 	args := []string{"--shm-size=a128m", "img", "cmd"}
-	expectedErr := `invalid argument "a128m" for "--shm-size" flag: invalid size: 'a128m'`
+	expectedErr := `invalid argument "a128m" for "--shm-size" flag:`
 	err := flags.Parse(args)
 	assert.ErrorContains(t, err, expectedErr)
 
@@ -652,8 +649,8 @@ func TestRunFlagsParseShmSize(t *testing.T) {
 
 func TestParseRestartPolicy(t *testing.T) {
 	invalids := map[string]string{
-		"always:2:3":         "invalid restart policy format",
-		"on-failure:invalid": "maximum retry count must be an integer",
+		"always:2:3":         "invalid restart policy format: maximum retry count must be an integer",
+		"on-failure:invalid": "invalid restart policy format: maximum retry count must be an integer",
 	}
 	valids := map[string]container.RestartPolicy{
 		"": {},
@@ -956,7 +953,6 @@ func TestConvertToStandardNotation(t *testing.T) {
 
 	for key, ports := range valid {
 		convertedPorts, err := convertToStandardNotation(ports)
-
 		if err != nil {
 			assert.NilError(t, err)
 		}

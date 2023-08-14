@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/docker/docker/daemon/config"
@@ -21,10 +20,6 @@ func getDefaultDaemonConfigFile() (string, error) {
 // setDefaultUmask doesn't do anything on windows
 func setDefaultUmask() error {
 	return nil
-}
-
-func getDaemonConfDir(root string) (string, error) {
-	return filepath.Join(root, `\config`), nil
 }
 
 // preNotifyReady sends a message to the host when the API is active, but before the daemon is
@@ -93,7 +88,11 @@ func newCgroupParent(config *config.Config) string {
 	return ""
 }
 
-func (cli *DaemonCli) initContainerD(_ context.Context) (func(time.Duration) error, error) {
-	system.InitContainerdRuntime(cli.Config.Experimental, cli.Config.ContainerdAddr)
+func (cli *DaemonCli) initContainerd(_ context.Context) (func(time.Duration) error, error) {
+	system.InitContainerdRuntime(cli.ContainerdAddr)
 	return nil, nil
+}
+
+func validateCPURealtimeOptions(_ *config.Config) error {
+	return nil
 }

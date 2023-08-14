@@ -40,6 +40,14 @@ const (
 	// containers directly through the gateway
 	CapGatewayExec apicaps.CapID = "gateway.exec"
 
+	// CapGatewayExecExtraHosts is the capability to add additional hosts to
+	// /etc/hosts for containers created via gateway exec.
+	CapGatewayExecExtraHosts apicaps.CapID = "gateway.exec.extrahosts"
+
+	// CapGatewayExecExtraHosts is the capability to send signals to a process
+	// created via gateway exec.
+	CapGatewayExecSignals apicaps.CapID = "gateway.exec.signals"
+
 	// CapFrontendCaps can be used to check that frontends define support for certain capabilities
 	CapFrontendCaps apicaps.CapID = "frontend.caps"
 
@@ -47,10 +55,18 @@ const (
 	// results. This is generally used by the client to return and handle solve
 	// errors.
 	CapGatewayEvaluateSolve apicaps.CapID = "gateway.solve.evaluate"
+
+	CapGatewayEvaluate apicaps.CapID = "gateway.evaluate"
+
+	// CapGatewayWarnings is the capability to log warnings from frontend
+	CapGatewayWarnings apicaps.CapID = "gateway.warnings"
+
+	// CapAttestations is the capability to indicate that attestation
+	// references will be attached to results
+	CapAttestations apicaps.CapID = "reference.attestations"
 )
 
 func init() {
-
 	Caps.Init(apicaps.Cap{
 		ID:      CapSolveBase,
 		Enabled: true,
@@ -157,6 +173,20 @@ func init() {
 	})
 
 	Caps.Init(apicaps.Cap{
+		ID:      CapGatewayExecExtraHosts,
+		Name:    "gateway exec extra-hosts",
+		Enabled: true,
+		Status:  apicaps.CapStatusExperimental,
+	})
+
+	Caps.Init(apicaps.Cap{
+		ID:      CapGatewayExecSignals,
+		Name:    "gateway exec signals",
+		Enabled: true,
+		Status:  apicaps.CapStatusExperimental,
+	})
+
+	Caps.Init(apicaps.Cap{
 		ID:      CapFrontendCaps,
 		Name:    "frontend capabilities",
 		Enabled: true,
@@ -166,6 +196,27 @@ func init() {
 	Caps.Init(apicaps.Cap{
 		ID:      CapGatewayEvaluateSolve,
 		Name:    "gateway evaluate solve",
+		Enabled: true,
+		Status:  apicaps.CapStatusExperimental,
+	})
+
+	Caps.Init(apicaps.Cap{
+		ID:      CapGatewayEvaluate,
+		Name:    "gateway evaluate",
+		Enabled: true,
+		Status:  apicaps.CapStatusExperimental,
+	})
+
+	Caps.Init(apicaps.Cap{
+		ID:      CapGatewayWarnings,
+		Name:    "logging warnings",
+		Enabled: true,
+		Status:  apicaps.CapStatusExperimental,
+	})
+
+	Caps.Init(apicaps.Cap{
+		ID:      CapAttestations,
+		Name:    "reference attestations",
 		Enabled: true,
 		Status:  apicaps.CapStatusExperimental,
 	})

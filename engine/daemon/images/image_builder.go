@@ -7,19 +7,20 @@ import (
 
 	"github.com/containerd/containerd/platforms"
 	"github.com/docker/distribution/reference"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	imagetypes "github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/containerfs"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/registry"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	registrypkg "github.com/docker/docker/registry"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -28,6 +29,10 @@ type roLayer struct {
 	released   bool
 	layerStore layer.Store
 	roLayer    layer.Layer
+}
+
+func (l *roLayer) ContentStoreDigest() digest.Digest {
+	return ""
 }
 
 func (l *roLayer) DiffID() layer.DiffID {
@@ -82,10 +87,10 @@ type rwLayer struct {
 	released   bool
 	layerStore layer.Store
 	rwLayer    layer.RWLayer
-	fs         containerfs.ContainerFS
+	fs         string
 }
 
-func (l *rwLayer) Root() containerfs.ContainerFS {
+func (l *rwLayer) Root() string {
 	return l.fs
 }
 
@@ -114,11 +119,11 @@ func (l *rwLayer) Release() error {
 		return nil
 	}
 
-	if l.fs != nil {
+	if l.fs != "" {
 		if err := l.rwLayer.Unmount(); err != nil {
 			return errors.Wrap(err, "failed to unmount RWLayer")
 		}
-		l.fs = nil
+		l.fs = ""
 	}
 
 	metadata, err := l.layerStore.ReleaseRWLayer(l.rwLayer)
@@ -136,22 +141,22 @@ func newROLayerForImage(img *image.Image, layerStore layer.Store) (builder.ROLay
 	}
 	// Hold a reference to the image layer so that it can't be removed before
 	// it is released
-	layer, err := layerStore.Get(img.RootFS.ChainID())
+	lyr, err := layerStore.Get(img.RootFS.ChainID())
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get layer for image %s", img.ImageID())
 	}
-	return &roLayer{layerStore: layerStore, roLayer: layer}, nil
+	return &roLayer{layerStore: layerStore, roLayer: lyr}, nil
 }
 
 // TODO: could this use the regular daemon PullImage ?
-func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConfigs map[string]types.AuthConfig, output io.Writer, platform *specs.Platform) (*image.Image, error) {
+func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConfigs map[string]registry.AuthConfig, output io.Writer, platform *ocispec.Platform) (*image.Image, error) {
 	ref, err := reference.ParseNormalizedNamed(name)
 	if err != nil {
 		return nil, err
 	}
 	ref = reference.TagNameOnly(ref)
 
-	pullRegistryAuth := &types.AuthConfig{}
+	pullRegistryAuth := &registry.AuthConfig{}
 	if len(authConfigs) > 0 {
 		// The request came with a full auth config, use it
 		repoInfo, err := i.registryService.ResolveRepository(ref)
@@ -159,7 +164,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 			return nil, err
 		}
 
-		resolvedConfig := registry.ResolveAuthConfig(authConfigs, repoInfo.Index)
+		resolvedConfig := registrypkg.ResolveAuthConfig(authConfigs, repoInfo.Index)
 		pullRegistryAuth = &resolvedConfig
 	}
 
@@ -167,9 +172,9 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 		return nil, err
 	}
 
-	img, err := i.GetImage(name, platform)
+	img, err := i.GetImage(ctx, name, imagetypes.GetImageOpts{Platform: platform})
 	if errdefs.IsNotFound(err) && img != nil && platform != nil {
-		imgPlat := specs.Platform{
+		imgPlat := ocispec.Platform{
 			OS:           img.OS,
 			Architecture: img.BaseImgArch(),
 			Variant:      img.BaseImgVariant(),
@@ -206,40 +211,42 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 		if !system.IsOSSupported(os) {
 			return nil, nil, system.ErrNotSupportedOperatingSystem
 		}
-		layer, err := newROLayerForImage(nil, i.layerStores[os])
-		return nil, layer, err
+		lyr, err := newROLayerForImage(nil, i.layerStore)
+		return nil, lyr, err
 	}
 
 	if opts.PullOption != backend.PullOptionForcePull {
-		image, err := i.GetImage(refOrID, opts.Platform)
+		img, err := i.GetImage(ctx, refOrID, imagetypes.GetImageOpts{Platform: opts.Platform})
 		if err != nil && opts.PullOption == backend.PullOptionNoPull {
 			return nil, nil, err
 		}
-		// TODO: shouldn't we error out if error is different from "not found" ?
-		if image != nil {
-			if !system.IsOSSupported(image.OperatingSystem()) {
+		if err != nil && !errdefs.IsNotFound(err) {
+			return nil, nil, err
+		}
+		if img != nil {
+			if !system.IsOSSupported(img.OperatingSystem()) {
 				return nil, nil, system.ErrNotSupportedOperatingSystem
 			}
-			layer, err := newROLayerForImage(image, i.layerStores[image.OperatingSystem()])
-			return image, layer, err
+			lyr, err := newROLayerForImage(img, i.layerStore)
+			return img, lyr, err
 		}
 	}
 
-	image, err := i.pullForBuilder(ctx, refOrID, opts.AuthConfig, opts.Output, opts.Platform)
+	img, err := i.pullForBuilder(ctx, refOrID, opts.AuthConfig, opts.Output, opts.Platform)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !system.IsOSSupported(image.OperatingSystem()) {
+	if !system.IsOSSupported(img.OperatingSystem()) {
 		return nil, nil, system.ErrNotSupportedOperatingSystem
 	}
-	layer, err := newROLayerForImage(image, i.layerStores[image.OperatingSystem()])
-	return image, layer, err
+	lyr, err := newROLayerForImage(img, i.layerStore)
+	return img, lyr, err
 }
 
 // CreateImage creates a new image by adding a config and ID to the image store.
 // This is similar to LoadImage() except that it receives JSON encoded bytes of
 // an image instead of a tar archive.
-func (i *ImageService) CreateImage(config []byte, parent string) (builder.Image, error) {
+func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent string, _ digest.Digest) (builder.Image, error) {
 	id, err := i.imageStore.Create(config)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create image")

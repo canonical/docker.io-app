@@ -1,43 +1,27 @@
----
-title: "ps"
-description: "The ps command description and usage"
-keywords: "container, running, list"
----
-
 # ps
 
-```markdown
-Usage: docker ps [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List containers
 
-Options:
-  -a, --all             Show all containers (default shows just running)
-  -f, --filter value    Filter output based on conditions provided (default [])
-                        - ancestor=(<image-name>[:tag]|<image-id>|<image@digest>)
-                          containers created from an image or a descendant.
-                        - before=(<container-name>|<container-id>)
-                        - expose=(<port>[/<proto>]|<startport-endport>/[<proto>])
-                        - exited=<int> an exit code of <int>
-                        - health=(starting|healthy|unhealthy|none)
-                        - id=<ID> a container's ID
-                        - isolation=(`default`|`process`|`hyperv`) (Windows daemon only)
-                        - is-task=(true|false)
-                        - label=<key> or label=<key>=<value>
-                        - name=<string> a container's name
-                        - network=(<network-id>|<network-name>)
-                        - publish=(<port>[/<proto>]|<startport-endport>/[<proto>])
-                        - since=(<container-name>|<container-id>)
-                        - status=(created|restarting|removing|running|paused|exited)
-                        - volume=(<volume name>|<mount point destination>)
-      --format string   Pretty-print containers using a Go template
-      --help            Print usage
-  -n, --last int        Show n last created containers (includes all states) (default -1)
-  -l, --latest          Show the latest created container (includes all states)
-      --no-trunc        Don't truncate output
-  -q, --quiet           Only display numeric IDs
-  -s, --size            Display total file sizes
-```
+### Aliases
+
+`docker container ls`, `docker container list`, `docker container ps`, `docker ps`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-a`](#all), [`--all`](#all)          |          |         | Show all containers (default shows just running)                                                                                                                                                                                                                                                                                                                                                                                     |
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `-n`, `--last`                         | `int`    | `-1`    | Show n last created containers (includes all states)                                                                                                                                                                                                                                                                                                                                                                                 |
+| `-l`, `--latest`                       |          |         | Show the latest created container (includes all states)                                                                                                                                                                                                                                                                                                                                                                              |
+| [`--no-trunc`](#no-trunc)              |          |         | Don't truncate output                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `-q`, `--quiet`                        |          |         | Only display container IDs                                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`-s`](#size), [`--size`](#size)       |          |         | Display total file sizes                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+
+<!---MARKER_GEN_END-->
 
 ## Examples
 
@@ -46,11 +30,11 @@ Options:
 Running `docker ps --no-trunc` showing 2 linked containers.
 
 ```console
-$ docker ps
+$ docker ps --no-trunc
 
-CONTAINER ID        IMAGE                        COMMAND                CREATED              STATUS              PORTS               NAMES
-4c01db0b339c        ubuntu:22.04                 bash                   17 seconds ago       Up 16 seconds       3300-3310/tcp       webapp
-d7886598dbe2        crosbymichael/redis:latest   /redis-server --dir    33 minutes ago       Up 33 minutes       6379/tcp            redis,webapp/db
+CONTAINER ID                                                     IMAGE                        COMMAND                CREATED              STATUS              PORTS               NAMES
+ca5534a51dd04bbcebe9b23ba05f389466cf0c190f1f8f182d7eea92a9671d00 ubuntu:22.04                 bash                   17 seconds ago       Up 16 seconds       3300-3310/tcp       webapp
+9ca9747b233100676a48cc7806131586213fa5dab86dd1972d6a8732e3a84a4d crosbymichael/redis:latest   /redis-server --dir    33 minutes ago       Up 33 minutes       6379/tcp            redis,webapp/db
 ```
 
 ### <a name="all"></a> Show both running and stopped containers (-a, --all)
@@ -444,4 +428,11 @@ a87ecb4f327c        com.docker.swarm.node=ubuntu,com.docker.swarm.storage=ssd
 01946d9d34d8
 c1d3b0166030        com.docker.swarm.node=debian,com.docker.swarm.cpu=6
 41d50ecd2f57        com.docker.swarm.node=fedora,com.docker.swarm.cpu=3,com.docker.swarm.storage=ssd
+```
+
+To list all running containers in JSON format, use the `json` directive:
+
+```console
+$ docker ps --format json
+{"Command":"\"/docker-entrypoint.…\"","CreatedAt":"2021-03-10 00:15:05 +0100 CET","ID":"a762a2b37a1d","Image":"nginx","Labels":"maintainer=NGINX Docker Maintainers \u003cdocker-maint@nginx.com\u003e","LocalVolumes":"0","Mounts":"","Names":"boring_keldysh","Networks":"bridge","Ports":"80/tcp","RunningFor":"4 seconds ago","Size":"0B","State":"running","Status":"Up 3 seconds"}
 ```

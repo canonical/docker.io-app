@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,7 +19,7 @@ import (
 
 // LoadComposefile parse the composefile specified in the cli and returns its Config and version.
 func LoadComposefile(dockerCli command.Cli, opts options.Deploy) (*composetypes.Config, error) {
-	configDetails, err := getConfigDetails(opts.Composefiles, dockerCli.In())
+	configDetails, err := GetConfigDetails(opts.Composefiles, dockerCli.In())
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,8 @@ func propertyWarnings(properties map[string]string) string {
 	return strings.Join(msgs, "\n\n")
 }
 
-func getConfigDetails(composefiles []string, stdin io.Reader) (composetypes.ConfigDetails, error) {
+// GetConfigDetails parse the composefiles specified in the cli and returns their ConfigDetails
+func GetConfigDetails(composefiles []string, stdin io.Reader) (composetypes.ConfigDetails, error) {
 	var details composetypes.ConfigDetails
 
 	if len(composefiles) == 0 {
@@ -103,12 +105,25 @@ func getConfigDetails(composefiles []string, stdin io.Reader) (composetypes.Conf
 func buildEnvironment(env []string) (map[string]string, error) {
 	result := make(map[string]string, len(env))
 	for _, s := range env {
-		// if value is empty, s is like "K=", not "K".
-		if !strings.Contains(s, "=") {
-			return result, errors.Errorf("unexpected environment %q", s)
+		if runtime.GOOS == "windows" && len(s) > 0 {
+			// cmd.exe can have special environment variables which names start with "=".
+			// They are only there for MS-DOS compatibility and we should ignore them.
+			// See TestBuildEnvironment for examples.
+			//
+			// https://ss64.com/nt/syntax-variables.html
+			// https://devblogs.microsoft.com/oldnewthing/20100506-00/?p=14133
+			// https://github.com/docker/cli/issues/4078
+			if s[0] == '=' {
+				continue
+			}
 		}
-		kv := strings.SplitN(s, "=", 2)
-		result[kv[0]] = kv[1]
+
+		k, v, ok := strings.Cut(s, "=")
+		if !ok || k == "" {
+			return result, errors.Errorf("unexpected environment variable '%s'", s)
+		}
+		// value may be set, but empty if "s" is like "K=", not "K".
+		result[k] = v
 	}
 	return result, nil
 }

@@ -2,16 +2,18 @@ package container // import "github.com/docker/docker/integration/container"
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration/internal/container"
+	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/testutil/fakecontext"
 	"gotest.tools/v3/assert"
@@ -28,20 +30,24 @@ func TestCopyFromContainerPathDoesNotExist(t *testing.T) {
 
 	_, _, err := apiclient.CopyFromContainer(ctx, cid, "/dne")
 	assert.Check(t, client.IsErrNotFound(err))
-	expected := fmt.Sprintf("No such container:path: %s:%s", cid, "/dne")
-	assert.Check(t, is.ErrorContains(err, expected))
+	assert.ErrorContains(t, err, "Could not find the file /dne in container "+cid)
 }
 
 func TestCopyFromContainerPathIsNotDir(t *testing.T) {
 	defer setupTest(t)()
-	skip.If(t, testEnv.OSType == "windows")
 
 	ctx := context.Background()
 	apiclient := testEnv.APIClient()
 	cid := container.Create(ctx, t, apiclient)
 
-	_, _, err := apiclient.CopyFromContainer(ctx, cid, "/etc/passwd/")
-	assert.Assert(t, is.ErrorContains(err, "not a directory"))
+	path := "/etc/passwd/"
+	expected := "not a directory"
+	if testEnv.OSType == "windows" {
+		path = "c:/windows/system32/drivers/etc/hosts/"
+		expected = "The filename, directory name, or volume label syntax is incorrect."
+	}
+	_, _, err := apiclient.CopyFromContainer(ctx, cid, path)
+	assert.Assert(t, is.ErrorContains(err, expected))
 }
 
 func TestCopyToContainerPathDoesNotExist(t *testing.T) {
@@ -53,19 +59,78 @@ func TestCopyToContainerPathDoesNotExist(t *testing.T) {
 
 	err := apiclient.CopyToContainer(ctx, cid, "/dne", nil, types.CopyToContainerOptions{})
 	assert.Check(t, client.IsErrNotFound(err))
-	expected := fmt.Sprintf("No such container:path: %s:%s", cid, "/dne")
-	assert.Check(t, is.ErrorContains(err, expected))
+	assert.ErrorContains(t, err, "Could not find the file /dne in container "+cid)
 }
 
-func TestCopyToContainerPathIsNotDir(t *testing.T) {
+func TestCopyEmptyFile(t *testing.T) {
 	defer setupTest(t)()
-	skip.If(t, testEnv.OSType == "windows")
 
 	ctx := context.Background()
 	apiclient := testEnv.APIClient()
 	cid := container.Create(ctx, t, apiclient)
 
-	err := apiclient.CopyToContainer(ctx, cid, "/etc/passwd/", nil, types.CopyToContainerOptions{})
+	// empty content
+	dstDir, _ := makeEmptyArchive(t)
+	err := apiclient.CopyToContainer(ctx, cid, dstDir, bytes.NewReader([]byte("")), types.CopyToContainerOptions{})
+	assert.NilError(t, err)
+
+	// tar with empty file
+	dstDir, preparedArchive := makeEmptyArchive(t)
+	err = apiclient.CopyToContainer(ctx, cid, dstDir, preparedArchive, types.CopyToContainerOptions{})
+	assert.NilError(t, err)
+
+	// tar with empty file archive mode
+	dstDir, preparedArchive = makeEmptyArchive(t)
+	err = apiclient.CopyToContainer(ctx, cid, dstDir, preparedArchive, types.CopyToContainerOptions{
+		CopyUIDGID: true,
+	})
+	assert.NilError(t, err)
+
+	// copy from empty file
+	rdr, _, err := apiclient.CopyFromContainer(ctx, cid, dstDir)
+	assert.NilError(t, err)
+	defer rdr.Close()
+}
+
+func makeEmptyArchive(t *testing.T) (string, io.ReadCloser) {
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "empty-file.txt")
+	err := os.WriteFile(srcPath, []byte(""), 0400)
+	assert.NilError(t, err)
+
+	// TODO(thaJeztah) Add utilities to the client to make steps below less complicated.
+	// Code below is taken from copyToContainer() in docker/cli.
+	srcInfo, err := archive.CopyInfoSourcePath(srcPath, false)
+	assert.NilError(t, err)
+
+	srcArchive, err := archive.TarResource(srcInfo)
+	assert.NilError(t, err)
+	t.Cleanup(func() {
+		srcArchive.Close()
+	})
+
+	ctrPath := "/empty-file.txt"
+	dstInfo := archive.CopyInfo{Path: ctrPath}
+	dstDir, preparedArchive, err := archive.PrepareArchiveCopy(srcArchive, srcInfo, dstInfo)
+	assert.NilError(t, err)
+	t.Cleanup(func() {
+		preparedArchive.Close()
+	})
+	return dstDir, preparedArchive
+}
+
+func TestCopyToContainerPathIsNotDir(t *testing.T) {
+	defer setupTest(t)()
+
+	ctx := context.Background()
+	apiclient := testEnv.APIClient()
+	cid := container.Create(ctx, t, apiclient)
+
+	path := "/etc/passwd/"
+	if testEnv.OSType == "windows" {
+		path = "c:/windows/system32/drivers/etc/hosts/"
+	}
+	err := apiclient.CopyToContainer(ctx, cid, path, nil, types.CopyToContainerOptions{})
 	assert.Assert(t, is.ErrorContains(err, "not a directory"))
 }
 
@@ -109,16 +174,23 @@ func TestCopyFromContainer(t *testing.T) {
 		expect map[string]string
 	}{
 		{"/", map[string]string{"/": "", "/foo": "hello", "/bar/quux/baz": "world", "/bar/filesymlink": "", "/bar/dirsymlink": "", "/bar/notarget": ""}},
+		{".", map[string]string{"./": "", "./foo": "hello", "./bar/quux/baz": "world", "./bar/filesymlink": "", "./bar/dirsymlink": "", "./bar/notarget": ""}},
+		{"/.", map[string]string{"./": "", "./foo": "hello", "./bar/quux/baz": "world", "./bar/filesymlink": "", "./bar/dirsymlink": "", "./bar/notarget": ""}},
+		{"./", map[string]string{"./": "", "./foo": "hello", "./bar/quux/baz": "world", "./bar/filesymlink": "", "./bar/dirsymlink": "", "./bar/notarget": ""}},
+		{"/./", map[string]string{"./": "", "./foo": "hello", "./bar/quux/baz": "world", "./bar/filesymlink": "", "./bar/dirsymlink": "", "./bar/notarget": ""}},
 		{"/bar/root", map[string]string{"root": ""}},
 		{"/bar/root/", map[string]string{"root/": "", "root/foo": "hello", "root/bar/quux/baz": "world", "root/bar/filesymlink": "", "root/bar/dirsymlink": "", "root/bar/notarget": ""}},
+		{"/bar/root/.", map[string]string{"./": "", "./foo": "hello", "./bar/quux/baz": "world", "./bar/filesymlink": "", "./bar/dirsymlink": "", "./bar/notarget": ""}},
 
 		{"bar/quux", map[string]string{"quux/": "", "quux/baz": "world"}},
 		{"bar/quux/", map[string]string{"quux/": "", "quux/baz": "world"}},
+		{"bar/quux/.", map[string]string{"./": "", "./baz": "world"}},
 		{"bar/quux/baz", map[string]string{"baz": "world"}},
 
 		{"bar/filesymlink", map[string]string{"filesymlink": ""}},
 		{"bar/dirsymlink", map[string]string{"dirsymlink": ""}},
 		{"bar/dirsymlink/", map[string]string{"dirsymlink/": "", "dirsymlink/baz": "world"}},
+		{"bar/dirsymlink/.", map[string]string{"./": "", "./baz": "world"}},
 		{"bar/notarget", map[string]string{"notarget": ""}},
 	} {
 		t.Run(x.src, func(t *testing.T) {

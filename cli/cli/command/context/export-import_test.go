@@ -15,7 +15,7 @@ import (
 func TestExportImportWithFile(t *testing.T) {
 	contextFile := filepath.Join(t.TempDir(), "exported")
 	cli := makeFakeCli(t)
-	createTestContextWithKube(t, cli)
+	createTestContext(t, cli, "test")
 	cli.ErrBuffer().Reset()
 	assert.NilError(t, RunExport(cli, &ExportOptions{
 		ContextName: "test",
@@ -40,7 +40,7 @@ func TestExportImportWithFile(t *testing.T) {
 
 func TestExportImportPipe(t *testing.T) {
 	cli := makeFakeCli(t)
-	createTestContextWithKube(t, cli)
+	createTestContext(t, cli, "test")
 	cli.ErrBuffer().Reset()
 	cli.OutBuffer().Reset()
 	assert.NilError(t, RunExport(cli, &ExportOptions{
@@ -65,33 +65,11 @@ func TestExportImportPipe(t *testing.T) {
 	assert.Equal(t, "Successfully imported context \"test2\"\n", cli.ErrBuffer().String())
 }
 
-func TestExportKubeconfig(t *testing.T) {
-	contextFile := filepath.Join(t.TempDir(), "exported")
-	cli := makeFakeCli(t)
-	createTestContextWithKube(t, cli)
-	cli.ErrBuffer().Reset()
-	assert.NilError(t, RunExport(cli, &ExportOptions{
-		ContextName: "test",
-		Dest:        contextFile,
-		Kubeconfig:  true,
-	}))
-	assert.Equal(t, cli.ErrBuffer().String(), fmt.Sprintf("Written file %q\n", contextFile))
-	assert.NilError(t, RunCreate(cli, &CreateOptions{
-		Name: "test2",
-		Kubernetes: map[string]string{
-			keyKubeconfig: contextFile,
-		},
-		Docker: map[string]string{},
-	}))
-	validateTestKubeEndpoint(t, cli.ContextStore(), "test2")
-}
-
 func TestExportExistingFile(t *testing.T) {
 	contextFile := filepath.Join(t.TempDir(), "exported")
 	cli := makeFakeCli(t)
-	createTestContextWithKube(t, cli)
 	cli.ErrBuffer().Reset()
-	assert.NilError(t, os.WriteFile(contextFile, []byte{}, 0644))
+	assert.NilError(t, os.WriteFile(contextFile, []byte{}, 0o644))
 	err := RunExport(cli, &ExportOptions{ContextName: "test", Dest: contextFile})
 	assert.Assert(t, os.IsExist(err))
 }

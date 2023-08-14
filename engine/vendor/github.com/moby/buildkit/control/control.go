@@ -2,29 +2,50 @@ package control
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	contentapi "github.com/containerd/containerd/api/services/content/v1"
+	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/leases"
+	"github.com/containerd/containerd/services/content/contentserver"
+	"github.com/docker/distribution/reference"
+	"github.com/mitchellh/hashstructure/v2"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	apitypes "github.com/moby/buildkit/api/types"
 	"github.com/moby/buildkit/cache/remotecache"
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/cmd/buildkitd/config"
 	controlgateway "github.com/moby/buildkit/control/gateway"
 	"github.com/moby/buildkit/exporter"
+	"github.com/moby/buildkit/exporter/util/epoch"
 	"github.com/moby/buildkit/frontend"
+	"github.com/moby/buildkit/frontend/attestations"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/grpchijack"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver"
+	"github.com/moby/buildkit/solver/llbsolver/proc"
 	"github.com/moby/buildkit/solver/pb"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/imageutil"
 	"github.com/moby/buildkit/util/throttle"
+	"github.com/moby/buildkit/util/tracing/transform"
+	"github.com/moby/buildkit/version"
 	"github.com/moby/buildkit/worker"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
+	"go.etcd.io/bbolt"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	tracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type Opt struct {
@@ -35,31 +56,56 @@ type Opt struct {
 	ResolveCacheExporterFuncs map[string]remotecache.ResolveCacheExporterFunc
 	ResolveCacheImporterFuncs map[string]remotecache.ResolveCacheImporterFunc
 	Entitlements              []string
+	TraceCollector            sdktrace.SpanExporter
+	HistoryDB                 *bbolt.DB
+	LeaseManager              leases.Manager
+	ContentStore              content.Store
+	HistoryConfig             *config.HistoryConfig
 }
 
 type Controller struct { // TODO: ControlService
+	// buildCount needs to be 64bit aligned
 	buildCount       int64
 	opt              Opt
 	solver           *llbsolver.Solver
+	history          *llbsolver.HistoryQueue
 	cache            solver.CacheManager
 	gatewayForwarder *controlgateway.GatewayForwarder
 	throttledGC      func()
 	gcmu             sync.Mutex
+	*tracev1.UnimplementedTraceServiceServer
 }
 
 func NewController(opt Opt) (*Controller, error) {
-	cache := solver.NewCacheManager("local", opt.CacheKeyStorage, worker.NewCacheResultStorage(opt.WorkerController))
+	cache := solver.NewCacheManager(context.TODO(), "local", opt.CacheKeyStorage, worker.NewCacheResultStorage(opt.WorkerController))
 
 	gatewayForwarder := controlgateway.NewGatewayForwarder()
 
-	solver, err := llbsolver.New(opt.WorkerController, opt.Frontends, cache, opt.ResolveCacheImporterFuncs, gatewayForwarder, opt.SessionManager, opt.Entitlements)
+	hq := llbsolver.NewHistoryQueue(llbsolver.HistoryQueueOpt{
+		DB:           opt.HistoryDB,
+		LeaseManager: opt.LeaseManager,
+		ContentStore: opt.ContentStore,
+		CleanConfig:  opt.HistoryConfig,
+	})
+
+	s, err := llbsolver.New(llbsolver.Opt{
+		WorkerController: opt.WorkerController,
+		Frontends:        opt.Frontends,
+		CacheManager:     cache,
+		CacheResolvers:   opt.ResolveCacheImporterFuncs,
+		GatewayForwarder: gatewayForwarder,
+		SessionManager:   opt.SessionManager,
+		Entitlements:     opt.Entitlements,
+		HistoryQueue:     hq,
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create solver")
 	}
 
 	c := &Controller{
 		opt:              opt,
-		solver:           solver,
+		solver:           s,
+		history:          hq,
 		cache:            cache,
 		gatewayForwarder: gatewayForwarder,
 	}
@@ -72,10 +118,17 @@ func NewController(opt Opt) (*Controller, error) {
 	return c, nil
 }
 
-func (c *Controller) Register(server *grpc.Server) error {
+func (c *Controller) Close() error {
+	return c.opt.WorkerController.Close()
+}
+
+func (c *Controller) Register(server *grpc.Server) {
 	controlapi.RegisterControlServer(server, c)
 	c.gatewayForwarder.Register(server)
-	return nil
+	tracev1.RegisterTraceServiceServer(server, c)
+
+	store := &roContentStore{c.opt.ContentStore}
+	contentapi.RegisterContentServer(server, contentserver.New(store))
 }
 
 func (c *Controller) DiskUsage(ctx context.Context, r *controlapi.DiskUsageRequest) (*controlapi.DiskUsageResponse, error) {
@@ -99,7 +152,7 @@ func (c *Controller) DiskUsage(ctx context.Context, r *controlapi.DiskUsageReque
 				Mutable:     r.Mutable,
 				InUse:       r.InUse,
 				Size_:       r.Size,
-				Parent:      r.Parent,
+				Parents:     r.Parents,
 				UsageCount:  int64(r.UsageCount),
 				Description: r.Description,
 				CreatedAt:   r.CreatedAt,
@@ -132,7 +185,7 @@ func (c *Controller) Prune(req *controlapi.PruneRequest, stream controlapi.Contr
 				ReleaseUnreferenced() error
 			}); ok {
 				if err := c.ReleaseUnreferenced(); err != nil {
-					logrus.Errorf("failed to release cache metadata: %+v", err)
+					bklog.G(ctx).Errorf("failed to release cache metadata: %+v", err)
 				}
 			}
 		}
@@ -167,7 +220,7 @@ func (c *Controller) Prune(req *controlapi.PruneRequest, stream controlapi.Contr
 				Mutable:     r.Mutable,
 				InUse:       r.InUse,
 				Size_:       r.Size,
-				Parent:      r.Parent,
+				Parents:     r.Parents,
 				UsageCount:  int64(r.UsageCount),
 				Description: r.Description,
 				CreatedAt:   r.CreatedAt,
@@ -182,6 +235,45 @@ func (c *Controller) Prune(req *controlapi.PruneRequest, stream controlapi.Contr
 	})
 
 	return eg2.Wait()
+}
+
+func (c *Controller) Export(ctx context.Context, req *tracev1.ExportTraceServiceRequest) (*tracev1.ExportTraceServiceResponse, error) {
+	if c.opt.TraceCollector == nil {
+		return nil, status.Errorf(codes.Unavailable, "trace collector not configured")
+	}
+	err := c.opt.TraceCollector.ExportSpans(ctx, transform.Spans(req.GetResourceSpans()))
+	if err != nil {
+		return nil, err
+	}
+	return &tracev1.ExportTraceServiceResponse{}, nil
+}
+
+func (c *Controller) ListenBuildHistory(req *controlapi.BuildHistoryRequest, srv controlapi.Control_ListenBuildHistoryServer) error {
+	if err := sendTimestampHeader(srv); err != nil {
+		return err
+	}
+	return c.history.Listen(srv.Context(), req, func(h *controlapi.BuildHistoryEvent) error {
+		if err := srv.Send(h); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (c *Controller) UpdateBuildHistory(ctx context.Context, req *controlapi.UpdateBuildHistoryRequest) (*controlapi.UpdateBuildHistoryResponse, error) {
+	if !req.Delete {
+		err := c.history.UpdateRef(ctx, req.Ref, func(r *controlapi.BuildHistoryRecord) error {
+			if req.Pinned == r.Pinned {
+				return nil
+			}
+			r.Pinned = req.Pinned
+			return nil
+		})
+		return &controlapi.UpdateBuildHistoryResponse{}, err
+	}
+
+	err := c.history.Delete(ctx, req.Ref)
+	return &controlapi.UpdateBuildHistoryResponse{}, err
 }
 
 func translateLegacySolveRequest(req *controlapi.SolveRequest) error {
@@ -217,6 +309,8 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 	atomic.AddInt64(&c.buildCount, 1)
 	defer atomic.AddInt64(&c.buildCount, -1)
 
+	// This method registers job ID in solver.Solve. Make sure there are no blocking calls before that might delay this.
+
 	if err := translateLegacySolveRequest(req); err != nil {
 		return nil, err
 	}
@@ -232,6 +326,26 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 	if err != nil {
 		return nil, err
 	}
+
+	// if SOURCE_DATE_EPOCH is set, enable it for the exporter
+	if v, ok := epoch.ParseBuildArgs(req.FrontendAttrs); ok {
+		if _, ok := req.ExporterAttrs[epoch.KeySourceDateEpoch]; !ok {
+			if req.ExporterAttrs == nil {
+				req.ExporterAttrs = make(map[string]string)
+			}
+			req.ExporterAttrs[epoch.KeySourceDateEpoch] = v
+		}
+	}
+
+	if v, ok := req.FrontendAttrs["build-arg:BUILDKIT_BUILDINFO"]; ok && v != "" {
+		if _, ok := req.ExporterAttrs["buildinfo"]; !ok {
+			if req.ExporterAttrs == nil {
+				req.ExporterAttrs = make(map[string]string)
+			}
+			req.ExporterAttrs["buildinfo"] = v
+		}
+	}
+
 	if req.Exporter != "" {
 		exp, err := w.Exporter(req.Exporter, c.opt.SessionManager)
 		if err != nil {
@@ -243,33 +357,77 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 		}
 	}
 
-	var (
-		cacheExporter   remotecache.Exporter
-		cacheExportMode solver.CacheExportMode
-		cacheImports    []frontend.CacheOptionsEntry
-	)
-	if len(req.Cache.Exports) > 1 {
-		// TODO(AkihiroSuda): this should be fairly easy
-		return nil, errors.New("specifying multiple cache exports is not supported currently")
+	if c, err := findDuplicateCacheOptions(req.Cache.Exports); err != nil {
+		return nil, err
+	} else if c != nil {
+		types := []string{}
+		for _, c := range c {
+			types = append(types, c.Type)
+		}
+		return nil, errors.Errorf("duplicate cache exports %s", types)
 	}
-
-	if len(req.Cache.Exports) == 1 {
-		e := req.Cache.Exports[0]
+	var cacheExporters []llbsolver.RemoteCacheExporter
+	for _, e := range req.Cache.Exports {
 		cacheExporterFunc, ok := c.opt.ResolveCacheExporterFuncs[e.Type]
 		if !ok {
 			return nil, errors.Errorf("unknown cache exporter: %q", e.Type)
 		}
-		cacheExporter, err = cacheExporterFunc(ctx, session.NewGroup(req.Session), e.Attrs)
+		var exp llbsolver.RemoteCacheExporter
+		exp.Exporter, err = cacheExporterFunc(ctx, session.NewGroup(req.Session), e.Attrs)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "failed to configure %v cache exporter", e.Type)
 		}
-		cacheExportMode = parseCacheExportMode(e.Attrs["mode"])
+		if exportMode, supported := parseCacheExportMode(e.Attrs["mode"]); !supported {
+			bklog.G(ctx).Debugf("skipping invalid cache export mode: %s", e.Attrs["mode"])
+		} else {
+			exp.CacheExportMode = exportMode
+		}
+		if ignoreErrorStr, ok := e.Attrs["ignore-error"]; ok {
+			if ignoreError, supported := parseCacheExportIgnoreError(ignoreErrorStr); !supported {
+				bklog.G(ctx).Debugf("skipping invalid cache export ignore-error: %s", e.Attrs["ignore-error"])
+			} else {
+				exp.IgnoreError = ignoreError
+			}
+		}
+		cacheExporters = append(cacheExporters, exp)
 	}
+
+	var cacheImports []frontend.CacheOptionsEntry
 	for _, im := range req.Cache.Imports {
 		cacheImports = append(cacheImports, frontend.CacheOptionsEntry{
 			Type:  im.Type,
 			Attrs: im.Attrs,
 		})
+	}
+
+	attests, err := attestations.Parse(req.FrontendAttrs)
+	if err != nil {
+		return nil, err
+	}
+
+	var procs []llbsolver.Processor
+
+	if attrs, ok := attests["sbom"]; ok {
+		src := attrs["generator"]
+		if src == "" {
+			return nil, errors.Errorf("sbom generator cannot be empty")
+		}
+		ref, err := reference.ParseNormalizedNamed(src)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse sbom generator %s", src)
+		}
+
+		useCache := true
+		if v, ok := req.FrontendAttrs["no-cache"]; ok && v == "" {
+			// disable cache if cache is disabled for all stages
+			useCache = false
+		}
+		ref = reference.TagNameOnly(ref)
+		procs = append(procs, proc.SBOMProcessor(ref.String(), useCache))
+	}
+
+	if attrs, ok := attests["provenance"]; ok {
+		procs = append(procs, proc.ProvenanceProcessor(attrs))
 	}
 
 	resp, err := c.solver.Solve(ctx, req.Ref, req.Session, frontend.SolveRequest{
@@ -279,10 +437,11 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 		FrontendInputs: req.FrontendInputs,
 		CacheImports:   cacheImports,
 	}, llbsolver.ExporterRequest{
-		Exporter:        expi,
-		CacheExporter:   cacheExporter,
-		CacheExportMode: cacheExportMode,
-	}, req.Entitlements)
+		Exporter:       expi,
+		CacheExporters: cacheExporters,
+		Type:           req.Exporter,
+		Attrs:          req.ExporterAttrs,
+	}, req.Entitlements, procs, req.Internal, req.SourcePolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -292,6 +451,9 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 }
 
 func (c *Controller) Status(req *controlapi.StatusRequest, stream controlapi.Control_StatusServer) error {
+	if err := sendTimestampHeader(stream); err != nil {
+		return err
+	}
 	ch := make(chan *client.SolveStatus, 8)
 
 	eg, ctx := errgroup.WithContext(stream.Context())
@@ -305,55 +467,9 @@ func (c *Controller) Status(req *controlapi.StatusRequest, stream controlapi.Con
 			if !ok {
 				return nil
 			}
-			logSize := 0
-			retry := false
-			for {
-				sr := controlapi.StatusResponse{}
-				for _, v := range ss.Vertexes {
-					sr.Vertexes = append(sr.Vertexes, &controlapi.Vertex{
-						Digest:    v.Digest,
-						Inputs:    v.Inputs,
-						Name:      v.Name,
-						Started:   v.Started,
-						Completed: v.Completed,
-						Error:     v.Error,
-						Cached:    v.Cached,
-					})
-				}
-				for _, v := range ss.Statuses {
-					sr.Statuses = append(sr.Statuses, &controlapi.VertexStatus{
-						ID:        v.ID,
-						Vertex:    v.Vertex,
-						Name:      v.Name,
-						Current:   v.Current,
-						Total:     v.Total,
-						Timestamp: v.Timestamp,
-						Started:   v.Started,
-						Completed: v.Completed,
-					})
-				}
-				for i, v := range ss.Logs {
-					sr.Logs = append(sr.Logs, &controlapi.VertexLog{
-						Vertex:    v.Vertex,
-						Stream:    int64(v.Stream),
-						Msg:       v.Data,
-						Timestamp: v.Timestamp,
-					})
-					logSize += len(v.Data)
-					// avoid logs growing big and split apart if they do
-					if logSize > 1024*1024 {
-						ss.Vertexes = nil
-						ss.Statuses = nil
-						ss.Logs = ss.Logs[i+1:]
-						retry = true
-						break
-					}
-				}
-				if err := stream.SendMsg(&sr); err != nil {
+			for _, sr := range ss.Marshal() {
+				if err := stream.SendMsg(sr); err != nil {
 					return err
-				}
-				if !retry {
-					break
 				}
 			}
 		}
@@ -363,7 +479,8 @@ func (c *Controller) Status(req *controlapi.StatusRequest, stream controlapi.Con
 }
 
 func (c *Controller) Session(stream controlapi.Control_SessionServer) error {
-	logrus.Debugf("session started")
+	bklog.G(stream.Context()).Debugf("session started")
+
 	conn, closeCh, opts := grpchijack.Hijack(stream)
 	defer conn.Close()
 
@@ -374,7 +491,7 @@ func (c *Controller) Session(stream controlapi.Control_SessionServer) error {
 	}()
 
 	err := c.opt.SessionManager.HandleConn(ctx, conn, opts)
-	logrus.Debugf("session finished: %v", err)
+	bklog.G(ctx).Debugf("session finished: %v", err)
 	return err
 }
 
@@ -386,13 +503,24 @@ func (c *Controller) ListWorkers(ctx context.Context, r *controlapi.ListWorkersR
 	}
 	for _, w := range workers {
 		resp.Record = append(resp.Record, &apitypes.WorkerRecord{
-			ID:        w.ID(),
-			Labels:    w.Labels(),
-			Platforms: pb.PlatformsFromSpec(w.Platforms(true)),
-			GCPolicy:  toPBGCPolicy(w.GCPolicy()),
+			ID:              w.ID(),
+			Labels:          w.Labels(),
+			Platforms:       pb.PlatformsFromSpec(w.Platforms(true)),
+			GCPolicy:        toPBGCPolicy(w.GCPolicy()),
+			BuildkitVersion: toPBBuildkitVersion(w.BuildkitVersion()),
 		})
 	}
 	return resp, nil
+}
+
+func (c *Controller) Info(ctx context.Context, r *controlapi.InfoRequest) (*controlapi.InfoResponse, error) {
+	return &controlapi.InfoResponse{
+		BuildkitVersion: &apitypes.BuildkitVersion{
+			Package:  version.Package,
+			Version:  version.Version,
+			Revision: version.Revision,
+		},
+	}, nil
 }
 
 func (c *Controller) gc() {
@@ -430,25 +558,30 @@ func (c *Controller) gc() {
 	err = eg.Wait()
 	close(ch)
 	if err != nil {
-		logrus.Errorf("gc error: %+v", err)
+		bklog.G(ctx).Errorf("gc error: %+v", err)
 	}
 	<-done
 	if size > 0 {
-		logrus.Debugf("gc cleaned up %d bytes", size)
+		bklog.G(ctx).Debugf("gc cleaned up %d bytes", size)
 	}
 }
 
-func parseCacheExportMode(mode string) solver.CacheExportMode {
+func parseCacheExportMode(mode string) (solver.CacheExportMode, bool) {
 	switch mode {
 	case "min":
-		return solver.CacheExportModeMin
+		return solver.CacheExportModeMin, true
 	case "max":
-		return solver.CacheExportModeMax
-	case "":
-	default:
-		logrus.Debugf("skipping invalid cache export mode: %s", mode)
+		return solver.CacheExportModeMax, true
 	}
-	return solver.CacheExportModeMin
+	return solver.CacheExportModeMin, false
+}
+
+func parseCacheExportIgnoreError(ignoreErrorStr string) (bool, bool) {
+	ignoreError, err := strconv.ParseBool(ignoreErrorStr)
+	if err != nil {
+		return false, false
+	}
+	return ignoreError, true
 }
 
 func toPBGCPolicy(in []client.PruneInfo) []*apitypes.GCPolicy {
@@ -462,4 +595,77 @@ func toPBGCPolicy(in []client.PruneInfo) []*apitypes.GCPolicy {
 		})
 	}
 	return policy
+}
+
+func toPBBuildkitVersion(in client.BuildkitVersion) *apitypes.BuildkitVersion {
+	return &apitypes.BuildkitVersion{
+		Package:  in.Package,
+		Version:  in.Version,
+		Revision: in.Revision,
+	}
+}
+
+func findDuplicateCacheOptions(cacheOpts []*controlapi.CacheOptionsEntry) ([]*controlapi.CacheOptionsEntry, error) {
+	seen := map[string]*controlapi.CacheOptionsEntry{}
+	duplicate := map[string]struct{}{}
+	for _, opt := range cacheOpts {
+		k, err := cacheOptKey(*opt)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[k]; ok {
+			duplicate[k] = struct{}{}
+		}
+		seen[k] = opt
+	}
+
+	var duplicates []*controlapi.CacheOptionsEntry
+	for k := range duplicate {
+		duplicates = append(duplicates, seen[k])
+	}
+	return duplicates, nil
+}
+
+func cacheOptKey(opt controlapi.CacheOptionsEntry) (string, error) {
+	if opt.Type == "registry" && opt.Attrs["ref"] != "" {
+		return opt.Attrs["ref"], nil
+	}
+	var rawOpt = struct {
+		Type  string
+		Attrs map[string]string
+	}{
+		Type:  opt.Type,
+		Attrs: opt.Attrs,
+	}
+	hash, err := hashstructure.Hash(rawOpt, hashstructure.FormatV2, nil)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprint(opt.Type, ":", hash), nil
+}
+
+type roContentStore struct {
+	content.Store
+}
+
+func (cs *roContentStore) Writer(ctx context.Context, opts ...content.WriterOpt) (content.Writer, error) {
+	return nil, errors.Errorf("read-only content store")
+}
+
+func (cs *roContentStore) Delete(ctx context.Context, dgst digest.Digest) error {
+	return errors.Errorf("read-only content store")
+}
+
+func (cs *roContentStore) Update(ctx context.Context, info content.Info, fieldpaths ...string) (content.Info, error) {
+	return content.Info{}, errors.Errorf("read-only content store")
+}
+
+func (cs *roContentStore) Abort(ctx context.Context, ref string) error {
+	return errors.Errorf("read-only content store")
+}
+
+const timestampKey = "buildkit-current-timestamp"
+
+func sendTimestampHeader(srv grpc.ServerStream) error {
+	return srv.SendHeader(metadata.Pairs(timestampKey, time.Now().Format(time.RFC3339Nano)))
 }

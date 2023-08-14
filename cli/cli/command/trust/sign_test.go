@@ -52,7 +52,7 @@ func TestTrustSignCommandErrors(t *testing.T) {
 		{
 			name:          "no-tag",
 			args:          []string{"reg/img"},
-			expectedError: "No tag specified for reg/img",
+			expectedError: "no tag specified for reg/img",
 		},
 		{
 			name:          "digest-reference",
@@ -225,14 +225,13 @@ func TestGetReleasedTargetHashAndSize(t *testing.T) {
 	oneReleasedTgt = append(oneReleasedTgt, client.TargetSignedStruct{Role: mockDelegationRoleWithName("targets/releases"), Target: releasedTgt})
 	hash, _, _ := getReleasedTargetHashAndSize(oneReleasedTgt, "unreleased")
 	assert.Check(t, is.DeepEqual(data.Hashes{notary.SHA256: []byte("released-hash")}, hash))
-
 }
 
 func TestCreateTarget(t *testing.T) {
 	notaryRepo, err := client.NewFileCachedRepository(t.TempDir(), "gun", "https://localhost", nil, passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	assert.NilError(t, err)
 	_, err = createTarget(notaryRepo, "")
-	assert.Error(t, err, "No tag specified")
+	assert.Error(t, err, "no tag specified")
 	_, err = createTarget(notaryRepo, "1")
 	assert.Error(t, err, "client is offline")
 }
@@ -280,5 +279,4 @@ func TestSignCommandLocalFlag(t *testing.T) {
 	cmd.SetArgs([]string{"--local", "reg-name.io/image:red"})
 	cmd.SetOut(io.Discard)
 	assert.ErrorContains(t, cmd.Execute(), "error contacting notary server: dial tcp: lookup reg-name.io")
-
 }

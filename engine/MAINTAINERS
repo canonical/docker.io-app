@@ -27,15 +27,17 @@
 			"akihirosuda",
 			"anusha",
 			"coolljt0725",
+			"corhere",
 			"cpuguy83",
-			"crosbymichael",
 			"estesp",
 			"johnstep",
 			"justincormack",
 			"kolyshkin",
-			"lowenna",
 			"mhbauer",
+			"neersighted",
+			"rumpl",
 			"runcom",
+			"samuelkarp",
 			"stevvooe",
 			"thajeztah",
 			"tianon",
@@ -44,6 +46,7 @@
 			"unclejack",
 			"vdemeester",
 			"vieux",
+			"vvoland",
 			"yongtang"
 		]
 
@@ -60,13 +63,18 @@
 	# - close an issue or pull request when it's inappropriate or off-topic
 
 		people = [
+		    "akerouanton",
 			"alexellis",
 			"andrewhsu",
+			"bsousaa",
+			"crazy-max",
 			"fntlnz",
 			"gianarb",
+			"laurazard",
 			"olljanat",
 			"programmerq",
 			"ripcurld",
+			"sam-thibault",
 			"samwhited",
 			"thajeztah"
 		]
@@ -102,6 +110,17 @@
 			# David is now doing amazing stuff as CTO for https://www.netlify.com,
 			# and tweets as @calavera.
 			"calavera",
+
+			# Michael Crosby was "chief maintainer" of the Docker project.
+			# During his time as a maintainer, Michael contributed to many
+			# milestones of the project; he was release captain of Docker v1.0.0,
+			# started the development of "libcontainer" (what later became runc)
+			# and containerd, as well as demoing cool hacks such as live migrating
+			# a game server container with checkpoint/restore.
+			#
+			# Michael is currently a maintainer of containerd, but you may see
+			# him around in other projects on GitHub.
+			"crosbymichael",
 
 			# Before becoming a maintainer, Daniel Nephin was a core contributor
 			# to "Fig" (now known as Docker Compose). As a maintainer for both the
@@ -165,6 +184,16 @@
 			# read her blog at https://blog.jessfraz.com (a must-read), and
 			# check out her open source projects on GitHub https://github.com/jessfraz (a must-try).
 			"jessfraz",
+
+			# As a maintainer, John Howard managed to make the impossible possible;
+			# to run Docker on Windows. After facing many challenges, teaching
+			# fellow-maintainers that 'Windows is not Linux', and many changes in
+			# Windows Server to facilitate containers, native Windows containers
+			# saw the light of day in 2015.
+			#
+			# John is now enjoying life without containers: playing piano, painting,
+			# and walking his dogs, but you may occasionally see him drop by on GitHub.
+			"lowenna",
 
 			# Alexander Morozov contributed many features to Docker, worked on the premise of 
 			# what later became containerd (and worked on that too), and made a "stupid" Go
@@ -253,6 +282,11 @@
 	Email = "aaron.lehmann@docker.com"
 	GitHub = "aaronlehmann"
 
+	[people.akerouanton]
+	Name = "Albin Kerouanton"
+	Email = "albinker@gmail.com"
+	GitHub = "akerouanton"
+
 	[people.alexellis]
 	Name = "Alex Ellis"
 	Email = "alexellis2@gmail.com"
@@ -282,6 +316,11 @@
 	Name = "Anusha Ragunathan"
 	Email = "anusha@docker.com"
 	GitHub = "anusha-ragunathan"
+	
+	[people.bsousaa]
+	Name = "Bruno de Sousa"
+	Email = "bruno.sousa@docker.com"
+	GitHub = "bsousaa"
 
 	[people.calavera]
 	Name = "David Calavera"
@@ -293,10 +332,20 @@
 	Email = "leijitang@huawei.com"
 	GitHub = "coolljt0725"
 
+	[people.corhere]
+	Name = "Cory Snider"
+	Email = "csnider@mirantis.com"
+	GitHub = "corhere"
+
 	[people.cpuguy83]
 	Name = "Brian Goff"
 	Email = "cpuguy83@gmail.com"
 	GitHub = "cpuguy83"
+
+	[people.crazy-max]
+	Name = "Kevin Alvarez"
+	Email = "contact@crazymax.dev"
+	GitHub = "crazy-max"
 
 	[people.crosbymichael]
 	Name = "Michael Crosby"
@@ -368,6 +417,11 @@
 	Email = "kolyshkin@gmail.com"
 	GitHub = "kolyshkin"
 
+	[people.laurazard]
+	Name = "Laura Brehm"
+	Email = "laura.brehm@docker.com"
+	GitHub = "laurazard"
+
 	[people.lk4d4]
 	Name = "Alexander Morozov"
 	Email = "lk4d4@docker.com"
@@ -403,6 +457,11 @@
 	Email = "mrjana@docker.com"
 	GitHub = "mrjana"
 
+	[people.neersighted]
+	Name = "Bjorn Neergaard"
+	Email = "bneergaard@mirantis.com"
+	GitHub = "neersighted"
+
 	[people.olljanat]
 	Name = "Olli Janatuinen"
 	Email = "olli.janatuinen@gmail.com"
@@ -418,10 +477,25 @@
 	Email = "ripcurld.github@gmail.com"
 	GitHub = "ripcurld"
 
+	[people.rumpl]
+	Name = "Djordje Lukic"
+	Email = "djordje.lukic@docker.com"
+	GitHub = "rumpl"
+
 	[people.runcom]
 	Name = "Antonio Murdaca"
 	Email = "runcom@redhat.com"
 	GitHub = "runcom"
+
+	[people.sam-thibault]
+	Name = "Sam Thibault"
+	Email = "sam.thibault@docker.com"
+	GitHub = "sam-thibault"
+
+	[people.samuelkarp]
+	Name = "Samuel Karp"
+	Email = "me@samuelkarp.com"
+	GitHub = "samuelkarp"
 
 	[people.samwhited]
 	Name = "Sam Whited"
@@ -487,6 +561,11 @@
 	Name = "Vishnu Kannan"
 	Email = "vishnuk@google.com"
 	GitHub = "vishh"
+	
+	[people.vvoland]
+	Name = "Paweł Gronowski"
+	Email = "pawel.gronowski@docker.com"
+	GitHub = "vvoland"
 
 	[people.yongtang]
 	Name = "Yong Tang"

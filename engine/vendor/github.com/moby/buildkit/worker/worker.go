@@ -2,10 +2,11 @@ package worker
 
 import (
 	"context"
+	"io"
 
 	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/leases"
 	"github.com/moby/buildkit/cache"
-	"github.com/moby/buildkit/cache/metadata"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/executor"
@@ -14,14 +15,16 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
 	digest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type Worker interface {
+	io.Closer
 	// ID needs to be unique in the cluster
 	ID() string
 	Labels() map[string]string
-	Platforms(noCache bool) []specs.Platform
+	Platforms(noCache bool) []ocispecs.Platform
+	BuildkitVersion() client.BuildkitVersion
 
 	GCPolicy() []client.PruneInfo
 	LoadRef(ctx context.Context, id string, hidden bool) (cache.ImmutableRef, error)
@@ -36,18 +39,10 @@ type Worker interface {
 	ContentStore() content.Store
 	Executor() executor.Executor
 	CacheManager() cache.Manager
-	MetadataStore() *metadata.Store
+	LeaseManager() leases.Manager
 }
 
 type Infos interface {
 	GetDefault() (Worker, error)
 	WorkerInfos() []client.WorkerInfo
 }
-
-// Pre-defined label keys
-const (
-	labelPrefix      = "org.mobyproject.buildkit.worker."
-	LabelExecutor    = labelPrefix + "executor"    // "oci" or "containerd"
-	LabelSnapshotter = labelPrefix + "snapshotter" // containerd snapshotter name ("overlay", "native", ...)
-	LabelHostname    = labelPrefix + "hostname"
-)

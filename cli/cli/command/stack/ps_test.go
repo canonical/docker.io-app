@@ -22,7 +22,6 @@ func TestStackPsErrors(t *testing.T) {
 		taskListFunc  func(options types.TaskListOptions) ([]swarm.Task, error)
 		expectedError string
 	}{
-
 		{
 			args:          []string{},
 			expectedError: "requires exactly 1 argument",
@@ -43,7 +42,7 @@ func TestStackPsErrors(t *testing.T) {
 	for _, tc := range testCases {
 		cmd := newPsCommand(test.NewFakeCli(&fakeClient{
 			taskListFunc: tc.taskListFunc,
-		}), &orchestrator)
+		}))
 		cmd.SetArgs(tc.args)
 		cmd.SetOut(io.Discard)
 		assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
@@ -164,7 +163,7 @@ func TestStackPs(t *testing.T) {
 			})
 			cli.SetConfigFile(&tc.config)
 
-			cmd := newPsCommand(cli, &orchestrator)
+			cmd := newPsCommand(cli)
 			cmd.SetArgs(tc.args)
 			for key, value := range tc.flags {
 				cmd.Flags().Set(key, value)

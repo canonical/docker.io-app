@@ -2,12 +2,13 @@ package node
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/formatter"
+	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,7 @@ func newInspectCommand(dockerCli command.Cli) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given Go template")
+	flags.StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
 	flags.BoolVar(&opts.pretty, "pretty", false, "Print the information in a human friendly format")
 	return cmd
 }
@@ -57,7 +58,7 @@ func runInspect(dockerCli command.Cli, opts inspectOptions) error {
 	// check if the user is trying to apply a template to the pretty format, which
 	// is not supported
 	if strings.HasPrefix(f, "pretty") && f != "pretty" {
-		return fmt.Errorf("Cannot supply extra formatting options to the pretty template")
+		return errors.New("cannot supply extra formatting options to the pretty template")
 	}
 
 	nodeCtx := formatter.Context{

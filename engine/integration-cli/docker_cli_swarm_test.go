@@ -24,10 +24,10 @@ import (
 	"github.com/docker/docker/integration-cli/checker"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/libnetwork/driverapi"
-	"github.com/docker/libnetwork/ipamapi"
-	remoteipam "github.com/docker/libnetwork/ipams/remote/api"
-	"github.com/docker/swarmkit/ca/keyutils"
+	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/ipamapi"
+	remoteipam "github.com/docker/docker/libnetwork/ipams/remote/api"
+	"github.com/moby/swarmkit/v2/ca/keyutils"
 	"github.com/vishvananda/netlink"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/fs"
@@ -152,16 +152,10 @@ func (s *DockerSwarmSuite) TestSwarmIncompatibleDaemon(c *testing.T) {
 	assert.Equal(c, info.LocalNodeState, swarm.LocalNodeStateActive)
 	d.Stop(c)
 
-	// start a daemon with --cluster-store and --cluster-advertise
-	err := d.StartWithError("--cluster-store=consul://consuladdr:consulport/some/path", "--cluster-advertise=1.1.1.1:2375")
+	// start a daemon with --live-restore
+	err := d.StartWithError("--live-restore")
 	assert.ErrorContains(c, err, "")
 	content, err := d.ReadLogFile()
-	assert.NilError(c, err)
-	assert.Assert(c, strings.Contains(string(content), "--cluster-store and --cluster-advertise daemon configurations are incompatible with swarm mode"))
-	// start a daemon with --live-restore
-	err = d.StartWithError("--live-restore")
-	assert.ErrorContains(c, err, "")
-	content, err = d.ReadLogFile()
 	assert.NilError(c, err)
 	assert.Assert(c, strings.Contains(string(content), "--live-restore daemon configuration is incompatible with swarm mode"))
 	// restart for teardown
@@ -621,7 +615,6 @@ const globalNetworkPlugin = "global-network-plugin"
 const globalIPAMPlugin = "global-ipam-plugin"
 
 func setupRemoteGlobalNetworkPlugin(c *testing.T, mux *http.ServeMux, url, netDrv, ipamDrv string) {
-
 	mux.HandleFunc("/Plugin.Activate", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.docker.plugins.v1+json")
 		fmt.Fprintf(w, `{"Implements": ["%s", "%s"]}`, driverapi.NetworkPluginEndpointType, ipamapi.PluginEndpointType)
@@ -929,7 +922,6 @@ func (s *DockerSwarmSuite) TestSwarmServiceNetworkUpdate(c *testing.T) {
 	result.Assert(c, icmd.Success)
 
 	poll.WaitOn(c, pollCheck(c, d.CheckRunningTaskNetworks, checker.DeepEquals(map[string]int{barNetwork: 1, bazNetwork: 1})), poll.WithTimeout(defaultReconciliationTimeout))
-
 }
 
 func (s *DockerSwarmSuite) TestDNSConfig(c *testing.T) {

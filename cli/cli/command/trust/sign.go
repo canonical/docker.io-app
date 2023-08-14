@@ -13,6 +13,7 @@ import (
 	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/cli/cli/trust"
 	"github.com/docker/docker/api/types"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/theupdateframework/notary/client"
@@ -43,7 +44,7 @@ func newSignCommand(dockerCli command.Cli) *cobra.Command {
 func runSignImage(cli command.Cli, options signOptions) error {
 	imageName := options.imageName
 	ctx := context.Background()
-	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, nil, image.AuthResolver(cli), imageName)
+	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, image.AuthResolver(cli), imageName)
 	if err != nil {
 		return err
 	}
@@ -93,7 +94,7 @@ func runSignImage(cli command.Cli, options signOptions) error {
 			fmt.Fprintf(cli.Err(), "Signing and pushing trust data for local image %s, may overwrite remote trust data\n", imageName)
 
 			authConfig := command.ResolveAuthConfig(ctx, cli, imgRefAndAuth.RepoInfo().Index)
-			encodedAuth, err := command.EncodeAuthToBase64(authConfig)
+			encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
 			if err != nil {
 				return err
 			}
@@ -132,9 +133,9 @@ func validateTag(imgRefAndAuth trust.ImageRefAndAuth) error {
 	tag := imgRefAndAuth.Tag()
 	if tag == "" {
 		if imgRefAndAuth.Digest() != "" {
-			return fmt.Errorf("cannot use a digest reference for IMAGE:TAG")
+			return errors.New("cannot use a digest reference for IMAGE:TAG")
 		}
-		return fmt.Errorf("No tag specified for %s", imgRefAndAuth.Name())
+		return fmt.Errorf("no tag specified for %s", imgRefAndAuth.Name())
 	}
 	return nil
 }
@@ -148,7 +149,7 @@ func createTarget(notaryRepo client.Repository, tag string) (client.Target, erro
 	target := &client.Target{}
 	var err error
 	if tag == "" {
-		return *target, fmt.Errorf("No tag specified")
+		return *target, errors.New("no tag specified")
 	}
 	target.Name = tag
 	target.Hashes, target.Length, err = getSignedManifestHashAndSize(notaryRepo, tag)

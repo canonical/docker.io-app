@@ -20,6 +20,7 @@ import (
 
 // delInterface removes given network interface
 func delInterface(t *testing.T, ifName string) {
+	t.Helper()
 	icmd.RunCommand("ip", "link", "delete", ifName).Assert(t, icmd.Success)
 	icmd.RunCommand("iptables", "-t", "nat", "--flush").Assert(t, icmd.Success)
 	icmd.RunCommand("iptables", "--flush").Assert(t, icmd.Success)
@@ -95,7 +96,6 @@ func TestDaemonDefaultNetworkPools(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, out.IPAM.Config[0].Subnet, "175.33.1.0/24")
 	delInterface(t, defaultNetworkBridge)
-
 }
 
 func TestDaemonRestartWithExistingNetwork(t *testing.T) {
@@ -453,5 +453,4 @@ func TestServiceWithDefaultAddressPoolInit(t *testing.T) {
 	assert.NilError(t, err)
 	err = d.SwarmLeave(t, true)
 	assert.NilError(t, err)
-
 }

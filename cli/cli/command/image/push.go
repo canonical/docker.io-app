@@ -7,9 +7,11 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
@@ -29,16 +31,21 @@ func NewPushCommand(dockerCli command.Cli) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "push [OPTIONS] NAME[:TAG]",
-		Short: "Push an image or a repository to a registry",
+		Short: "Upload an image to a registry",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.remote = args[0]
 			return RunPush(dockerCli, opts)
 		},
+		Annotations: map[string]string{
+			"category-top": "6",
+			"aliases":      "docker image push, docker push",
+		},
+		ValidArgsFunction: completion.ImageNames(dockerCli),
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVarP(&opts.all, "all-tags", "a", false, "Push all tagged images in the repository")
+	flags.BoolVarP(&opts.all, "all-tags", "a", false, "Push all tags of an image to the repository")
 	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress verbose output")
 	command.AddTrustSigningFlags(flags, &opts.untrusted, dockerCli.ContentTrustEnabled())
 
@@ -70,7 +77,7 @@ func RunPush(dockerCli command.Cli, opts pushOptions) error {
 
 	// Resolve the Auth config relevant for this server
 	authConfig := command.ResolveAuthConfig(ctx, dockerCli, repoInfo.Index)
-	encodedAuth, err := command.EncodeAuthToBase64(authConfig)
+	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
 	if err != nil {
 		return err
 	}

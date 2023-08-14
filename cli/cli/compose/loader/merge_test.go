@@ -938,7 +938,8 @@ func TestLoadMultipleConfigs(t *testing.T) {
 				},
 				CapAdd:      []string{"NET_ADMIN", "SYS_ADMIN"},
 				Environment: types.MappingWithEquals{},
-			}},
+			},
+		},
 		Networks: map[string]types.NetworkConfig{},
 		Volumes:  map[string]types.VolumeConfig{},
 		Secrets:  map[string]types.SecretConfig{},
@@ -1002,7 +1003,8 @@ func TestLoadMultipleNetworks(t *testing.T) {
 				Name:        "foo",
 				Image:       "baz",
 				Environment: types.MappingWithEquals{},
-			}},
+			},
+		},
 		Networks: map[string]types.NetworkConfig{
 			"hostnet": {
 				Name: "host",
@@ -1014,6 +1016,134 @@ func TestLoadMultipleNetworks(t *testing.T) {
 		Volumes: map[string]types.VolumeConfig{},
 		Secrets: map[string]types.SecretConfig{},
 		Configs: map[string]types.ConfigObjConfig{},
+	}, config)
+}
+
+func TestLoadMultipleServiceCommands(t *testing.T) {
+	base := map[string]interface{}{
+		"version": "3.7",
+		"services": map[string]interface{}{
+			"foo": map[string]interface{}{
+				"image":   "baz",
+				"command": "foo bar",
+			},
+		},
+		"volumes":  map[string]interface{}{},
+		"networks": map[string]interface{}{},
+		"secrets":  map[string]interface{}{},
+		"configs":  map[string]interface{}{},
+	}
+	override := map[string]interface{}{
+		"version": "3.7",
+		"services": map[string]interface{}{
+			"foo": map[string]interface{}{
+				"image":   "baz",
+				"command": "foo baz",
+			},
+		},
+		"volumes":  map[string]interface{}{},
+		"networks": map[string]interface{}{},
+		"secrets":  map[string]interface{}{},
+		"configs":  map[string]interface{}{},
+	}
+	configDetails := types.ConfigDetails{
+		ConfigFiles: []types.ConfigFile{
+			{Filename: "base.yml", Config: base},
+			{Filename: "override.yml", Config: override},
+		},
+	}
+	config, err := Load(configDetails)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, &types.Config{
+		Filename: "base.yml",
+		Version:  "3.7",
+		Services: []types.ServiceConfig{
+			{
+				Name:        "foo",
+				Image:       "baz",
+				Command:     types.ShellCommand{"foo", "baz"},
+				Environment: types.MappingWithEquals{},
+			},
+		},
+		Volumes:  map[string]types.VolumeConfig{},
+		Secrets:  map[string]types.SecretConfig{},
+		Configs:  map[string]types.ConfigObjConfig{},
+		Networks: map[string]types.NetworkConfig{},
+	}, config)
+}
+
+func TestLoadMultipleServiceVolumes(t *testing.T) {
+	base := map[string]interface{}{
+		"version": "3.7",
+		"services": map[string]interface{}{
+			"foo": map[string]interface{}{
+				"image": "baz",
+				"volumes": []interface{}{
+					map[string]interface{}{
+						"type":   "volume",
+						"source": "sourceVolume",
+						"target": "/var/app",
+					},
+				},
+			},
+		},
+		"volumes": map[string]interface{}{
+			"sourceVolume": map[string]interface{}{},
+		},
+		"networks": map[string]interface{}{},
+		"secrets":  map[string]interface{}{},
+		"configs":  map[string]interface{}{},
+	}
+	override := map[string]interface{}{
+		"version": "3.7",
+		"services": map[string]interface{}{
+			"foo": map[string]interface{}{
+				"image": "baz",
+				"volumes": []interface{}{
+					map[string]interface{}{
+						"type":   "volume",
+						"source": "/local",
+						"target": "/var/app",
+					},
+				},
+			},
+		},
+		"volumes":  map[string]interface{}{},
+		"networks": map[string]interface{}{},
+		"secrets":  map[string]interface{}{},
+		"configs":  map[string]interface{}{},
+	}
+	configDetails := types.ConfigDetails{
+		ConfigFiles: []types.ConfigFile{
+			{Filename: "base.yml", Config: base},
+			{Filename: "override.yml", Config: override},
+		},
+	}
+	config, err := Load(configDetails)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, &types.Config{
+		Filename: "base.yml",
+		Version:  "3.7",
+		Services: []types.ServiceConfig{
+			{
+				Name:        "foo",
+				Image:       "baz",
+				Environment: types.MappingWithEquals{},
+				Volumes: []types.ServiceVolumeConfig{
+					{
+						Type:   "volume",
+						Source: "/local",
+						Target: "/var/app",
+					},
+				},
+			},
+		},
+		Volumes: map[string]types.VolumeConfig{
+			"sourceVolume": {},
+		},
+		Secrets:  map[string]types.SecretConfig{},
+		Configs:  map[string]types.ConfigObjConfig{},
+		Networks: map[string]types.NetworkConfig{},
 	}, config)
 }
 
@@ -1103,6 +1233,63 @@ func TestMergeServiceNetworkConfig(t *testing.T) {
 				Aliases:     []string{"310", "311"},
 				Ipv4Address: "127.0.3.1",
 				Ipv6Address: "0:0:0:0:0:0:3:1",
+			},
+		},
+	)
+}
+
+// issue #3293
+func TestMergeServiceOverrideReplicasZero(t *testing.T) {
+	base := types.ServiceConfig{
+		Name: "someService",
+		Deploy: types.DeployConfig{
+			Replicas: uint64Ptr(3),
+		},
+	}
+	override := types.ServiceConfig{
+		Name: "someService",
+		Deploy: types.DeployConfig{
+			Replicas: uint64Ptr(0),
+		},
+	}
+	services, err := mergeServices([]types.ServiceConfig{base}, []types.ServiceConfig{override})
+	assert.NilError(t, err)
+	assert.Equal(t, len(services), 1)
+	actual := services[0]
+	assert.DeepEqual(
+		t,
+		actual,
+		types.ServiceConfig{
+			Name: "someService",
+			Deploy: types.DeployConfig{
+				Replicas: uint64Ptr(0),
+			},
+		},
+	)
+}
+
+func TestMergeServiceOverrideReplicasNotNil(t *testing.T) {
+	base := types.ServiceConfig{
+		Name: "someService",
+		Deploy: types.DeployConfig{
+			Replicas: uint64Ptr(3),
+		},
+	}
+	override := types.ServiceConfig{
+		Name:   "someService",
+		Deploy: types.DeployConfig{},
+	}
+	services, err := mergeServices([]types.ServiceConfig{base}, []types.ServiceConfig{override})
+	assert.NilError(t, err)
+	assert.Equal(t, len(services), 1)
+	actual := services[0]
+	assert.DeepEqual(
+		t,
+		actual,
+		types.ServiceConfig{
+			Name: "someService",
+			Deploy: types.DeployConfig{
+				Replicas: uint64Ptr(3),
 			},
 		},
 	)

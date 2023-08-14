@@ -3,7 +3,6 @@ package jsonmessage // import "github.com/docker/docker/pkg/jsonmessage"
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -217,7 +216,7 @@ func TestJSONMessageDisplayWithJSONError(t *testing.T) {
 
 	jsonMessage = JSONMessage{Error: &JSONError{401, "Anything"}}
 	err = jsonMessage.Display(data, true)
-	assert.Check(t, is.Error(err, "authentication is required"))
+	assert.Check(t, is.Error(err, "Anything"))
 }
 
 func TestDisplayJSONMessagesStreamInvalidJSON(t *testing.T) {
@@ -245,22 +244,22 @@ func TestDisplayJSONMessagesStream(t *testing.T) {
 			"",
 			""},
 		// Without progress & ID
-		"{ \"status\": \"status\" }": {
+		`{ "status": "status" }`: {
 			"status\n",
 			"status\n",
 		},
 		// Without progress, with ID
-		"{ \"id\": \"ID\",\"status\": \"status\" }": {
+		`{ "id": "ID","status": "status" }`: {
 			"ID: status\n",
 			"ID: status\n",
 		},
 		// With progress
-		"{ \"id\": \"ID\", \"status\": \"status\", \"progress\": \"ProgressMessage\" }": {
+		`{ "id": "ID", "status": "status", "progress": "ProgressMessage" }`: {
 			"ID: status ProgressMessage",
 			fmt.Sprintf("\n%c[%dAID: status ProgressMessage%c[%dB", 27, 1, 27, 1),
 		},
 		// With progressDetail
-		"{ \"id\": \"ID\", \"status\": \"status\", \"progressDetail\": { \"Current\": 1} }": {
+		`{ "id": "ID", "status": "status", "progressDetail": { "Current": 1} }`: {
 			"", // progressbar is disabled in non-terminal
 			fmt.Sprintf("\n%c[%dA%c[2K\rID: status       1B\r%c[%dB", 27, 1, 27, 27, 1),
 		},
@@ -268,8 +267,7 @@ func TestDisplayJSONMessagesStream(t *testing.T) {
 
 	// Use $TERM which is unlikely to exist, forcing DisplayJSONMessageStream to
 	// (hopefully) use &noTermInfo.
-	origTerm := os.Getenv("TERM")
-	os.Setenv("TERM", "xyzzy-non-existent-terminfo")
+	t.Setenv("TERM", "xyzzy-non-existent-terminfo")
 
 	for jsonMessage, expectedMessages := range messages {
 		data := bytes.NewBuffer([]byte{})
@@ -294,6 +292,4 @@ func TestDisplayJSONMessagesStream(t *testing.T) {
 			t.Fatalf("\nExpected %q\n     got %q", expectedMessages[1], data.String())
 		}
 	}
-	os.Setenv("TERM", origTerm)
-
 }

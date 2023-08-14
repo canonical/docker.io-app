@@ -6,6 +6,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	units "github.com/docker/go-units"
 	"github.com/spf13/cobra"
@@ -35,12 +36,13 @@ func NewPruneCommand(dockerCli command.Cli) *cobra.Command {
 			fmt.Fprintln(dockerCli.Out(), "Total reclaimed space:", units.HumanSize(float64(spaceReclaimed)))
 			return nil
 		},
-		Annotations: map[string]string{"version": "1.25"},
+		Annotations:       map[string]string{"version": "1.25"},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
 	flags.BoolVarP(&options.force, "force", "f", false, "Do not prompt for confirmation")
-	flags.Var(&options.filter, "filter", "Provide filter values (e.g. 'until=<timestamp>')")
+	flags.Var(&options.filter, "filter", `Provide filter values (e.g. "until=<timestamp>")`)
 
 	return cmd
 }
@@ -73,6 +75,6 @@ func runPrune(dockerCli command.Cli, options pruneOptions) (spaceReclaimed uint6
 
 // RunPrune calls the Container Prune API
 // This returns the amount of space reclaimed and a detailed output string
-func RunPrune(dockerCli command.Cli, all bool, filter opts.FilterOpt) (uint64, string, error) {
+func RunPrune(dockerCli command.Cli, _ bool, filter opts.FilterOpt) (uint64, string, error) {
 	return runPrune(dockerCli, pruneOptions{force: true, filter: filter})
 }

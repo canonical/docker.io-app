@@ -18,7 +18,6 @@ import (
 	"github.com/docker/docker/integration-cli/daemon"
 	"github.com/docker/docker/integration-cli/environment"
 	"github.com/docker/docker/internal/test/suite"
-	"github.com/docker/docker/pkg/reexec"
 	testdaemon "github.com/docker/docker/testutil/daemon"
 	ienv "github.com/docker/docker/testutil/environment"
 	"github.com/docker/docker/testutil/fakestorage"
@@ -50,12 +49,9 @@ var (
 func init() {
 	var err error
 
-	reexec.Init() // This is required for external graphdriver tests
-
 	testEnv, err = environment.New()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		panic(err)
 	}
 }
 
@@ -71,7 +67,21 @@ func TestMain(m *testing.M) {
 	}
 
 	testEnv.Print()
+	printCliVersion()
 	os.Exit(m.Run())
+}
+
+func printCliVersion() {
+	// Print output of "docker version"
+	cli.SetTestEnvironment(testEnv)
+	cmd := cli.Docker(cli.Args("version"))
+	if cmd.Error != nil {
+		fmt.Printf("WARNING: Failed to run 'docker version': %+v\n", cmd.Error)
+		return
+	}
+
+	fmt.Println("INFO: Testing with docker cli version:")
+	fmt.Println(cmd.Stdout())
 }
 
 func ensureTestEnvSetup(t *testing.T) {
@@ -82,9 +92,199 @@ func ensureTestEnvSetup(t *testing.T) {
 	})
 }
 
-func TestDockerSuite(t *testing.T) {
+func TestDockerAPISuite(t *testing.T) {
 	ensureTestEnvSetup(t)
-	suite.Run(t, &DockerSuite{})
+	suite.Run(t, &DockerAPISuite{ds: &DockerSuite{}})
+}
+
+func TestDockerBenchmarkSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerBenchmarkSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIAttachSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIAttachSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIBuildSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIBuildSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLICommitSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLICommitSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLICpSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLICpSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLICreateSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLICreateSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIEventSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIEventSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIExecSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIExecSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIHealthSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIHealthSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIHistorySuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIHistorySuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIImagesSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIImagesSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIImportSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIImportSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIInfoSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIInfoSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIInspectSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIInspectSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLILinksSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLILinksSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLILoginSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLILoginSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLILogsSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLILogsSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLINetmodeSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLINetmodeSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLINetworkSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLINetworkSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPluginLogDriverSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPluginLogDriverSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPluginsSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPluginsSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPortSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPortSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIProxySuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIProxySuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPruneSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPruneSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPsSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPsSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPullSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPullSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIPushSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIPushSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIRestartSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIRestartSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIRmiSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIRmiSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIRunSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIRunSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLISaveLoadSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLISaveLoadSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLISearchSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLISearchSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLISNISuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLISNISuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIStartSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIStartSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIStatsSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIStatsSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLITopSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLITopSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIUpdateSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIUpdateSuite{ds: &DockerSuite{}})
+}
+
+func TestDockerCLIVolumeSuite(t *testing.T) {
+	ensureTestEnvSetup(t)
+	suite.Run(t, &DockerCLIVolumeSuite{ds: &DockerSuite{}})
 }
 
 func TestDockerRegistrySuite(t *testing.T) {

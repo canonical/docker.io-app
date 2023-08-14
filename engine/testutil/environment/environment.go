@@ -103,7 +103,7 @@ func getPlatformDefaults(info types.Info, osType string) PlatformDefaults {
 // Make sure in context of daemon, not the local platform. Note we can't
 // use filepath.FromSlash or ToSlash here as they are a no-op on Unix.
 func toSlash(path string) string {
-	return strings.Replace(path, `\`, `/`, -1)
+	return strings.ReplaceAll(path, `\`, `/`)
 }
 
 // IsLocalDaemon is true if the daemon under test is on the same
@@ -162,6 +162,11 @@ func (e *Execution) IsUserNamespace() bool {
 	return root != ""
 }
 
+// RuntimeIsWindowsContainerd returns whether containerd runtime is used on Windows
+func (e *Execution) RuntimeIsWindowsContainerd() bool {
+	return os.Getenv("DOCKER_WINDOWS_CONTAINERD_RUNTIME") == "1"
+}
+
 // IsRootless returns whether the rootless mode is enabled
 func (e *Execution) IsRootless() bool {
 	return os.Getenv("DOCKER_ROOTLESS") != ""
@@ -188,17 +193,23 @@ func (e *Execution) IsUserNamespaceInKernel() bool {
 	return true
 }
 
+// UsingSnapshotter returns whether containerd snapshotters are used for the
+// tests by checking if the "TEST_INTEGRATION_USE_SNAPSHOTTER" is set to a
+// non-empty value.
+func (e *Execution) UsingSnapshotter() bool {
+	return os.Getenv("TEST_INTEGRATION_USE_SNAPSHOTTER") != ""
+}
+
 // HasExistingImage checks whether there is an image with the given reference.
 // Note that this is done by filtering and then checking whether there were any
 // results -- so ambiguous references might result in false-positives.
 func (e *Execution) HasExistingImage(t testing.TB, reference string) bool {
-	client := e.APIClient()
-	filter := filters.NewArgs()
-	filter.Add("dangling", "false")
-	filter.Add("reference", reference)
-	imageList, err := client.ImageList(context.Background(), types.ImageListOptions{
-		All:     true,
-		Filters: filter,
+	imageList, err := e.APIClient().ImageList(context.Background(), types.ImageListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("dangling", "false"),
+			filters.Arg("reference", reference),
+		),
 	})
 	assert.NilError(t, err, "failed to list images")
 
@@ -215,4 +226,9 @@ func EnsureFrozenImagesLinux(testEnv *Execution) error {
 		}
 	}
 	return nil
+}
+
+// GitHubActions is true if test is executed on a GitHub Runner.
+func (e *Execution) GitHubActions() bool {
+	return os.Getenv("GITHUB_ACTIONS") != ""
 }

@@ -231,28 +231,69 @@ func TestContainerListFormatTemplateWithArg(t *testing.T) {
 }
 
 func TestContainerListFormatSizeSetsOption(t *testing.T) {
-	cli := test.NewFakeCli(&fakeClient{
-		containerListFunc: func(options types.ContainerListOptions) ([]types.Container, error) {
-			assert.Check(t, options.Size)
-			return []types.Container{}, nil
+	tests := []struct {
+		doc, format, sizeFlag string
+		sizeExpected          bool
+	}{
+		{
+			doc:          "detect with all fields",
+			format:       `{{json .}}`,
+			sizeExpected: true,
 		},
-	})
-	cmd := newListCommand(cli)
-	cmd.Flags().Set("format", `{{.Size}}`)
-	assert.NilError(t, cmd.Execute())
+		{
+			doc:          "detect with explicit field",
+			format:       `{{.Size}}`,
+			sizeExpected: true,
+		},
+		{
+			doc:          "detect no size",
+			format:       `{{.Names}}`,
+			sizeExpected: false,
+		},
+		{
+			doc:          "override enable",
+			format:       `{{.Names}}`,
+			sizeFlag:     "true",
+			sizeExpected: true,
+		},
+		{
+			doc:          "override disable",
+			format:       `{{.Size}}`,
+			sizeFlag:     "false",
+			sizeExpected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.doc, func(t *testing.T) {
+			cli := test.NewFakeCli(&fakeClient{
+				containerListFunc: func(options types.ContainerListOptions) ([]types.Container, error) {
+					assert.Check(t, is.Equal(options.Size, tc.sizeExpected))
+					return []types.Container{}, nil
+				},
+			})
+			cmd := newListCommand(cli)
+			cmd.Flags().Set("format", tc.format)
+			if tc.sizeFlag != "" {
+				cmd.Flags().Set("size", tc.sizeFlag)
+			}
+			assert.NilError(t, cmd.Execute())
+		})
+	}
 }
 
 func TestContainerListWithConfigFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
 		containerListFunc: func(_ types.ContainerListOptions) ([]types.Container, error) {
 			return []types.Container{
-				*Container("c1", WithLabel("some.label", "value")),
-				*Container("c2", WithName("foo/bar"), WithLabel("foo", "bar")),
+				*Container("c1", WithLabel("some.label", "value"), WithSize(10700000)),
+				*Container("c2", WithName("foo/bar"), WithLabel("foo", "bar"), WithSize(3200000)),
 			}, nil
 		},
 	})
 	cli.SetConfigFile(&configfile.ConfigFile{
-		PsFormat: "{{ .Names }} {{ .Image }} {{ .Labels }}",
+		PsFormat: "{{ .Names }} {{ .Image }} {{ .Labels }} {{ .Size}}",
 	})
 	cmd := newListCommand(cli)
 	assert.NilError(t, cmd.Execute())
@@ -268,8 +309,22 @@ func TestContainerListWithFormat(t *testing.T) {
 			}, nil
 		},
 	})
-	cmd := newListCommand(cli)
-	cmd.Flags().Set("format", "{{ .Names }} {{ .Image }} {{ .Labels }}")
-	assert.NilError(t, cmd.Execute())
-	golden.Assert(t, cli.OutBuffer().String(), "container-list-with-format.golden")
+
+	t.Run("with format", func(t *testing.T) {
+		cli.OutBuffer().Reset()
+		cmd := newListCommand(cli)
+		assert.Check(t, cmd.Flags().Set("format", "{{ .Names }} {{ .Image }} {{ .Labels }}"))
+		assert.NilError(t, cmd.Execute())
+		golden.Assert(t, cli.OutBuffer().String(), "container-list-with-format.golden")
+	})
+
+	t.Run("with format and quiet", func(t *testing.T) {
+		cli.OutBuffer().Reset()
+		cmd := newListCommand(cli)
+		assert.Check(t, cmd.Flags().Set("format", "{{ .Names }} {{ .Image }} {{ .Labels }}"))
+		assert.Check(t, cmd.Flags().Set("quiet", "true"))
+		assert.NilError(t, cmd.Execute())
+		assert.Equal(t, cli.ErrBuffer().String(), "WARNING: Ignoring custom format, because both --format and --quiet are set.\n")
+		golden.Assert(t, cli.OutBuffer().String(), "container-list-quiet.golden")
+	})
 }

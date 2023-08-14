@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/docker/distribution"
@@ -17,7 +16,8 @@ import (
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/system"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/moby/sys/sequential"
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 )
 
@@ -94,8 +94,7 @@ func (l *tarexporter) parseNames(names []string) (desc map[image.ID]*imageDescri
 		if !ok {
 			// Check if digest ID reference
 			if digested, ok := ref.(reference.Digested); ok {
-				id := image.IDFromDigest(digested.Digest())
-				if err := addAssoc(id, nil); err != nil {
+				if err := addAssoc(image.ID(digested.Digest()), nil); err != nil {
 					return nil, err
 				}
 				continue
@@ -116,7 +115,7 @@ func (l *tarexporter) parseNames(names []string) (desc map[image.ID]*imageDescri
 		if reference.IsNameOnly(namedRef) {
 			assocs := l.rs.ReferencesByName(namedRef)
 			for _, assoc := range assocs {
-				if err := addAssoc(image.IDFromDigest(assoc.ID), assoc.Ref); err != nil {
+				if err := addAssoc(image.ID(assoc.ID), assoc.Ref); err != nil {
 					return nil, err
 				}
 			}
@@ -135,10 +134,9 @@ func (l *tarexporter) parseNames(names []string) (desc map[image.ID]*imageDescri
 		if err != nil {
 			return nil, err
 		}
-		if err := addAssoc(image.IDFromDigest(id), namedRef); err != nil {
+		if err := addAssoc(image.ID(id), namedRef); err != nil {
 			return nil, err
 		}
-
 	}
 	return imgDescr, nil
 }
@@ -149,19 +147,15 @@ func (l *tarexporter) takeLayerReference(id image.ID, imgDescr *imageDescriptor)
 	if err != nil {
 		return err
 	}
+	if os := img.OperatingSystem(); !system.IsOSSupported(os) {
+		return fmt.Errorf("os %q is not supported", os)
+	}
 	imgDescr.image = img
 	topLayerID := img.RootFS.ChainID()
 	if topLayerID == "" {
 		return nil
 	}
-	os := img.OS
-	if os == "" {
-		os = runtime.GOOS
-	}
-	if !system.IsOSSupported(os) {
-		return fmt.Errorf("os %q is not supported", os)
-	}
-	layer, err := l.lss[os].Get(topLayerID)
+	layer, err := l.lss.Get(topLayerID)
 	if err != nil {
 		return err
 	}
@@ -173,11 +167,7 @@ func (l *tarexporter) takeLayerReference(id image.ID, imgDescr *imageDescriptor)
 func (l *tarexporter) releaseLayerReferences(imgDescr map[image.ID]*imageDescriptor) error {
 	for _, descr := range imgDescr {
 		if descr.layerRef != nil {
-			os := descr.image.OS
-			if os == "" {
-				os = runtime.GOOS
-			}
-			l.lss[os].Release(descr.layerRef)
+			l.lss.Release(descr.layerRef)
 		}
 	}
 	return nil
@@ -220,14 +210,12 @@ func (s *saveSession) save(outStream io.Writer) error {
 
 		for _, l := range imageDescr.layers {
 			// IMPORTANT: We use path, not filepath here to ensure the layers
-			// in the manifest use Unix-style forward-slashes. Otherwise, a
-			// Linux image saved from LCOW won't be able to be imported on
-			// LCOL.
+			// in the manifest use Unix-style forward-slashes.
 			layers = append(layers, path.Join(l, legacyLayerFileName))
 		}
 
 		manifest = append(manifest, manifestItem{
-			Config:       id.Digest().Hex() + ".json",
+			Config:       id.Digest().Encoded() + ".json",
 			RepoTags:     repoTags,
 			Layers:       layers,
 			LayerSources: foreignSrcs,
@@ -315,9 +303,9 @@ func (s *saveSession) saveImage(id image.ID) (map[layer.DiffID]distribution.Desc
 			return nil, err
 		}
 
-		v1Img.ID = v1ID.Hex()
+		v1Img.ID = v1ID.Encoded()
 		if parent != "" {
-			v1Img.Parent = parent.Hex()
+			v1Img.Parent = parent.Encoded()
 		}
 
 		v1Img.OS = img.OS
@@ -335,8 +323,8 @@ func (s *saveSession) saveImage(id image.ID) (map[layer.DiffID]distribution.Desc
 		}
 	}
 
-	configFile := filepath.Join(s.outDir, id.Digest().Hex()+".json")
-	if err := os.WriteFile(configFile, img.RawJSON(), 0644); err != nil {
+	configFile := filepath.Join(s.outDir, id.Digest().Encoded()+".json")
+	if err := os.WriteFile(configFile, img.RawJSON(), 0o644); err != nil {
 		return nil, err
 	}
 	if err := system.Chtimes(configFile, img.Created, img.Created); err != nil {
@@ -373,15 +361,11 @@ func (s *saveSession) saveLayer(id layer.ChainID, legacyImg image.V1Image, creat
 
 	// serialize filesystem
 	layerPath := filepath.Join(outDir, legacyLayerFileName)
-	operatingSystem := legacyImg.OS
-	if operatingSystem == "" {
-		operatingSystem = runtime.GOOS
-	}
-	l, err := s.lss[operatingSystem].Get(id)
+	l, err := s.lss.Get(id)
 	if err != nil {
 		return distribution.Descriptor{}, err
 	}
-	defer layer.ReleaseAndLog(s.lss[operatingSystem], l)
+	defer layer.ReleaseAndLog(s.lss, l)
 
 	if oldPath, exists := s.diffIDPaths[l.DiffID()]; exists {
 		relPath, err := filepath.Rel(outDir, oldPath)
@@ -392,10 +376,9 @@ func (s *saveSession) saveLayer(id layer.ChainID, legacyImg image.V1Image, creat
 			return distribution.Descriptor{}, errors.Wrap(err, "error creating symlink while saving layer")
 		}
 	} else {
-		// Use system.CreateSequential rather than os.Create. This ensures sequential
-		// file access on Windows to avoid eating into MM standby list.
-		// On Linux, this equates to a regular os.Create.
-		tarFile, err := system.CreateSequential(layerPath)
+		// We use sequential file access to avoid depleting the standby list on
+		// Windows. On Linux, this equates to a regular os.Create.
+		tarFile, err := sequential.Create(layerPath)
 		if err != nil {
 			return distribution.Descriptor{}, err
 		}

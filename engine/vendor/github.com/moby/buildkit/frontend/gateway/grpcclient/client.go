@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gogo/googleapis/google/rpc"
@@ -18,18 +19,19 @@ import (
 	"github.com/moby/buildkit/frontend/gateway/client"
 	pb "github.com/moby/buildkit/frontend/gateway/pb"
 	"github.com/moby/buildkit/identity"
-	"github.com/moby/buildkit/solver/errdefs"
 	opspb "github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/apicaps"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/grpcerrors"
+	"github.com/moby/sys/signal"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"golang.org/x/sync/errgroup"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -113,7 +115,7 @@ func (c *grpcClient) Run(ctx context.Context, f client.BuildFunc) (retError erro
 			req := &pb.ReturnRequest{}
 			if retError == nil {
 				if res == nil {
-					res = &client.Result{}
+					res = client.NewResult()
 				}
 				pbRes := &pb.Result{
 					Metadata: res.Metadata,
@@ -158,6 +160,31 @@ func (c *grpcClient) Run(ctx context.Context, f client.BuildFunc) (retError erro
 						}
 					}
 				}
+
+				if res.Attestations != nil {
+					attestations := map[string]*pb.Attestations{}
+					for k, as := range res.Attestations {
+						for _, a := range as {
+							pbAtt, err := client.AttestationToPB(&a)
+							if err != nil {
+								retError = err
+								continue
+							}
+							pbRef, err := convertRef(a.Ref)
+							if err != nil {
+								retError = err
+								continue
+							}
+							pbAtt.Ref = pbRef
+							if attestations[k] == nil {
+								attestations[k] = &pb.Attestations{}
+							}
+							attestations[k].Attestation = append(attestations[k].Attestation, pbAtt)
+						}
+					}
+					pbRes.Attestations = attestations
+				}
+
 				if retError == nil {
 					req.Result = pbRes
 				}
@@ -298,6 +325,19 @@ func (c *grpcClient) requestForRef(ref client.Reference) (*pb.SolveRequest, erro
 	return req, nil
 }
 
+func (c *grpcClient) Warn(ctx context.Context, dgst digest.Digest, msg string, opts client.WarnOpts) error {
+	_, err := c.client.Warn(ctx, &pb.WarnRequest{
+		Digest: dgst,
+		Level:  int64(opts.Level),
+		Short:  []byte(msg),
+		Info:   opts.SourceInfo,
+		Ranges: opts.Range,
+		Detail: opts.Detail,
+		Url:    opts.URL,
+	})
+	return err
+}
+
 func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *client.Result, err error) {
 	if creq.Definition != nil {
 		for _, md := range creq.Definition.Metadata {
@@ -308,21 +348,29 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 			}
 		}
 	}
-	var (
-		// old API
-		legacyRegistryCacheImports []string
-		// new API (CapImportCaches)
-		cacheImports []*pb.CacheOptionsEntry
-	)
-	supportCapImportCaches := c.caps.Supports(pb.CapImportCaches) == nil
+	var cacheImports []*pb.CacheOptionsEntry
 	for _, im := range creq.CacheImports {
-		if !supportCapImportCaches && im.Type == "registry" {
-			legacyRegistryCacheImports = append(legacyRegistryCacheImports, im.Attrs["ref"])
-		} else {
-			cacheImports = append(cacheImports, &pb.CacheOptionsEntry{
-				Type:  im.Type,
-				Attrs: im.Attrs,
-			})
+		cacheImports = append(cacheImports, &pb.CacheOptionsEntry{
+			Type:  im.Type,
+			Attrs: im.Attrs,
+		})
+	}
+
+	// these options are added by go client in solve()
+	if _, ok := creq.FrontendOpt["cache-imports"]; !ok {
+		if v, ok := c.opts["cache-imports"]; ok {
+			if creq.FrontendOpt == nil {
+				creq.FrontendOpt = map[string]string{}
+			}
+			creq.FrontendOpt["cache-imports"] = v
+		}
+	}
+	if _, ok := creq.FrontendOpt["cache-from"]; !ok {
+		if v, ok := c.opts["cache-from"]; ok {
+			if creq.FrontendOpt == nil {
+				creq.FrontendOpt = map[string]string{}
+			}
+			creq.FrontendOpt["cache-from"] = v
 		}
 	}
 
@@ -333,10 +381,8 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		FrontendInputs:      creq.FrontendInputs,
 		AllowResultReturn:   true,
 		AllowResultArrayRef: true,
-		// old API
-		ImportCacheRefsDeprecated: legacyRegistryCacheImports,
-		// new API
-		CacheImports: cacheImports,
+		CacheImports:        cacheImports,
+		SourcePolicies:      creq.SourcePolicies,
 	}
 
 	// backwards compatibility with inline return
@@ -348,30 +394,15 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		if c.caps.Supports(pb.CapGatewayEvaluateSolve) == nil {
 			req.Evaluate = creq.Evaluate
 		} else {
-			// If evaluate is not supported, fallback to running Stat(".") in order to
-			// trigger an evaluation of the result.
+			// If evaluate is not supported, fallback to running Stat(".") in
+			// order to trigger an evaluation of the result.
 			defer func() {
 				if res == nil {
 					return
 				}
-
-				var (
-					id  string
-					ref client.Reference
-				)
-				ref, err = res.SingleRef()
-				if err != nil {
-					for refID := range res.Refs {
-						id = refID
-						break
-					}
-				} else {
-					id = ref.(*reference).id
-				}
-
-				_, err = c.client.StatFile(ctx, &pb.StatFileRequest{
-					Ref:  id,
-					Path: ".",
+				err = res.EachRef(func(ref client.Reference) error {
+					_, err := ref.StatFile(ctx, client.StatRequest{Path: "."})
+					return err
 				})
 			}()
 		}
@@ -382,7 +413,7 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 		return nil, err
 	}
 
-	res = &client.Result{}
+	res = client.NewResult()
 	if resp.Result == nil {
 		if id := resp.Ref; id != "" {
 			c.requests[id] = req
@@ -423,6 +454,25 @@ func (c *grpcClient) Solve(ctx context.Context, creq client.SolveRequest) (res *
 				res.AddRef(k, ref)
 			}
 		}
+
+		if resp.Result.Attestations != nil {
+			for p, as := range resp.Result.Attestations {
+				for _, a := range as.Attestation {
+					att, err := client.AttestationFromPB[client.Reference](a)
+					if err != nil {
+						return nil, err
+					}
+					if a.Ref.Id != "" {
+						ref, err := newReference(c, a.Ref)
+						if err != nil {
+							return nil, err
+						}
+						att.Ref = ref
+					}
+					res.AddAttestation(p, *att)
+				}
+			}
+		}
 	}
 
 	return res, nil
@@ -439,7 +489,15 @@ func (c *grpcClient) ResolveImageConfig(ctx context.Context, ref string, opt llb
 			OSFeatures:   platform.OSFeatures,
 		}
 	}
-	resp, err := c.client.ResolveImageConfig(ctx, &pb.ResolveImageConfigRequest{Ref: ref, Platform: p, ResolveMode: opt.ResolveMode, LogName: opt.LogName})
+	resp, err := c.client.ResolveImageConfig(ctx, &pb.ResolveImageConfigRequest{
+		ResolverType: int32(opt.ResolverType),
+		Ref:          ref,
+		Platform:     p,
+		ResolveMode:  opt.ResolveMode,
+		LogName:      opt.LogName,
+		SessionID:    opt.Store.SessionID,
+		StoreID:      opt.Store.StoreID,
+	})
 	if err != nil {
 		return "", nil, err
 	}
@@ -455,6 +513,27 @@ func (c *grpcClient) BuildOpts() client.BuildOpts {
 		LLBCaps:   c.llbCaps,
 		Caps:      c.caps,
 	}
+}
+
+func (c *grpcClient) CurrentFrontend() (*llb.State, error) {
+	fp := "/run/config/buildkit/metadata/frontend.bin"
+	if _, err := os.Stat(fp); err != nil {
+		return nil, nil
+	}
+	dt, err := os.ReadFile(fp)
+	if err != nil {
+		return nil, err
+	}
+	var def opspb.Definition
+	if err := def.Unmarshal(dt); err != nil {
+		return nil, err
+	}
+	op, err := llb.NewDefinitionOp(&def)
+	if err != nil {
+		return nil, err
+	}
+	st := llb.NewState(op)
+	return &st, nil
 }
 
 func (c *grpcClient) Inputs(ctx context.Context) (map[string]llb.State, error) {
@@ -576,7 +655,7 @@ func (m *messageForwarder) Start() (err error) {
 				if errors.Is(err, io.EOF) || grpcerrors.Code(err) == codes.Canceled {
 					return nil
 				}
-				logrus.Debugf("|<--- %s", debugMessage(msg))
+				bklog.G(m.ctx).Debugf("|<--- %s", debugMessage(msg))
 
 				if err != nil {
 					return err
@@ -587,7 +666,7 @@ func (m *messageForwarder) Start() (err error) {
 				m.mu.Unlock()
 
 				if !ok {
-					logrus.Debugf("Received exec message for unregistered process: %s", msg.String())
+					bklog.G(m.ctx).Debugf("Received exec message for unregistered process: %s", msg.String())
 					continue
 				}
 				msgs.Send(m.ctx, msg)
@@ -608,6 +687,8 @@ func debugMessage(msg *pb.ExecMessage) string {
 		return fmt.Sprintf("File Message %s, fd=%d, %d bytes", msg.ProcessID, m.File.Fd, len(m.File.Data))
 	case *pb.ExecMessage_Resize:
 		return fmt.Sprintf("Resize Message %s", msg.ProcessID)
+	case *pb.ExecMessage_Signal:
+		return fmt.Sprintf("Signal Message %s: %s", msg.ProcessID, m.Signal.Name)
 	case *pb.ExecMessage_Started:
 		return fmt.Sprintf("Started Message %s", msg.ProcessID)
 	case *pb.ExecMessage_Exit:
@@ -625,7 +706,7 @@ func (m *messageForwarder) Send(msg *pb.ExecMessage) error {
 	if !ok {
 		return errors.Errorf("process %s has ended, not sending message %#v", msg.ProcessID, msg.Input)
 	}
-	logrus.Debugf("|---> %s", debugMessage(msg))
+	bklog.G(m.ctx).Debugf("|---> %s", debugMessage(msg))
 	return m.stream.Send(msg)
 }
 
@@ -703,12 +784,14 @@ func (c *grpcClient) NewContainer(ctx context.Context, req client.NewContainerRe
 		})
 	}
 
-	logrus.Debugf("|---> NewContainer %s", id)
+	bklog.G(ctx).Debugf("|---> NewContainer %s", id)
 	_, err = c.client.NewContainer(ctx, &pb.NewContainerRequest{
 		ContainerID: id,
 		Mounts:      mounts,
 		Platform:    req.Platform,
 		Constraints: req.Constraints,
+		Network:     req.NetMode,
+		ExtraHosts:  req.ExtraHosts,
 	})
 	if err != nil {
 		return nil, err
@@ -748,6 +831,7 @@ func (ctr *container) Start(ctx context.Context, req client.StartRequest) (clien
 		Tty:      req.Tty,
 		Security: req.SecurityMode,
 	}
+	init.Meta.RemoveMountStubsRecursive = req.RemoveMountStubsRecursive
 	if req.Stdin != nil {
 		init.Fds = append(init.Fds, 0)
 	}
@@ -843,11 +927,11 @@ func (ctr *container) Start(ctx context.Context, req client.StartRequest) (clien
 
 			if msg == nil {
 				// empty message from ctx cancel, so just start shutting down
-				// input, but continue processing more exit/done messages
+				// input
 				closeDoneOnce.Do(func() {
 					close(done)
 				})
-				continue
+				return ctx.Err()
 			}
 
 			if file := msg.GetFile(); file != nil {
@@ -882,8 +966,8 @@ func (ctr *container) Start(ctx context.Context, req client.StartRequest) (clien
 					Message: exit.Error.Message,
 					Details: convertGogoAny(exit.Error.Details),
 				}))
-				if exit.Code != errdefs.ContainerdUnknownExitStatus {
-					exitError = &errdefs.ExitError{ExitCode: exit.Code, Err: exitError}
+				if exit.Code != pb.UnknownExitStatus {
+					exitError = &pb.ExitError{ExitCode: exit.Code, Err: exitError}
 				}
 			} else if serverDone := msg.GetDone(); serverDone != nil {
 				return exitError
@@ -897,7 +981,7 @@ func (ctr *container) Start(ctx context.Context, req client.StartRequest) (clien
 }
 
 func (ctr *container) Release(ctx context.Context) error {
-	logrus.Debugf("|---> ReleaseContainer %s", ctr.id)
+	bklog.G(ctx).Debugf("|---> ReleaseContainer %s", ctr.id)
 	_, err := ctr.client.ReleaseContainer(ctx, &pb.ReleaseContainerRequest{
 		ContainerID: ctr.id,
 	})
@@ -922,6 +1006,29 @@ func (ctrProc *containerProcess) Resize(_ context.Context, size client.WinSize) 
 			Resize: &pb.ResizeMessage{
 				Cols: size.Cols,
 				Rows: size.Rows,
+			},
+		},
+	})
+}
+
+var sigToName = map[syscall.Signal]string{}
+
+func init() {
+	for name, value := range signal.SignalMap {
+		sigToName[value] = name
+	}
+}
+
+func (ctrProc *containerProcess) Signal(_ context.Context, sig syscall.Signal) error {
+	name := sigToName[sig]
+	if name == "" {
+		return errors.Errorf("unknown signal %v", sig)
+	}
+	return ctrProc.execMsgs.Send(&pb.ExecMessage{
+		ProcessID: ctrProc.id,
+		Input: &pb.ExecMessage_Signal{
+			Signal: &pb.SignalMessage{
+				Name: name,
 			},
 		},
 	})
@@ -953,6 +1060,15 @@ func (r *reference) ToState() (st llb.State, err error) {
 	}
 
 	return llb.NewState(defop), nil
+}
+
+func (r *reference) Evaluate(ctx context.Context) error {
+	req := &pb.EvaluateRequest{Ref: r.id}
+	_, err := r.c.client.Evaluate(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *reference) ReadFile(ctx context.Context, req client.ReadRequest) ([]byte, error) {
@@ -1006,7 +1122,7 @@ func grpcClientConn(ctx context.Context) (context.Context, *grpc.ClientConn, err
 		return stdioConn(), nil
 	})
 
-	cc, err := grpc.DialContext(ctx, "localhost", dialOpt, grpc.WithInsecure(), grpc.WithUnaryInterceptor(grpcerrors.UnaryClientInterceptor), grpc.WithStreamInterceptor(grpcerrors.StreamClientInterceptor))
+	cc, err := grpc.DialContext(ctx, "localhost", dialOpt, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(grpcerrors.UnaryClientInterceptor), grpc.WithStreamInterceptor(grpcerrors.StreamClientInterceptor))
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "failed to create grpc client")
 	}

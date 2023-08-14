@@ -12,6 +12,18 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+type DockerCLIHealthSuite struct {
+	ds *DockerSuite
+}
+
+func (s *DockerCLIHealthSuite) TearDownTest(c *testing.T) {
+	s.ds.TearDownTest(c)
+}
+
+func (s *DockerCLIHealthSuite) OnTimeout(c *testing.T) {
+	s.ds.OnTimeout(c)
+}
+
 func waitForHealthStatus(c *testing.T, name string, prev string, expected string) {
 	prev = prev + "\n"
 	expected = expected + "\n"
@@ -36,7 +48,7 @@ func getHealth(c *testing.T, name string) *types.Health {
 	return &health
 }
 
-func (s *DockerSuite) TestHealth(c *testing.T) {
+func (s *DockerCLIHealthSuite) TestHealth(c *testing.T) {
 	testRequires(c, DaemonIsLinux) // busybox doesn't work on Windows
 
 	existingContainers := ExistingContainerIDs(c)
@@ -140,11 +152,10 @@ func (s *DockerSuite) TestHealth(c *testing.T) {
 	out, _ = dockerCmd(c, "inspect",
 		"--format={{.Config.Healthcheck.Test}}", imageName)
 	assert.Equal(c, out, "[CMD cat /my status]\n")
-
 }
 
 // GitHub #33021
-func (s *DockerSuite) TestUnsetEnvVarHealthCheck(c *testing.T) {
+func (s *DockerCLIHealthSuite) TestUnsetEnvVarHealthCheck(c *testing.T) {
 	testRequires(c, DaemonIsLinux) // busybox doesn't work on Windows
 
 	imageName := "testhealth"
@@ -163,5 +174,4 @@ ENTRYPOINT /bin/sh -c "sleep 600"`))
 	// Start
 	dockerCmd(c, "start", name)
 	waitForHealthStatus(c, name, "starting", "healthy")
-
 }

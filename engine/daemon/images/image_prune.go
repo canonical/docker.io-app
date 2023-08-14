@@ -15,7 +15,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -46,13 +46,9 @@ func (i *ImageService) ImagesPrune(ctx context.Context, pruneFilters filters.Arg
 
 	rep := &types.ImagesPruneReport{}
 
-	danglingOnly := true
-	if pruneFilters.Contains("dangling") {
-		if pruneFilters.ExactMatch("dangling", "false") || pruneFilters.ExactMatch("dangling", "0") {
-			danglingOnly = false
-		} else if !pruneFilters.ExactMatch("dangling", "true") && !pruneFilters.ExactMatch("dangling", "1") {
-			return nil, invalidFilter{"dangling", pruneFilters.Get("dangling")}
-		}
+	danglingOnly, err := pruneFilters.GetBoolOrDefault("dangling", true)
+	if err != nil {
+		return nil, err
 	}
 
 	until, err := getUntilFromPruneFilters(pruneFilters)
@@ -68,12 +64,7 @@ func (i *ImageService) ImagesPrune(ctx context.Context, pruneFilters filters.Arg
 	}
 
 	// Filter intermediary images and get their unique size
-	allLayers := make(map[layer.ChainID]layer.Layer)
-	for _, ls := range i.layerStores {
-		for k, v := range ls.Map() {
-			allLayers[k] = v
-		}
-	}
+	allLayers := i.layerStore.Map()
 	topImages := map[image.ID]*image.Image{}
 	for id, img := range allImages {
 		select {
@@ -118,13 +109,13 @@ deleteImagesLoop:
 					}
 				}
 
-				// Only delete if it's untagged (i.e. repo:<none>)
+				// Only delete if it has no references which is a valid NamedTagged.
 				shouldDelete = !hasTag
 			}
 
 			if shouldDelete {
 				for _, ref := range refs {
-					imgDel, err := i.ImageDelete(ref.String(), false, true)
+					imgDel, err := i.ImageDelete(ctx, ref.String(), false, true)
 					if imageDeleteFailed(ref.String(), err) {
 						continue
 					}
@@ -132,8 +123,8 @@ deleteImagesLoop:
 				}
 			}
 		} else {
-			hex := id.Digest().Hex()
-			imgDel, err := i.ImageDelete(hex, false, true)
+			hex := id.Digest().Encoded()
+			imgDel, err := i.ImageDelete(ctx, hex, false, true)
 			if imageDeleteFailed(hex, err) {
 				continue
 			}
@@ -148,12 +139,7 @@ deleteImagesLoop:
 		if d.Deleted != "" {
 			chid := layer.ChainID(d.Deleted)
 			if l, ok := allLayers[chid]; ok {
-				diffSize, err := l.DiffSize()
-				if err != nil {
-					logrus.Warnf("failed to get layer %s size: %v", chid, err)
-					continue
-				}
-				rep.SpaceReclaimed += uint64(diffSize)
+				rep.SpaceReclaimed += uint64(l.DiffSize())
 			}
 		}
 	}
@@ -173,7 +159,7 @@ func imageDeleteFailed(ref string, err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case errdefs.IsConflict(err):
+	case errdefs.IsConflict(err), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return true
 	default:
 		logrus.Warnf("failed to prune image %s: %v", ref, err)

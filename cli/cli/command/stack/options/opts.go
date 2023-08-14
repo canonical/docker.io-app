@@ -11,11 +11,16 @@ type Deploy struct {
 	Prune            bool
 }
 
+// Config holds docker stack config options
+type Config struct {
+	Composefiles      []string
+	SkipInterpolation bool
+}
+
 // List holds docker stack ls options
 type List struct {
 	Format        string
 	AllNamespaces bool
-	Namespaces    []string
 }
 
 // PS holds docker stack ps options

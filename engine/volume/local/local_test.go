@@ -26,7 +26,25 @@ func TestGetAddress(t *testing.T) {
 			t.Errorf("Test case failed for %s actual: %s expected : %s", name, v, success)
 		}
 	}
+}
 
+func TestGetPassword(t *testing.T) {
+	cases := map[string]string{
+		"password=secret":                       "secret",
+		" ":                                     "",
+		"password=":                             "",
+		"password=Tr0ub4dor&3":                  "Tr0ub4dor&3",
+		"password=correcthorsebatterystaple":    "correcthorsebatterystaple",
+		"username=moby,password=secret":         "secret",
+		"username=moby,password=secret,addr=11": "secret",
+		"username=moby,addr=11":                 "",
+	}
+	for optsstring, success := range cases {
+		v := getPassword(optsstring)
+		if v != success {
+			t.Errorf("Test case failed for %s actual: %s expected : %s", optsstring, v, success)
+		}
+	}
 }
 
 func TestRemove(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 func fullExampleConfig(workingDir, homeDir string) *types.Config {
 	return &types.Config{
-		Version:  "3.9",
+		Version:  "3.10",
 		Services: services(workingDir, homeDir),
 		Networks: networks(),
 		Volumes:  volumes(),
@@ -58,7 +58,7 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 					Target: "/my_config",
 					UID:    "103",
 					GID:    "103",
-					Mode:   uint32Ptr(0440),
+					Mode:   uint32Ptr(0o440),
 				},
 			},
 			ContainerName: "my-web-container",
@@ -197,7 +197,7 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 			},
 			Pid: "host",
 			Ports: []types.ServicePortConfig{
-				//"3000",
+				// "3000",
 				{
 					Mode:     "ingress",
 					Target:   3000,
@@ -228,14 +228,14 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 					Target:   3005,
 					Protocol: "tcp",
 				},
-				//"8000:8000",
+				// "8000:8000",
 				{
 					Mode:      "ingress",
 					Target:    8000,
 					Published: 8000,
 					Protocol:  "tcp",
 				},
-				//"9090-9091:8080-8081",
+				// "9090-9091:8080-8081",
 				{
 					Mode:      "ingress",
 					Target:    8080,
@@ -248,21 +248,21 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 					Published: 9091,
 					Protocol:  "tcp",
 				},
-				//"49100:22",
+				// "49100:22",
 				{
 					Mode:      "ingress",
 					Target:    22,
 					Published: 49100,
 					Protocol:  "tcp",
 				},
-				//"127.0.0.1:8001:8001",
+				// "127.0.0.1:8001:8001",
 				{
 					Mode:      "ingress",
 					Target:    8001,
 					Published: 8001,
 					Protocol:  "tcp",
 				},
-				//"127.0.0.1:5000-5010:5000-5010",
+				// "127.0.0.1:5000-5010:5000-5010",
 				{
 					Mode:      "ingress",
 					Target:    5000,
@@ -342,7 +342,7 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 					Target: "my_secret",
 					UID:    "103",
 					GID:    "103",
-					Mode:   uint32Ptr(0440),
+					Mode:   uint32Ptr(0o440),
 				},
 			},
 			SecurityOpt: []string{
@@ -379,6 +379,7 @@ func services(workingDir, homeDir string) []types.ServiceConfig {
 				{Target: "/opt", Type: "tmpfs", Tmpfs: &types.ServiceVolumeTmpfs{
 					Size: int64(10000),
 				}},
+				{Source: "group:mygroup", Target: "/srv", Type: "cluster"},
 			},
 			WorkingDir: "/code",
 		},
@@ -460,6 +461,41 @@ func volumes() map[string]types.VolumeConfig {
 				"x-foo": "bar",
 			},
 		},
+		"cluster-volume": {
+			Driver: "my-csi-driver",
+			Spec: &types.ClusterVolumeSpec{
+				Group: "mygroup",
+				AccessMode: &types.AccessMode{
+					Scope:       "single",
+					Sharing:     "none",
+					BlockVolume: &types.BlockVolume{},
+				},
+				AccessibilityRequirements: &types.TopologyRequirement{
+					Requisite: []types.Topology{
+						{
+							Segments: types.Mapping{"region": "R1", "zone": "Z1"},
+						},
+						{
+							Segments: types.Mapping{"region": "R1", "zone": "Z2"},
+						},
+					},
+					Preferred: []types.Topology{
+						{
+							Segments: types.Mapping{"region": "R1", "zone": "Z1"},
+						},
+					},
+				},
+				CapacityRange: &types.CapacityRange{
+					RequiredBytes: types.UnitBytes(1 * 1024 * 1024 * 1024),
+					LimitBytes:    types.UnitBytes(8 * 1024 * 1024 * 1024),
+				},
+				Secrets: []types.VolumeSecret{
+					{Key: "mycsisecret", Secret: "secret1"},
+					{Key: "mycsisecret2", Secret: "secret4"},
+				},
+				Availability: "active",
+			},
+		},
 	}
 }
 
@@ -518,7 +554,7 @@ func secrets(workingDir string) map[string]types.SecretConfig {
 }
 
 func fullExampleYAML(workingDir string) string {
-	return fmt.Sprintf(`version: "3.9"
+	return fmt.Sprintf(`version: "3.10"
 services:
   foo:
     build:
@@ -811,6 +847,9 @@ services:
       target: /opt
       tmpfs:
         size: 10000
+    - type: cluster
+      source: group:mygroup
+      target: /srv
     working_dir: /code
     x-bar: baz
     x-foo: bar
@@ -843,6 +882,35 @@ volumes:
     driver_opts:
       baz: "1"
       foo: bar
+  cluster-volume:
+    driver: my-csi-driver
+    x-cluster-spec:
+      group: mygroup
+      access_mode:
+        scope: single
+        sharing: none
+        block_volume: {}
+      accessibility_requirements:
+        requisite:
+        - segments:
+            region: R1
+            zone: Z1
+        - segments:
+            region: R1
+            zone: Z2
+        preferred:
+        - segments:
+            region: R1
+            zone: Z1
+      capacity_range:
+        required_bytes: "1073741824"
+        limit_bytes: "8589934592"
+      secrets:
+      - key: mycsisecret
+        secret: secret1
+      - key: mycsisecret2
+        secret: secret4
+      availability: active
   external-volume:
     name: external-volume
     external: true
@@ -1409,12 +1477,17 @@ func fullExampleJSON(workingDir string) string {
           "tmpfs": {
             "size": 10000
           }
+        },
+        {
+          "type": "cluster",
+          "source": "group:mygroup",
+          "target": "/srv"
         }
       ],
       "working_dir": "/code"
     }
   },
-  "version": "3.9",
+  "version": "3.10",
   "volumes": {
     "another-volume": {
       "name": "user_specified_name",
@@ -1424,6 +1497,57 @@ func fullExampleJSON(workingDir string) string {
         "foo": "bar"
       },
       "external": false
+    },
+    "cluster-volume": {
+      "driver": "my-csi-driver",
+      "external": false,
+      "x-cluster-spec": {
+        "group": "mygroup",
+        "access_mode": {
+          "scope": "single",
+          "sharing": "none",
+          "block_volume": {}
+        },
+        "accessibility_requirements": {
+          "requisite": [
+            {
+              "segments": {
+                "region": "R1",
+                "zone": "Z1"
+              }
+            },
+            {
+              "segments": {
+                "region": "R1",
+                "zone": "Z2"
+              }
+            }
+          ],
+          "preferred": [
+            {
+              "segments": {
+                "region": "R1",
+                "zone": "Z1"
+              }
+            }
+          ]
+        },
+        "capacity_range": {
+          "required_bytes": "1073741824",
+          "limit_bytes": "8589934592"
+        },
+        "secrets": [
+          {
+            "key": "mycsisecret",
+            "secret": "secret1"
+          },
+          {
+            "key": "mycsisecret2",
+            "secret": "secret4"
+          }
+        ],
+        "availability": "active"
+      }
     },
     "external-volume": {
       "name": "external-volume",

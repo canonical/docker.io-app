@@ -74,14 +74,14 @@ func addSigner(cli command.Cli, options signerAddOptions) error {
 		}
 	}
 	if len(errRepos) > 0 {
-		return fmt.Errorf("Failed to add signer to: %s", strings.Join(errRepos, ", "))
+		return fmt.Errorf("failed to add signer to: %s", strings.Join(errRepos, ", "))
 	}
 	return nil
 }
 
 func addSignerToRepo(cli command.Cli, signerName string, repoName string, signerPubKeys []data.PublicKey) error {
 	ctx := context.Background()
-	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, nil, image.AuthResolver(cli), repoName)
+	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, image.AuthResolver(cli), repoName)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func ingestPublicKeys(pubKeyPaths []string) ([]data.PublicKey, error) {
 	pubKeys := []data.PublicKey{}
 	for _, pubKeyPath := range pubKeyPaths {
 		// Read public key bytes from PEM file, limit to 1 KiB
-		pubKeyFile, err := os.OpenFile(pubKeyPath, os.O_RDONLY, 0666)
+		pubKeyFile, err := os.OpenFile(pubKeyPath, os.O_RDONLY, 0o666)
 		if err != nil {
 			return nil, errors.Wrap(err, "unable to read public key from file")
 		}

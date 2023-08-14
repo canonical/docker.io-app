@@ -3,18 +3,7 @@
 set -e
 rm -rf "$DEST"
 
-install_binary() {
-	local file="$1"
-	local target="${DOCKER_MAKE_INSTALL_PREFIX:=/usr/local}/bin/"
-	if [ "$(go env GOOS)" == "linux" ]; then
-		echo "Installing $(basename $file) to ${target}"
-		mkdir -p "$target"
-		cp -f -L "$file" "$target"
-	else
-		echo "Install is only supported on linux"
-		return 1
-	fi
-}
+source "${MAKEDIR}/.install"
 
 (
 	DEST="$(dirname $DEST)/binary-daemon"
@@ -22,7 +11,6 @@ install_binary() {
 	install_binary "${DEST}/runc"
 	install_binary "${DEST}/containerd"
 	install_binary "${DEST}/ctr"
-	install_binary "${DEST}/containerd-shim"
 	install_binary "${DEST}/containerd-shim-runc-v2"
 	install_binary "${DEST}/docker-proxy"
 	install_binary "${DEST}/docker-init"

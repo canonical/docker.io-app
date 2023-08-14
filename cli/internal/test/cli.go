@@ -20,7 +20,6 @@ import (
 
 // NotaryClientFuncType defines a function that returns a fake notary client
 type NotaryClientFuncType func(imgRefAndAuth trust.ImageRefAndAuth, actions []string) (notaryclient.Repository, error)
-type clientInfoFuncType func() command.ClientInfo
 
 // FakeCli emulates the default DockerCli
 type FakeCli struct {
@@ -32,7 +31,6 @@ type FakeCli struct {
 	err              *bytes.Buffer
 	in               *streams.In
 	server           command.ServerInfo
-	clientInfoFunc   clientInfoFuncType
 	notaryClientFunc NotaryClientFuncType
 	manifestStore    manifeststore.Store
 	registryClient   registryclient.RegistryClient
@@ -54,7 +52,8 @@ func NewFakeCli(client client.APIClient, opts ...func(*FakeCli)) *FakeCli {
 		in:        streams.NewIn(io.NopCloser(strings.NewReader(""))),
 		// Use an empty string for filename so that tests don't create configfiles
 		// Set cli.ConfigFile().Filename to a tempfile to support Save.
-		configfile: configfile.New(""),
+		configfile:     configfile.New(""),
+		currentContext: command.DefaultContextName,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -102,6 +101,11 @@ func (c *FakeCli) Client() client.APIClient {
 	return c.client
 }
 
+// CurrentVersion returns the API version used by FakeCli.
+func (c *FakeCli) CurrentVersion() string {
+	return c.DefaultVersion()
+}
+
 // Out returns the output stream (stdout) the cli should write on
 func (c *FakeCli) Out() *streams.Out {
 	return c.out
@@ -142,19 +146,6 @@ func (c *FakeCli) ServerInfo() command.ServerInfo {
 	return c.server
 }
 
-// ClientInfo returns client information
-func (c *FakeCli) ClientInfo() command.ClientInfo {
-	if c.clientInfoFunc != nil {
-		return c.clientInfoFunc()
-	}
-	return c.DockerCli.ClientInfo()
-}
-
-// SetClientInfo sets the internal getter for retrieving a ClientInfo
-func (c *FakeCli) SetClientInfo(clientInfoFunc clientInfoFuncType) {
-	c.clientInfoFunc = clientInfoFunc
-}
-
 // OutBuffer returns the stdout buffer
 func (c *FakeCli) OutBuffer() *bytes.Buffer {
 	return c.outBuffer
@@ -190,7 +181,7 @@ func (c *FakeCli) ManifestStore() manifeststore.Store {
 }
 
 // RegistryClient returns a fake client for testing
-func (c *FakeCli) RegistryClient(insecure bool) registryclient.RegistryClient {
+func (c *FakeCli) RegistryClient(bool) registryclient.RegistryClient {
 	return c.registryClient
 }
 
@@ -214,23 +205,7 @@ func EnableContentTrust(c *FakeCli) {
 	c.contentTrust = true
 }
 
-// StackOrchestrator return the selected stack orchestrator
-func (c *FakeCli) StackOrchestrator(flagValue string) (command.Orchestrator, error) {
-	configOrchestrator := ""
-	if c.configfile != nil {
-		configOrchestrator = c.configfile.StackOrchestrator
-	}
-	ctxOrchestrator := ""
-	if c.currentContext != "" && c.contextStore != nil {
-		meta, err := c.contextStore.GetMetadata(c.currentContext)
-		if err != nil {
-			return "", err
-		}
-		context, err := command.GetDockerContext(meta)
-		if err != nil {
-			return "", err
-		}
-		ctxOrchestrator = string(context.StackOrchestrator)
-	}
-	return command.GetStackOrchestrator(flagValue, ctxOrchestrator, configOrchestrator, c.err)
+// BuildKitEnabled on the fake cli
+func (c *FakeCli) BuildKitEnabled() (bool, error) {
+	return true, nil
 }

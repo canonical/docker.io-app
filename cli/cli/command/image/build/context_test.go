@@ -11,14 +11,14 @@ import (
 	"testing"
 
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/fileutils"
+	"github.com/moby/patternmatcher"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 const dockerfileContents = "FROM busybox"
 
-func prepareEmpty(t *testing.T) string {
+func prepareEmpty(_ *testing.T) string {
 	return ""
 }
 
@@ -119,7 +119,6 @@ func TestGetContextFromLocalDirWithCustomDockerfile(t *testing.T) {
 
 func TestGetContextFromReaderString(t *testing.T) {
 	tarArchive, relDockerfile, err := GetContextFromReader(io.NopCloser(strings.NewReader(dockerfileContents)), "")
-
 	if err != nil {
 		t.Fatalf("Error when executing GetContextFromReader: %s", err)
 	}
@@ -234,7 +233,7 @@ func createTestTempDir(t *testing.T) string {
 func createTestTempFile(t *testing.T, dir, filename, contents string) string {
 	t.Helper()
 	filePath := filepath.Join(dir, filename)
-	err := os.WriteFile(filePath, []byte(contents), 0777)
+	err := os.WriteFile(filePath, []byte(contents), 0o777)
 	assert.NilError(t, err)
 	return filePath
 }
@@ -253,7 +252,7 @@ func chdir(t *testing.T, dir string) {
 }
 
 func TestIsArchive(t *testing.T) {
-	var testcases = []struct {
+	testcases := []struct {
 		doc      string
 		header   []byte
 		expected bool
@@ -285,7 +284,7 @@ func TestIsArchive(t *testing.T) {
 }
 
 func TestDetectArchiveReader(t *testing.T) {
-	var testcases = []struct {
+	testcases := []struct {
 		file     string
 		desc     string
 		expected bool
@@ -317,9 +316,9 @@ func TestDetectArchiveReader(t *testing.T) {
 	}
 }
 
-func mustPatternMatcher(t *testing.T, patterns []string) *fileutils.PatternMatcher {
+func mustPatternMatcher(t *testing.T, patterns []string) *patternmatcher.PatternMatcher {
 	t.Helper()
-	pm, err := fileutils.NewPatternMatcher(patterns)
+	pm, err := patternmatcher.New(patterns)
 	if err != nil {
 		t.Fatal("failed to construct pattern matcher: ", err)
 	}

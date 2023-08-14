@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/devicemapper"
 	"github.com/docker/docker/pkg/dmesg"
 	"github.com/docker/docker/pkg/idtools"
@@ -117,8 +116,7 @@ type DeviceSet struct {
 	BaseDeviceFilesystem  string // save filesystem of base device
 	nrDeletedDevices      uint   // number of deleted devices
 	deletionWorkerTicker  *time.Ticker
-	uidMaps               []idtools.IDMap
-	gidMaps               []idtools.IDMap
+	idMap                 idtools.IdentityMapping
 	minFreeSpacePercent   uint32 // min free space percentage in thinpool
 	xfsNospaceRetries     string // max retries when xfs receives ENOSPC
 	lvmSetupConfig        directLVMConfig
@@ -264,11 +262,7 @@ func (devices *DeviceSet) ensureImage(name string, size int64) (string, error) {
 	dirname := devices.loopbackDir()
 	filename := path.Join(dirname, name)
 
-	uid, gid, err := idtools.GetRootUIDGID(devices.uidMaps, devices.gidMaps)
-	if err != nil {
-		return "", err
-	}
-	if err := idtools.MkdirAllAndChown(dirname, 0700, idtools.Identity{UID: uid, GID: gid}); err != nil {
+	if err := idtools.MkdirAllAndChown(dirname, 0700, devices.idMap.RootPair()); err != nil {
 		return "", err
 	}
 
@@ -412,33 +406,33 @@ func (devices *DeviceSet) constructDeviceIDMap() {
 	}
 }
 
-func (devices *DeviceSet) deviceFileWalkFunction(path string, finfo os.FileInfo) error {
+func (devices *DeviceSet) deviceFileWalkFunction(path string, name string) error {
 	logger := logrus.WithField("storage-driver", "devicemapper")
 
 	// Skip some of the meta files which are not device files.
-	if strings.HasSuffix(finfo.Name(), ".migrated") {
+	if strings.HasSuffix(name, ".migrated") {
 		logger.Debugf("Skipping file %s", path)
 		return nil
 	}
 
-	if strings.HasPrefix(finfo.Name(), ".") {
+	if strings.HasPrefix(name, ".") {
 		logger.Debugf("Skipping file %s", path)
 		return nil
 	}
 
-	if finfo.Name() == deviceSetMetaFile {
+	if name == deviceSetMetaFile {
 		logger.Debugf("Skipping file %s", path)
 		return nil
 	}
 
-	if finfo.Name() == transactionMetaFile {
+	if name == transactionMetaFile {
 		logger.Debugf("Skipping file %s", path)
 		return nil
 	}
 
 	logger.Debugf("Loading data for file %s", path)
 
-	hash := finfo.Name()
+	hash := name
 	if hash == "base" {
 		hash = ""
 	}
@@ -456,7 +450,7 @@ func (devices *DeviceSet) loadDeviceFilesOnStart() error {
 	logrus.WithField("storage-driver", "devicemapper").Debug("loadDeviceFilesOnStart()")
 	defer logrus.WithField("storage-driver", "devicemapper").Debug("loadDeviceFilesOnStart() END")
 
-	var scan = func(path string, info os.FileInfo, err error) error {
+	var scan = func(path string, info os.DirEntry, err error) error {
 		if err != nil {
 			logrus.WithField("storage-driver", "devicemapper").Debugf("Can't walk the file %s", path)
 			return nil
@@ -467,10 +461,10 @@ func (devices *DeviceSet) loadDeviceFilesOnStart() error {
 			return nil
 		}
 
-		return devices.deviceFileWalkFunction(path, info)
+		return devices.deviceFileWalkFunction(path, info.Name())
 	}
 
-	return filepath.Walk(devices.metadataDir(), scan)
+	return filepath.WalkDir(devices.metadataDir(), scan)
 }
 
 // Should be called with devices.Lock() held.
@@ -652,7 +646,6 @@ func (devices *DeviceSet) migrateOldMetaData() error {
 		if err := os.Rename(devices.oldMetadataFile(), devices.oldMetadataFile()+".migrated"); err != nil {
 			return err
 		}
-
 	}
 
 	return nil
@@ -1153,7 +1146,6 @@ func (devices *DeviceSet) setupVerifyBaseImageUUIDFS(baseInfo *devInfo) error {
 }
 
 func (devices *DeviceSet) checkGrowBaseDeviceFS(info *devInfo) error {
-
 	if !userBaseSize {
 		return nil
 	}
@@ -1627,7 +1619,6 @@ func (devices *DeviceSet) loadThinPoolLoopBackInfo() error {
 			devices.dataDevice = dataLoopDevice
 			devices.dataLoopFile = datafilename
 		}
-
 	}
 
 	// metadata device has not been passed in. So there should be a
@@ -1648,7 +1639,6 @@ func (devices *DeviceSet) loadThinPoolLoopBackInfo() error {
 }
 
 func (devices *DeviceSet) enableDeferredRemovalDeletion() error {
-
 	// If user asked for deferred removal then check both libdm library
 	// and kernel driver support deferred removal otherwise error out.
 	if enableDeferredRemoval {
@@ -1681,12 +1671,7 @@ func (devices *DeviceSet) initDevmapper(doInit bool) (retErr error) {
 
 	// https://github.com/docker/docker/issues/4036
 	if supported := devicemapper.UdevSetSyncSupport(true); !supported {
-		if dockerversion.IAmStatic == "true" {
-			logger.Error("Udev sync is not supported. This will lead to data loss and unexpected behavior. Install a dynamic binary to use devicemapper or select a different storage driver. For more information, see https://docs.docker.com/engine/reference/commandline/dockerd/#storage-driver-options")
-		} else {
-			logger.Error("Udev sync is not supported. This will lead to data loss and unexpected behavior. Install a more recent version of libdevmapper or select a different storage driver. For more information, see https://docs.docker.com/engine/reference/commandline/dockerd/#storage-driver-options")
-		}
-
+		logger.Error("Udev sync is not supported, which will lead to data loss and unexpected behavior. Make sure you have a recent version of libdevmapper installed and are running a dynamic binary, or select a different storage driver. For more information, see https://docs.docker.com/go/storage-driver/")
 		if !devices.overrideUdevSyncCheck {
 			return graphdriver.ErrNotSupported
 		}
@@ -1694,11 +1679,7 @@ func (devices *DeviceSet) initDevmapper(doInit bool) (retErr error) {
 
 	// create the root dir of the devmapper driver ownership to match this
 	// daemon's remapped root uid/gid so containers can start properly
-	uid, gid, err := idtools.GetRootUIDGID(devices.uidMaps, devices.gidMaps)
-	if err != nil {
-		return err
-	}
-	if err := idtools.MkdirAndChown(devices.root, 0700, idtools.Identity{UID: uid, GID: gid}); err != nil {
+	if err := idtools.MkdirAndChown(devices.root, 0700, devices.idMap.RootPair()); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(devices.metadataDir(), 0700); err != nil {
@@ -1955,7 +1936,6 @@ func (devices *DeviceSet) AddDevice(hash, baseHash string, storageOpt map[string
 }
 
 func (devices *DeviceSet) parseStorageOpt(storageOpt map[string]string) (uint64, error) {
-
 	// Read size to change the block device size per container.
 	for key, val := range storageOpt {
 		key := strings.ToLower(key)
@@ -2622,7 +2602,7 @@ func (devices *DeviceSet) exportDeviceMetadata(hash string) (*deviceMetadata, er
 }
 
 // NewDeviceSet creates the device set based on the options provided.
-func NewDeviceSet(root string, doInit bool, options []string, uidMaps, gidMaps []idtools.IDMap) (*DeviceSet, error) {
+func NewDeviceSet(root string, doInit bool, options []string, idMap idtools.IdentityMapping) (*DeviceSet, error) {
 	devicemapper.SetDevDir("/dev")
 
 	devices := &DeviceSet{
@@ -2636,8 +2616,7 @@ func NewDeviceSet(root string, doInit bool, options []string, uidMaps, gidMaps [
 		thinpBlockSize:        defaultThinpBlockSize,
 		deviceIDMap:           make([]byte, deviceIDMapSz),
 		deletionWorkerTicker:  time.NewTicker(time.Second * 30),
-		uidMaps:               uidMaps,
-		gidMaps:               gidMaps,
+		idMap:                 idMap,
 		minFreeSpacePercent:   defaultMinFreeSpacePercent,
 	}
 

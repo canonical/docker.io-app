@@ -5,28 +5,33 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	ctd "github.com/containerd/containerd"
 	"github.com/containerd/containerd/content/local"
 	ctdmetadata "github.com/containerd/containerd/metadata"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/builder/builder-next/adapters/containerimage"
 	"github.com/docker/docker/builder/builder-next/adapters/localinlinecache"
 	"github.com/docker/docker/builder/builder-next/adapters/snapshot"
-	containerimageexp "github.com/docker/docker/builder/builder-next/exporter"
+	"github.com/docker/docker/builder/builder-next/exporter/mobyexporter"
 	"github.com/docker/docker/builder/builder-next/imagerefchecker"
 	mobyworker "github.com/docker/docker/builder/builder-next/worker"
+	wlabel "github.com/docker/docker/builder/builder-next/worker/label"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/graphdriver"
 	units "github.com/docker/go-units"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/cache/metadata"
 	"github.com/moby/buildkit/cache/remotecache"
+	"github.com/moby/buildkit/cache/remotecache/gha"
 	inlineremotecache "github.com/moby/buildkit/cache/remotecache/inline"
 	localremotecache "github.com/moby/buildkit/cache/remotecache/local"
+	registryremotecache "github.com/moby/buildkit/cache/remotecache/registry"
 	"github.com/moby/buildkit/client"
+	bkconfig "github.com/moby/buildkit/cmd/buildkitd/config"
 	"github.com/moby/buildkit/control"
 	"github.com/moby/buildkit/frontend"
 	dockerfile "github.com/moby/buildkit/frontend/dockerfile/builder"
@@ -37,19 +42,144 @@ import (
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/entitlements"
 	"github.com/moby/buildkit/util/leaseutil"
+	"github.com/moby/buildkit/util/network/netproviders"
 	"github.com/moby/buildkit/worker"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/buildkit/worker/containerd"
+	"github.com/moby/buildkit/worker/label"
 	"github.com/pkg/errors"
+	"go.etcd.io/bbolt"
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/moby/buildkit/solver/pb"
+	"github.com/moby/buildkit/util/apicaps"
 )
 
-func newController(rt http.RoundTripper, opt Opt) (*control.Controller, error) {
+func newController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
+	if opt.UseSnapshotter {
+		return newSnapshotterController(ctx, rt, opt)
+	}
+	return newGraphDriverController(ctx, rt, opt)
+}
+
+func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
+	if err := os.MkdirAll(opt.Root, 0o711); err != nil {
+		return nil, err
+	}
+
+	historyDB, historyConf, err := openHistoryDB(opt.Root, opt.BuilderConfig.History)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheStorage, err := bboltcachestorage.NewStore(filepath.Join(opt.Root, "cache.db"))
+	if err != nil {
+		return nil, err
+	}
+
+	nc := netproviders.Opt{
+		Mode: "host",
+	}
+	dns := getDNSConfig(opt.DNSConfig)
+
+	wo, err := containerd.NewWorkerOpt(opt.Root, opt.ContainerdAddress, opt.Snapshotter, opt.ContainerdNamespace,
+		opt.Rootless, map[string]string{
+			label.Snapshotter: opt.Snapshotter,
+		}, dns, nc, opt.ApparmorProfile, false, nil, "", ctd.WithTimeout(60*time.Second))
+	if err != nil {
+		return nil, err
+	}
+
+	policy, err := getGCPolicy(opt.BuilderConfig, opt.Root)
+	if err != nil {
+		return nil, err
+	}
+
+	wo.GCPolicy = policy
+	wo.RegistryHosts = opt.RegistryHosts
+	wo.Labels = getLabels(opt, wo.Labels)
+
+	exec, err := newExecutor(opt.Root, opt.DefaultCgroupParent, opt.NetworkController, dns, opt.Rootless, opt.IdentityMapping, opt.ApparmorProfile)
+	if err != nil {
+		return nil, err
+	}
+	wo.Executor = exec
+
+	w, err := mobyworker.NewContainerdWorker(ctx, wo)
+	if err != nil {
+		return nil, err
+	}
+
+	wc := &worker.Controller{}
+
+	err = wc.Add(w)
+	if err != nil {
+		return nil, err
+	}
+	frontends := map[string]frontend.Frontend{
+		"dockerfile.v0": forwarder.NewGatewayForwarder(wc, dockerfile.Build),
+		"gateway.v0":    gateway.NewGatewayFrontend(wc),
+	}
+
+	return control.NewController(control.Opt{
+		SessionManager:   opt.SessionManager,
+		WorkerController: wc,
+		Frontends:        frontends,
+		CacheKeyStorage:  cacheStorage,
+		ResolveCacheImporterFuncs: map[string]remotecache.ResolveCacheImporterFunc{
+			"gha":      gha.ResolveCacheImporterFunc(),
+			"local":    localremotecache.ResolveCacheImporterFunc(opt.SessionManager),
+			"registry": registryremotecache.ResolveCacheImporterFunc(opt.SessionManager, wo.ContentStore, opt.RegistryHosts),
+		},
+		ResolveCacheExporterFuncs: map[string]remotecache.ResolveCacheExporterFunc{
+			"gha":      gha.ResolveCacheExporterFunc(),
+			"inline":   inlineremotecache.ResolveCacheExporterFunc(),
+			"local":    localremotecache.ResolveCacheExporterFunc(opt.SessionManager),
+			"registry": registryremotecache.ResolveCacheExporterFunc(opt.SessionManager, opt.RegistryHosts),
+		},
+		Entitlements:  getEntitlements(opt.BuilderConfig),
+		HistoryDB:     historyDB,
+		HistoryConfig: historyConf,
+		LeaseManager:  wo.LeaseManager,
+		ContentStore:  wo.ContentStore,
+	})
+}
+
+func openHistoryDB(root string, cfg *config.BuilderHistoryConfig) (*bolt.DB, *bkconfig.HistoryConfig, error) {
+	db, err := bbolt.Open(filepath.Join(root, "history.db"), 0o600, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var conf *bkconfig.HistoryConfig
+	if cfg != nil {
+		conf = &bkconfig.HistoryConfig{
+			MaxAge:     cfg.MaxAge,
+			MaxEntries: cfg.MaxEntries,
+		}
+	}
+
+	return db, conf, nil
+}
+
+func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
 	if err := os.MkdirAll(opt.Root, 0711); err != nil {
 		return nil, err
 	}
 
 	dist := opt.Dist
 	root := opt.Root
+
+	pb.Caps.Init(apicaps.Cap{
+		ID:                pb.CapMergeOp,
+		Enabled:           false,
+		DisabledReasonMsg: "only enabled with containerd image store backend",
+	})
+
+	pb.Caps.Init(apicaps.Cap{
+		ID:                pb.CapDiffOp,
+		Enabled:           false,
+		DisabledReasonMsg: "only enabled with containerd image store backend",
+	})
 
 	var driver graphdriver.Driver
 	if ls, ok := dist.LayerStore.(interface {
@@ -140,21 +270,26 @@ func newController(rt http.RoundTripper, opt Opt) (*control.Controller, error) {
 		return nil, err
 	}
 
-	differ, ok := snapshotter.(containerimageexp.Differ)
+	differ, ok := snapshotter.(mobyexporter.Differ)
 	if !ok {
 		return nil, errors.Errorf("snapshotter doesn't support differ")
 	}
 
-	exp, err := containerimageexp.New(containerimageexp.Opt{
-		ImageStore:     dist.ImageStore,
-		ReferenceStore: dist.ReferenceStore,
-		Differ:         differ,
+	exp, err := mobyexporter.New(mobyexporter.Opt{
+		ImageStore:  dist.ImageStore,
+		Differ:      differ,
+		ImageTagger: opt.ImageTagger,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	cacheStorage, err := bboltcachestorage.NewStore(filepath.Join(opt.Root, "cache.db"))
+	if err != nil {
+		return nil, err
+	}
+
+	historyDB, historyConf, err := openHistoryDB(opt.Root, opt.BuilderConfig.History)
 	if err != nil {
 		return nil, err
 	}
@@ -169,22 +304,16 @@ func newController(rt http.RoundTripper, opt Opt) (*control.Controller, error) {
 		return nil, errors.Errorf("snapshotter doesn't support differ")
 	}
 
-	p, err := parsePlatforms(archutil.SupportedPlatforms(true))
-	if err != nil {
-		return nil, err
-	}
-
-	leases, err := lm.List(context.TODO(), "labels.\"buildkit/lease.temporary\"")
+	leases, err := lm.List(ctx, `labels."buildkit/lease.temporary"`)
 	if err != nil {
 		return nil, err
 	}
 	for _, l := range leases {
-		lm.Delete(context.TODO(), l)
+		lm.Delete(ctx, l)
 	}
 
 	wopt := mobyworker.Opt{
-		ID:                "moby",
-		MetadataStore:     md,
+		ID:                opt.EngineID,
 		ContentStore:      store,
 		CacheManager:      cm,
 		GCPolicy:          gcPolicy,
@@ -196,7 +325,9 @@ func newController(rt http.RoundTripper, opt Opt) (*control.Controller, error) {
 		Exporter:          exp,
 		Transport:         rt,
 		Layers:            layers,
-		Platforms:         p,
+		Platforms:         archutil.SupportedPlatforms(true),
+		LeaseManager:      lm,
+		Labels:            getLabels(opt, nil),
 	}
 
 	wc := &worker.Controller{}
@@ -223,7 +354,11 @@ func newController(rt http.RoundTripper, opt Opt) (*control.Controller, error) {
 		ResolveCacheExporterFuncs: map[string]remotecache.ResolveCacheExporterFunc{
 			"inline": inlineremotecache.ResolveCacheExporterFunc(),
 		},
-		Entitlements: getEntitlements(opt.BuilderConfig),
+		Entitlements:  getEntitlements(opt.BuilderConfig),
+		LeaseManager:  lm,
+		ContentStore:  store,
+		HistoryDB:     historyDB,
+		HistoryConfig: historyConf,
 	})
 }
 
@@ -268,18 +403,6 @@ func getGCPolicy(conf config.BuilderConfig, root string) ([]client.PruneInfo, er
 	return gcPolicy, nil
 }
 
-func parsePlatforms(platformsStr []string) ([]specs.Platform, error) {
-	out := make([]specs.Platform, 0, len(platformsStr))
-	for _, s := range platformsStr {
-		p, err := platforms.Parse(s)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, platforms.Normalize(p))
-	}
-	return out, nil
-}
-
 func getEntitlements(conf config.BuilderConfig) []string {
 	var ents []string
 	// Incase of no config settings, NetworkHost should be enabled & SecurityInsecure must be disabled.
@@ -290,4 +413,12 @@ func getEntitlements(conf config.BuilderConfig) []string {
 		ents = append(ents, string(entitlements.EntitlementSecurityInsecure))
 	}
 	return ents
+}
+
+func getLabels(opt Opt, labels map[string]string) map[string]string {
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[wlabel.HostGatewayIP] = opt.DNSConfig.HostGatewayIP.String()
+	return labels
 }

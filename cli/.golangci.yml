@@ -1,8 +1,10 @@
 linters:
   enable:
     - bodyclose
+    - depguard
     - dogsled
     - gocyclo
+    - gofumpt
     - goimports
     - gosec
     - gosimple
@@ -24,14 +26,18 @@ linters:
 
 run:
   timeout: 5m
-  skip-dirs:
-    - cli/command/stack/kubernetes/api/openapi
-    - cli/command/stack/kubernetes/api/client
   skip-files:
     - cli/compose/schema/bindata.go
     - .*generated.*
 
 linters-settings:
+  depguard:
+    list-type: blacklist
+    include-go-root: true
+    packages:
+      # The io/ioutil package has been deprecated.
+      # https://go.dev/doc/go1.16#ioutil
+      - io/ioutil
   gocyclo:
     min-complexity: 16
   govet:
@@ -117,12 +123,6 @@ issues:
       linters:
         - errcheck
         - gosec
-
-    # Fixing these lints would change user-facing output, which would be
-    # undesirable to introduce in a patch release.
-    - text: "ST1005: error strings should not be capitalized"
-      linters:
-        - stylecheck
 
   # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
   max-issues-per-linter: 0

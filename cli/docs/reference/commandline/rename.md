@@ -1,19 +1,14 @@
----
-title: "rename"
-description: "The rename command description and usage"
-keywords: "rename, docker, container"
----
-
 # rename
 
-```markdown
-Usage:  docker rename CONTAINER NEW_NAME
-
+<!---MARKER_GEN_START-->
 Rename a container
 
-Options:
-      --help   Print usage
-```
+### Aliases
+
+`docker container rename`, `docker rename`
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 

@@ -20,15 +20,8 @@ func summaryFromInterface(i interface{}) (*libcontainerdtypes.Summary, error) {
 	return &libcontainerdtypes.Summary{}, nil
 }
 
-func (c *client) UpdateResources(ctx context.Context, containerID string, resources *libcontainerdtypes.Resources) error {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return err
-	}
-
-	// go doesn't like the alias in 1.8, this means this need to be
-	// platform specific
-	return p.(containerd.Task).Update(ctx, containerd.WithResources((*specs.LinuxResources)(resources)))
+func (t *task) UpdateResources(ctx context.Context, resources *libcontainerdtypes.Resources) error {
+	return t.Update(ctx, containerd.WithResources(resources))
 }
 
 func hostIDFromMap(id uint32, mp []specs.LinuxIDMapping) int {

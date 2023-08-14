@@ -7,6 +7,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/distribution/reference"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
@@ -55,8 +56,7 @@ func runPush(dockerCli command.Cli, opts pushOptions) error {
 		return err
 	}
 	authConfig := command.ResolveAuthConfig(ctx, dockerCli, repoInfo.Index)
-
-	encodedAuth, err := command.EncodeAuthToBase64(authConfig)
+	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,6 @@ func runPush(dockerCli command.Cli, opts pushOptions) error {
 	defer responseBody.Close()
 
 	if !opts.untrusted {
-		repoInfo.Class = "plugin"
 		return image.PushTrustedReference(dockerCli, repoInfo, named, authConfig, responseBody)
 	}
 

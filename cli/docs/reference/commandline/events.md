@@ -1,23 +1,23 @@
----
-title: "events"
-description: "The events command description and usage"
-keywords: "events, container, report"
----
-
 # events
 
-```markdown
-Usage:  docker events [OPTIONS]
-
+<!---MARKER_GEN_START-->
 Get real time events from the server
 
-Options:
-  -f, --filter value   Filter output based on conditions provided (default [])
-      --format string  Format the output using the given Go template
-      --help           Print usage
-      --since string   Show all events created since timestamp
-      --until string   Stream events until this timestamp
-```
+### Aliases
+
+`docker system events`, `docker events`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                   |
+|:---------------------------------------|:---------|:--------|:----------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided    |
+| [`--format`](#format)                  | `string` |         | Format the output using the given Go template |
+| [`--since`](#since)                    | `string` |         | Show all events created since timestamp       |
+| `--until`                              | `string` |         | Stream events until this timestamp            |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 

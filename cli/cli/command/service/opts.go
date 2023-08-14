@@ -14,10 +14,10 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
-	"github.com/docker/swarmkit/api"
-	"github.com/docker/swarmkit/api/defaults"
 	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/google/shlex"
+	"github.com/moby/swarmkit/v2/api"
+	"github.com/moby/swarmkit/v2/api/defaults"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
@@ -93,17 +93,17 @@ func (opts *placementPrefOpts) String() string {
 // Note: in the future strategies other than "spread", may be supported,
 // as well as additional comma-separated options.
 func (opts *placementPrefOpts) Set(value string) error {
-	fields := strings.Split(value, "=")
-	if len(fields) != 2 {
+	strategy, arg, ok := strings.Cut(value, "=")
+	if !ok || strategy == "" {
 		return errors.New(`placement preference must be of the format "<strategy>=<arg>"`)
 	}
-	if fields[0] != "spread" {
-		return errors.Errorf("unsupported placement preference %s (only spread is supported)", fields[0])
+	if strategy != "spread" {
+		return errors.Errorf("unsupported placement preference %s (only spread is supported)", strategy)
 	}
 
 	opts.prefs = append(opts.prefs, swarm.PlacementPreference{
 		Spread: &swarm.SpreadOver{
-			SpreadDescriptor: fields[1],
+			SpreadDescriptor: arg,
 		},
 	})
 	opts.strings = append(opts.strings, value)
@@ -121,8 +121,11 @@ type ShlexOpt []string
 // Set the value
 func (s *ShlexOpt) Set(value string) error {
 	valueSlice, err := shlex.Split(value)
-	*s = ShlexOpt(valueSlice)
-	return err
+	if err != nil {
+		return err
+	}
+	*s = valueSlice
+	return nil
 }
 
 // Type returns the tyep of the value
@@ -475,10 +478,12 @@ func (opts *healthCheckOptions) toHealthConfig() (*container.HealthConfig, error
 //
 // This assumes input value (<host>:<ip>) has already been validated
 func convertExtraHostsToSwarmHosts(extraHosts []string) []string {
-	hosts := []string{}
+	hosts := make([]string, 0, len(extraHosts))
 	for _, extraHost := range extraHosts {
-		parts := strings.SplitN(extraHost, ":", 2)
-		hosts = append(hosts, fmt.Sprintf("%s %s", parts[1], parts[0]))
+		host, ip, ok := strings.Cut(extraHost, ":")
+		if ok {
+			hosts = append(hosts, ip+" "+host)
+		}
 	}
 	return hosts
 }
@@ -628,7 +633,7 @@ func (options *serviceOptions) makeEnv() ([]string, error) {
 	}
 	currentEnv := make([]string, 0, len(envVariables))
 	for _, env := range envVariables { // need to process each var, in order
-		k := strings.SplitN(env, "=", 2)[0]
+		k, _, _ := strings.Cut(env, "=")
 		for i, current := range currentEnv { // remove duplicates
 			if current == env {
 				continue // no update required, may hide this behind flag to preserve order of envVariables
@@ -844,7 +849,6 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.Var(&opts.resources.resMemBytes, flagReserveMemory, "Reserve Memory")
 	flags.Int64Var(&opts.resources.limitPids, flagLimitPids, 0, "Limit maximum number of processes (default 0 = unlimited)")
 	flags.SetAnnotation(flagLimitPids, "version", []string{"1.41"})
-	flags.SetAnnotation(flagLimitPids, "swarm", nil)
 
 	flags.Var(&opts.stopGrace, flagStopGracePeriod, flagDesc(flagStopGracePeriod, "Time to wait before force killing a container (ns|us|ms|s|m|h)"))
 	flags.Var(&opts.replicas, flagReplicas, "Number of tasks")
@@ -853,7 +857,7 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.Uint64Var(&opts.maxReplicas, flagMaxReplicas, defaultFlagValues.getUint64(flagMaxReplicas), "Maximum number of tasks per node (default 0 = unlimited)")
 	flags.SetAnnotation(flagMaxReplicas, "version", []string{"1.40"})
 
-	flags.StringVar(&opts.restartPolicy.condition, flagRestartCondition, "", flagDesc(flagRestartCondition, `Restart when condition is met ("none"|"on-failure"|"any")`))
+	flags.StringVar(&opts.restartPolicy.condition, flagRestartCondition, "", flagDesc(flagRestartCondition, `Restart when condition is met ("none", "on-failure", "any")`))
 	flags.Var(&opts.restartPolicy.delay, flagRestartDelay, flagDesc(flagRestartDelay, "Delay between restart attempts (ns|us|ms|s|m|h)"))
 	flags.Var(&opts.restartPolicy.maxAttempts, flagRestartMaxAttempts, flagDesc(flagRestartMaxAttempts, "Maximum number of restarts before giving up"))
 
@@ -863,10 +867,10 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.DurationVar(&opts.update.delay, flagUpdateDelay, 0, flagDesc(flagUpdateDelay, "Delay between updates (ns|us|ms|s|m|h)"))
 	flags.DurationVar(&opts.update.monitor, flagUpdateMonitor, 0, flagDesc(flagUpdateMonitor, "Duration after each task update to monitor for failure (ns|us|ms|s|m|h)"))
 	flags.SetAnnotation(flagUpdateMonitor, "version", []string{"1.25"})
-	flags.StringVar(&opts.update.onFailure, flagUpdateFailureAction, "", flagDesc(flagUpdateFailureAction, `Action on update failure ("pause"|"continue"|"rollback")`))
+	flags.StringVar(&opts.update.onFailure, flagUpdateFailureAction, "", flagDesc(flagUpdateFailureAction, `Action on update failure ("pause", "continue", "rollback")`))
 	flags.Var(&opts.update.maxFailureRatio, flagUpdateMaxFailureRatio, flagDesc(flagUpdateMaxFailureRatio, "Failure rate to tolerate during an update"))
 	flags.SetAnnotation(flagUpdateMaxFailureRatio, "version", []string{"1.25"})
-	flags.StringVar(&opts.update.order, flagUpdateOrder, "", flagDesc(flagUpdateOrder, `Update order ("start-first"|"stop-first")`))
+	flags.StringVar(&opts.update.order, flagUpdateOrder, "", flagDesc(flagUpdateOrder, `Update order ("start-first", "stop-first")`))
 	flags.SetAnnotation(flagUpdateOrder, "version", []string{"1.29"})
 
 	flags.Uint64Var(&opts.rollback.parallelism, flagRollbackParallelism, defaultFlagValues.getUint64(flagRollbackParallelism),
@@ -876,11 +880,11 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.SetAnnotation(flagRollbackDelay, "version", []string{"1.28"})
 	flags.DurationVar(&opts.rollback.monitor, flagRollbackMonitor, 0, flagDesc(flagRollbackMonitor, "Duration after each task rollback to monitor for failure (ns|us|ms|s|m|h)"))
 	flags.SetAnnotation(flagRollbackMonitor, "version", []string{"1.28"})
-	flags.StringVar(&opts.rollback.onFailure, flagRollbackFailureAction, "", flagDesc(flagRollbackFailureAction, `Action on rollback failure ("pause"|"continue")`))
+	flags.StringVar(&opts.rollback.onFailure, flagRollbackFailureAction, "", flagDesc(flagRollbackFailureAction, `Action on rollback failure ("pause", "continue")`))
 	flags.SetAnnotation(flagRollbackFailureAction, "version", []string{"1.28"})
 	flags.Var(&opts.rollback.maxFailureRatio, flagRollbackMaxFailureRatio, flagDesc(flagRollbackMaxFailureRatio, "Failure rate to tolerate during a rollback"))
 	flags.SetAnnotation(flagRollbackMaxFailureRatio, "version", []string{"1.28"})
-	flags.StringVar(&opts.rollback.order, flagRollbackOrder, "", flagDesc(flagRollbackOrder, `Rollback order ("start-first"|"stop-first")`))
+	flags.StringVar(&opts.rollback.order, flagRollbackOrder, "", flagDesc(flagRollbackOrder, `Rollback order ("start-first", "stop-first")`))
 	flags.SetAnnotation(flagRollbackOrder, "version", []string{"1.29"})
 
 	flags.StringVar(&opts.endpoint.mode, flagEndpointMode, defaultFlagValues.getString(flagEndpointMode), "Endpoint mode (vip or dnsrr)")

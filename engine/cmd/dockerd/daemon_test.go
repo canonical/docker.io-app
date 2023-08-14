@@ -12,16 +12,19 @@ import (
 )
 
 func defaultOptions(t *testing.T, configFile string) *daemonOptions {
-	opts := newDaemonOptions(&config.Config{})
+	cfg, err := config.New()
+	assert.NilError(t, err)
+	opts := newDaemonOptions(cfg)
 	opts.flags = &pflag.FlagSet{}
-	opts.InstallFlags(opts.flags)
-	if err := installConfigFlags(opts.daemonConfig, opts.flags); err != nil {
-		t.Fatal(err)
-	}
+	opts.installFlags(opts.flags)
+	err = installConfigFlags(opts.daemonConfig, opts.flags)
+	assert.NilError(t, err)
 	defaultDaemonConfigFile, err := getDefaultDaemonConfigFile()
 	assert.NilError(t, err)
 	opts.flags.StringVar(&opts.configFile, "config-file", defaultDaemonConfigFile, "")
 	opts.configFile = configFile
+	err = opts.flags.Parse([]string{})
+	assert.NilError(t, err)
 	return opts
 }
 
@@ -45,7 +48,7 @@ func TestLoadDaemonCliConfigWithTLS(t *testing.T) {
 	loadedConfig, err := loadDaemonCliConfig(opts)
 	assert.NilError(t, err)
 	assert.Assert(t, loadedConfig != nil)
-	assert.Check(t, is.Equal("/tmp/ca.pem", loadedConfig.CommonTLSOptions.CAFile))
+	assert.Check(t, is.Equal("/tmp/ca.pem", loadedConfig.TLSOptions.CAFile))
 }
 
 func TestLoadDaemonCliConfigWithConflicts(t *testing.T) {
@@ -161,15 +164,15 @@ func TestLoadDaemonConfigWithEmbeddedOptions(t *testing.T) {
 	loadedConfig, err := loadDaemonCliConfig(opts)
 	assert.NilError(t, err)
 	assert.Assert(t, loadedConfig != nil)
-	assert.Check(t, is.Equal("/etc/certs/ca.pem", loadedConfig.CommonTLSOptions.CAFile))
+	assert.Check(t, is.Equal("/etc/certs/ca.pem", loadedConfig.TLSOptions.CAFile))
 	assert.Check(t, is.Equal("syslog", loadedConfig.LogConfig.Type))
 }
 
 func TestLoadDaemonConfigWithRegistryOptions(t *testing.T) {
 	content := `{
-		"allow-nondistributable-artifacts": ["allow-nondistributable-artifacts.com"],
-		"registry-mirrors": ["https://mirrors.docker.com"],
-		"insecure-registries": ["https://insecure.docker.com"]
+		"allow-nondistributable-artifacts": ["allow-nondistributable-artifacts.example.com"],
+		"registry-mirrors": ["https://mirrors.example.com"],
+		"insecure-registries": ["https://insecure-registry.example.com"]
 	}`
 	tempFile := fs.NewFile(t, "config", fs.WithContent(content))
 	defer tempFile.Remove()
@@ -186,19 +189,15 @@ func TestLoadDaemonConfigWithRegistryOptions(t *testing.T) {
 
 func TestConfigureDaemonLogs(t *testing.T) {
 	conf := &config.Config{}
-	err := configureDaemonLogs(conf)
-	assert.NilError(t, err)
+	configureDaemonLogs(conf)
 	assert.Check(t, is.Equal(logrus.InfoLevel, logrus.GetLevel()))
 
 	conf.LogLevel = "warn"
-	err = configureDaemonLogs(conf)
-	assert.NilError(t, err)
+	configureDaemonLogs(conf)
 	assert.Check(t, is.Equal(logrus.WarnLevel, logrus.GetLevel()))
 
+	// log level should not be changed when passing an invalid value
 	conf.LogLevel = "foobar"
-	err = configureDaemonLogs(conf)
-	assert.Error(t, err, "unable to parse logging level: foobar")
-
-	// log level should not be changed after a failure
+	configureDaemonLogs(conf)
 	assert.Check(t, is.Equal(logrus.WarnLevel, logrus.GetLevel()))
 }

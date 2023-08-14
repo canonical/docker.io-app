@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/templates"
 	"github.com/docker/docker/api/types"
@@ -36,6 +37,10 @@ func NewEventsCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEvents(dockerCli, &options)
 		},
+		Annotations: map[string]string{
+			"aliases": "docker system events, docker events",
+		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
@@ -52,7 +57,8 @@ func runEvents(dockerCli command.Cli, options *eventsOptions) error {
 	if err != nil {
 		return cli.StatusError{
 			StatusCode: 64,
-			Status:     "Error parsing format: " + err.Error()}
+			Status:     "Error parsing format: " + err.Error(),
+		}
 	}
 	eventOptions := types.EventsOptions{
 		Since:   options.since,
