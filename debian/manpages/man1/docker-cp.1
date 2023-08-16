@@ -1,0 +1,40 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-cp - Copy files/folders between a container and the local filesystem
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker cp [OPTIONS] CONTAINER:SRC_PATH DEST_PATH|-
+	docker cp [OPTIONS] SRC_PATH|- CONTAINER:DEST_PATH\fP
+
+
+.SH DESCRIPTION
+.PP
+Alias for \fB\fCdocker container cp\fR\&.
+
+
+.SH OPTIONS
+.PP
+\fB-a\fP, \fB--archive\fP[=false]
+	Archive mode (copy all uid/gid information)
+
+.PP
+\fB-L\fP, \fB--follow-link\fP[=false]
+	Always follow symbol link in SRC_PATH
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for cp
+
+.PP
+\fB-q\fP, \fB--quiet\fP[=false]
+	Suppress progress output during copy. Progress output is automatically suppressed if no terminal is attached
+
+
+.SH SEE ALSO
+.PP
+\fBdocker(1)\fP

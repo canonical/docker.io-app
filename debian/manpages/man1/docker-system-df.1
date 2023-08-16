@@ -1,0 +1,40 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-system-df - Show docker disk usage
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker system df [OPTIONS]\fP
+
+
+.SH DESCRIPTION
+.PP
+Show docker disk usage
+
+
+.SH OPTIONS
+.PP
+\fB--format\fP=""
+	Format output using a custom template:
+'table':            Print output in table format with column headers (default)
+'table TEMPLATE':   Print output in table format using the given Go template
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for df
+
+.PP
+\fB-v\fP, \fB--verbose\fP[=false]
+	Show detailed information on space usage
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-system(1)\fP

@@ -1,0 +1,116 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-container-attach - Attach local standard input, output, and error streams to a running container
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker container attach [OPTIONS] CONTAINER\fP
+
+
+.SH DESCRIPTION
+.PP
+The \fBdocker attach\fP command allows you to attach to a running container using
+the container's ID or name, either to view its ongoing output or to control it
+interactively.  You can attach to the same contained process multiple times
+simultaneously, screen sharing style, or quickly view the progress of your
+detached process.
+
+.PP
+To stop a container, use \fB\fCCTRL-c\fR\&. This key sequence sends \fBSIGKILL\fP to the
+container. You can detach from the container (and leave it running) using a
+configurable key sequence. The default sequence is \fB\fCCTRL-p CTRL-q\fR\&. You
+configure the key sequence using the \fB--detach-keys\fP option or a configuration
+file. See \fBconfig-json(5)\fP for documentation on using a configuration file.
+
+.PP
+It is forbidden to redirect the standard input of a \fBdocker attach\fP command while
+attaching to a TTY-enabled container (i.e., launched with \fB\fC-i\fR and \fB\fC-t\fR).
+
+
+.SH EXAMPLES
+.SH Attaching to a container
+.PP
+In this example the top command is run inside a container from an ubuntu image,
+in detached mode, then attaches to it, and then terminates the container
+with \fB\fCCTRL-c\fR:
+
+.PP
+.RS
+
+.nf
+$ docker run -d --name topdemo ubuntu:20.04 /usr/bin/top -b
+$ docker attach topdemo
+top - 00:07:01 up  4:54,  0 users,  load average: 0.83, 0.91, 0.82
+Tasks:   1 total,   1 running,   0 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.3 us,  1.6 sy,  0.0 ni, 95.9 id,  0.0 wa,  0.1 hi,  0.1 si,  0.0 st
+MiB Mem :  15846.2 total,   5729.2 free,   2592.5 used,   7524.4 buff/cache
+MiB Swap:  16384.0 total,  16384.0 free,      0.0 used.  12097.3 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+      1 root      20   0    5976   3256   2828 R   0.0   0.0   0:00.04 top
+^C
+
+.fi
+.RE
+
+.SH Override the detach sequence
+.PP
+Use the \fB--detach-keys\fP option to override the Docker key sequence for detach.
+This is useful if the Docker default sequence conflicts with key sequence you
+use for other applications. There are two ways to define your own detach key
+sequence, as a per-container override or as a configuration property on  your
+entire configuration.
+
+.PP
+To override the sequence for an individual container, use the
+\fB--detach-keys\fP=\fIkey\fP flag with the \fBdocker attach\fP command. The format of
+the \fIkey\fP is either a letter [a-Z], or the \fBctrl\fP-\fIvalue\fP, where \fIvalue\fP is one
+of the following:
+
+.RS
+.IP \(bu 2
+\fBa-z\fP (a single lowercase alpha character )
+.IP \(bu 2
+\fB@\fP (at sign)
+.IP \(bu 2
+\fB[\fP (left bracket)
+.IP \(bu 2
+*\fI\\\\*\fP (two backward slashes)
+.IP \(bu 2
+\fB_\fP (underscore)
+.IP \(bu 2
+\fB^\fP (caret)
+
+.RE
+
+.PP
+These \fBa\fP, \fBctrl-a\fP, \fBX\fP, or *\fIctrl-\\*\fP values are all examples of valid key
+sequences. To configure a different configuration default key sequence for all
+containers, see \fBdocker(1)\fP\&.
+
+
+.SH OPTIONS
+.PP
+\fB--detach-keys\fP=""
+	Override the key sequence for detaching a container
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for attach
+
+.PP
+\fB--no-stdin\fP[=false]
+	Do not attach STDIN
+
+.PP
+\fB--sig-proxy\fP[=true]
+	Proxy all received signals to the process
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-container(1)\fP

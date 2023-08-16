@@ -1,0 +1,56 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-images - List images
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker images [OPTIONS] [REPOSITORY[:TAG]]\fP
+
+
+.SH DESCRIPTION
+.PP
+Alias for \fB\fCdocker image ls\fR\&.
+
+
+.SH OPTIONS
+.PP
+\fB-a\fP, \fB--all\fP[=false]
+	Show all images (default hides intermediate images)
+
+.PP
+\fB--digests\fP[=false]
+	Show digests
+
+.PP
+\fB-f\fP, \fB--filter\fP=
+	Filter output based on conditions provided
+
+.PP
+\fB--format\fP=""
+	Format output using a custom template:
+'table':            Print output in table format with column headers (default)
+'table TEMPLATE':   Print output in table format using the given Go template
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for images
+
+.PP
+\fB--no-trunc\fP[=false]
+	Don't truncate output
+
+.PP
+\fB-q\fP, \fB--quiet\fP[=false]
+	Only show image IDs
+
+
+.SH SEE ALSO
+.PP
+\fBdocker(1)\fP

@@ -1,0 +1,35 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-container-stop - Stop one or more running containers
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker container stop [OPTIONS] CONTAINER [CONTAINER...]\fP
+
+
+.SH DESCRIPTION
+.PP
+Stop a container (Send SIGTERM, and then SIGKILL after grace period)
+
+
+.SH OPTIONS
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for stop
+
+.PP
+\fB-s\fP, \fB--signal\fP=""
+	Signal to send to the container
+
+.PP
+\fB-t\fP, \fB--time\fP=0
+	Seconds to wait before killing the container
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-container(1)\fP

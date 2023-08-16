@@ -1,0 +1,43 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-stack-deploy - Deploy a new stack or update an existing stack
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker stack deploy [OPTIONS] STACK\fP
+
+
+.SH DESCRIPTION
+.PP
+Deploy a new stack or update an existing stack
+
+
+.SH OPTIONS
+.PP
+\fB-c\fP, \fB--compose-file\fP=[]
+	Path to a Compose file, or "-" to read from stdin
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for deploy
+
+.PP
+\fB--prune\fP[=false]
+	Prune services that are no longer referenced
+
+.PP
+\fB--resolve-image\fP="always"
+	Query the registry to resolve image digest and supported platforms ("always", "changed", "never")
+
+.PP
+\fB--with-registry-auth\fP[=false]
+	Send registry authentication details to Swarm agents
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-stack(1)\fP

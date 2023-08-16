@@ -1,0 +1,1046 @@
+.nh
+.TH "DOCKERD" "8" "SEPTEMBER 2015" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+dockerd - Enable daemon mode
+
+
+.SH SYNOPSIS
+.PP
+\fBdockerd\fP
+[\fB--add-runtime\fP[=\fI[]\fP]]
+[\fB--allow-nondistributable-artifacts\fP[=\fI[]\fP]]
+[\fB--api-cors-header\fP=[=\fIAPI-CORS-HEADER\fP]]
+[\fB--authorization-plugin\fP[=\fI[]\fP]]
+[\fB-b\fP|\fB--bridge\fP[=\fIBRIDGE\fP]]
+[\fB--bip\fP[=\fIBIP\fP]]
+[\fB--cgroup-parent\fP[=\fI[]\fP]]
+[\fB--config-file\fP[=\fIpath\fP]]
+[\fB--containerd\fP[=\fISOCKET-PATH\fP]]
+[\fB--data-root\fP[=\fI/var/lib/docker\fP]]
+[\fB-D\fP|\fB--debug\fP]
+[\fB--default-cgroupns-mode\fP[=\fIhost\fP]]
+[\fB--default-gateway\fP[=\fIDEFAULT-GATEWAY\fP]]
+[\fB--default-gateway-v6\fP[=\fIDEFAULT-GATEWAY-V6\fP]]
+[\fB--default-address-pool\fP[=\fIDEFAULT-ADDRESS-POOL\fP]]
+[\fB--default-runtime\fP[=\fIrunc\fP]]
+[\fB--default-ipc-mode\fP=\fIMODE\fP]
+[\fB--default-shm-size\fP[=\fI64MiB\fP]]
+[\fB--default-ulimit\fP[=\fI[]\fP]]
+[\fB--dns\fP[=\fI[]\fP]]
+[\fB--dns-opt\fP[=\fI[]\fP]]
+[\fB--dns-search\fP[=\fI[]\fP]]
+[\fB--exec-opt\fP[=\fI[]\fP]]
+[\fB--exec-root\fP[=\fI/var/run/docker\fP]]
+[\fB--experimental\fP[=\fBfalse\fP]]
+[\fB--fixed-cidr\fP[=\fIFIXED-CIDR\fP]]
+[\fB--fixed-cidr-v6\fP[=\fIFIXED-CIDR-V6\fP]]
+[\fB-G\fP|\fB--group\fP[=\fIdocker\fP]]
+[\fB-H\fP|\fB--host\fP[=\fI[]\fP]]
+[\fB--help\fP]
+[\fB--http-proxy\fP[\fI""\fP]]
+[\fB--https-proxy\fP[\fI""\fP]]
+[\fB--icc\fP[=\fBtrue\fP]]
+[\fB--init\fP[=\fBfalse\fP]]
+[\fB--init-path\fP[=\fI""\fP]]
+[\fB--insecure-registry\fP[=\fI[]\fP]]
+[\fB--ip\fP[=\fI0.0.0.0\fP]]
+[\fB--ip-forward\fP[=\fBtrue\fP]]
+[\fB--ip-masq\fP[=\fBtrue\fP]]
+[\fB--iptables\fP[=\fBtrue\fP]]
+[\fB--ipv6\fP]
+[\fB--isolation\fP[=\fIdefault\fP]]
+[\fB-l\fP|\fB--log-level\fP[=\fIinfo\fP]]
+[\fB--label\fP[=\fI[]\fP]]
+[\fB--live-restore\fP[=\fBfalse\fP]]
+[\fB--log-driver\fP[=\fIjson-file\fP]]
+[\fB--log-opt\fP[=\fImap[]\fP]]
+[\fB--mtu\fP[=\fI0\fP]]
+[\fB--max-concurrent-downloads\fP[=\fI3\fP]]
+[\fB--max-concurrent-uploads\fP[=\fI5\fP]]
+[\fB--max-download-attempts\fP[=\fI5\fP]]
+[\fB--no-proxy\fP[\fI""\fP]]
+[\fB--node-generic-resources\fP[=\fI[]\fP]]
+[\fB-p\fP|\fB--pidfile\fP[=\fI/var/run/docker.pid\fP]]
+[\fB--raw-logs\fP]
+[\fB--registry-mirror\fP[=\fI[]\fP]]
+[\fB-s\fP|\fB--storage-driver\fP[=\fISTORAGE-DRIVER\fP]]
+[\fB--seccomp-profile\fP[=\fISECCOMP-PROFILE-PATH\fP]]
+[\fB--selinux-enabled\fP]
+[\fB--shutdown-timeout\fP[=\fI15\fP]]
+[\fB--storage-opt\fP[=\fI[]\fP]]
+[\fB--swarm-default-advertise-addr\fP[=\fIIP|INTERFACE\fP]]
+[\fB--tls\fP]
+[\fB--tlscacert\fP[=\fI~/.docker/ca.pem\fP]]
+[\fB--tlscert\fP[=\fI~/.docker/cert.pem\fP]]
+[\fB--tlskey\fP[=\fI~/.docker/key.pem\fP]]
+[\fB--tlsverify\fP]
+[\fB--userland-proxy\fP[=\fBtrue\fP]]
+[\fB--userland-proxy-path\fP[=\fI""\fP]]
+[\fB--userns-remap\fP[=\fIdefault\fP]]
+[\fB--validate\fP]
+
+
+.SH DESCRIPTION
+.PP
+\fBdockerd\fP is used for starting the Docker daemon (i.e., to command the daemon
+to manage images, containers etc).  So \fBdockerd\fP is a server, as a daemon.
+
+.PP
+To run the Docker daemon you can specify \fBdockerd\fP\&.
+You can check the daemon options using \fBdockerd --help\fP\&.
+Daemon options should be specified after the \fBdockerd\fP keyword in the
+following format.
+
+.PP
+\fBdockerd [OPTIONS]\fP
+
+
+.SH OPTIONS
+.PP
+\fB--add-runtime\fP=[]
+  Runtimes can be registered with the daemon either via the
+configuration file or using the \fB\fC--add-runtime\fR command line argument.
+
+.PP
+The following is an example adding 2 runtimes via the configuration:
+
+.PP
+.RS
+
+.nf
+{
+	"default-runtime": "runc",
+	"runtimes": {
+		"runc": {
+			"path": "runc"
+		},
+		"custom": {
+			"path": "/usr/local/bin/my-runc-replacement",
+			"runtimeArgs": [
+				"--debug"
+			]
+		}
+	}
+}
+
+.fi
+.RE
+
+.PP
+This is the same example via the command line:
+
+.PP
+.RS
+
+.nf
+$ sudo dockerd --add-runtime runc=runc --add-runtime custom=/usr/local/bin/my-runc-replacement
+
+.fi
+.RE
+
+.PP
+\fBNote\fP: defining runtime arguments via the command line is not supported.
+
+.PP
+\fB--allow-nondistributable-artifacts\fP=[]
+  Push nondistributable artifacts to the specified registries.
+
+.PP
+List can contain elements with CIDR notation to specify a whole subnet.
+
+.PP
+This option is useful when pushing images containing nondistributable
+  artifacts to a registry on an air-gapped network so hosts on that network can
+  pull the images without connecting to another server.
+
+.PP
+\fBWarning\fP: Nondistributable artifacts typically have restrictions on how
+  and where they can be distributed and shared. Only use this feature to push
+  artifacts to private registries and ensure that you are in compliance with
+  any terms that cover redistributing nondistributable artifacts.
+
+.PP
+\fB--api-cors-header\fP=""
+  Set CORS headers in the Engine API. Default is cors disabled. Give urls like
+  "http://foo, http://bar, ...". Give "*" to allow all.
+
+.PP
+\fB--authorization-plugin\fP=""
+  Set authorization plugins to load
+
+.PP
+\fB-b\fP, \fB--bridge\fP=""
+  Attach containers to a pre-existing network bridge; use 'none' to disable
+  container networking
+
+.PP
+\fB--bip\fP=""
+  Use the provided CIDR notation address for the dynamically created bridge
+  (docker0); Mutually exclusive of -b
+
+.PP
+\fB--cgroup-parent\fP=""
+  Set parent cgroup for all containers. Default is "/docker" for fs cgroup
+  driver and "system.slice" for systemd cgroup driver.
+
+.PP
+\fB--config-file\fP=\fI"/etc/docker/daemon.json"\fP
+  Specifies the JSON file path to load the configuration from. Default is
+  \fI/etc/docker/daemon.json\fP\&.
+
+.PP
+\fB--containerd\fP=""
+  Path to containerd socket.
+
+.PP
+\fB--data-root\fP=""
+  Path to the directory used to store persisted Docker data such as
+  configuration for resources, swarm cluster state, and filesystem data for
+  images, containers, and local volumes. Default is \fI/var/lib/docker\fP\&.
+
+.PP
+\fB-D\fP, \fB--debug\fP=\fBtrue\fP|\fBfalse\fP
+  Enable debug mode. Default is \fBfalse\fP\&.
+
+.PP
+\fB--default-cgroupns-mode\fP="\fBhost\fP|\fBprivate\fP"
+  Set the default cgroup namespace mode for newly created containers. The argument
+  can either be \fBhost\fP or \fBprivate\fP\&. If unset, this defaults to \fBhost\fP on cgroup v1,
+  or \fBprivate\fP on cgroup v2.
+
+.PP
+\fB--default-gateway\fP=""
+  IPv4 address of the container default gateway; this address must be part of
+  the bridge subnet (which is defined by -b or --bip)
+
+.PP
+\fB--default-gateway-v6\fP=""
+  IPv6 address of the container default gateway
+
+.PP
+\fB--default-address-pool\fP=""
+  Default address pool from which IPAM driver selects a subnet for the networks.
+  Example: base=172.30.0.0/16,size=24 will set the default
+  address pools for the selected scope networks to {172.30.[0-255].0/24}
+
+.PP
+\fB--default-runtime\fP=\fI"runtime"\fP
+  Set default runtime if there're more than one specified by \fB--add-runtime\fP\&.
+
+.PP
+\fB--default-ipc-mode\fP="\fBprivate\fP|\fBshareable\fP"
+  Set the default IPC mode for newly created containers. The argument
+  can either be \fBprivate\fP or \fBshareable\fP\&.
+
+.PP
+\fB--default-shm-size\fP=\fIsize\fP
+  Set the daemon-wide default shm \fIsize\fP for containers. Default is \fB\fC64MiB\fR\&.
+
+.PP
+\fB--default-ulimit\fP=[]
+  Default ulimits for containers.
+
+.PP
+\fB--dns\fP=""
+  Force Docker to use specific DNS servers.
+
+.PP
+\fB--dns-opt\fP=""
+  DNS options to use.
+
+.PP
+\fB--dns-search\fP=[]
+  DNS search domains to use.
+
+.PP
+\fB--exec-opt\fP=[]
+  Set runtime execution options. See RUNTIME EXECUTION OPTIONS.
+
+.PP
+\fB--exec-root\fP=""
+  Path to use as the root of the Docker execution state files. Default is
+  \fB\fC/var/run/docker\fR\&.
+
+.PP
+\fB--experimental\fP=""
+  Enable the daemon experimental features.
+
+.PP
+\fB--fixed-cidr\fP=""
+  IPv4 subnet for fixed IPs (e.g., 10.20.0.0/16); this subnet must be nested in
+  the bridge subnet (which is defined by -b or --bip).
+
+.PP
+\fB--fixed-cidr-v6\fP=""
+  IPv6 subnet for global IPv6 addresses (e.g., 2a00:1450::/64)
+
+.PP
+\fB-G\fP, \fB--group\fP=""
+  Group to assign the unix socket specified by -H when running in daemon mode.
+  use '' (the empty string) to disable setting of a group. Default is \fB\fCdocker\fR\&.
+
+.PP
+\fB-H\fP, \fB--host\fP=[\fIunix:///var/run/docker.sock\fP]: tcp://[host:port] to bind or
+unix://[/path/to/socket] to use.
+  The socket(s) to bind to in daemon mode specified using one or more
+  tcp://host:port, unix:///path/to/socket, fd://* or fd://socketfd.
+
+.PP
+\fB--help\fP
+  Print usage statement
+
+.PP
+\fB--http-proxy\fP\fI""\fP
+  Proxy URL for HTTP requests unless overridden by NoProxy.
+
+.PP
+\fB--https-proxy\fP\fI""\fP
+  Proxy URL for HTTPS requests unless overridden by NoProxy.
+
+.PP
+\fB--icc\fP=\fBtrue\fP|\fBfalse\fP
+  Allow unrestricted inter-container and Docker daemon host communication. If
+  disabled, containers can still be linked together using the \fB--link\fP option
+  (see \fBdocker-run\fP(1)). Default is \fBtrue\fP\&.
+
+.PP
+\fB--init\fP
+  Run an init process inside containers for signal forwarding and process
+  reaping.
+
+.PP
+\fB--init-path\fP
+  Path to the docker-init binary.
+
+.PP
+\fB--insecure-registry\fP=[]
+  Enable insecure registry communication, i.e., enable un-encrypted and/or
+  untrusted communication.
+
+.PP
+List of insecure registries can contain an element with CIDR notation to
+  specify a whole subnet. Insecure registries accept HTTP and/or accept HTTPS
+  with certificates from unknown CAs.
+
+.PP
+Enabling \fB\fC--insecure-registry\fR is useful when running a local registry.
+  However, because its use creates security vulnerabilities it should ONLY be
+  enabled for testing purposes.  For increased security, users should add their
+  CA to their system's list of trusted CAs instead of using
+  \fB\fC--insecure-registry\fR\&.
+
+.PP
+\fB--ip\fP=""
+  Default IP address to use when binding container ports. Default is \fB0.0.0.0\fP\&.
+
+.PP
+\fB--ip-forward\fP=\fBtrue\fP|\fBfalse\fP
+  Enables IP forwarding on the Docker host. The default is \fBtrue\fP\&. This flag
+  interacts with the IP forwarding setting on your host system's kernel. If
+  your system has IP forwarding disabled, this setting enables it. If your
+  system has IP forwarding enabled, setting this flag to \fBfalse\fP
+  has no effect.
+
+.PP
+This setting will also enable IPv6 forwarding if you have both
+  \fB--ip-forward=true\fP and \fB--fixed-cidr-v6\fP set. Note that this may reject
+  Router Advertisements and interfere with the host's existing IPv6
+  configuration. For more information, please consult the documentation about
+  "Advanced Networking - IPv6".
+
+.PP
+\fB--ip-masq\fP=\fBtrue\fP|\fBfalse\fP
+  Enable IP masquerading for bridge's IP range. Default is \fBtrue\fP\&.
+
+.PP
+\fB--iptables\fP=\fBtrue\fP|\fBfalse\fP
+  Enable Docker's addition of iptables rules. Default is \fBtrue\fP\&.
+
+.PP
+\fB--ipv6\fP=\fBtrue\fP|\fBfalse\fP
+  Enable IPv6 support. Default is \fBfalse\fP\&. Docker will create an IPv6-enabled
+  bridge with address fe80::1 which will allow you to create IPv6-enabled
+  containers. Use together with \fB--fixed-cidr-v6\fP to provide globally routable
+  IPv6 addresses. IPv6 forwarding will be enabled if not used with
+  \fB--ip-forward=false\fP\&. This may collide with your host's current IPv6
+  settings. For more information please consult the documentation about
+  "Advanced Networking - IPv6".
+
+.PP
+\fB--isolation\fP="\fIdefault\fP"
+   Isolation specifies the type of isolation technology used by containers.
+   Note that the default on Windows server is \fB\fCprocess\fR, and the default on
+   Windows client is \fB\fChyperv\fR\&. Linux only supports \fB\fCdefault\fR\&.
+
+.PP
+\fB-l\fP, \fB--log-level\fP="\fIdebug\fP|\fIinfo\fP|\fIwarn\fP|\fIerror\fP|\fIfatal\fP"
+  Set the logging level. Default is \fB\fCinfo\fR\&.
+
+.PP
+\fB--label\fP="[]"
+  Set key=value labels to the daemon (displayed in \fB\fCdocker info\fR)
+
+.PP
+\fB--live-restore\fP=\fBfalse\fP
+  Enable live restore of running containers when the daemon starts so that they
+  are not restarted. This option is applicable only for docker daemon running
+  on Linux host.
+
+.PP
+\fB--log-driver\fP="\fBjson-file\fP|\fBsyslog\fP|\fBjournald\fP|\fBgelf\fP|\fBfluentd\fP|\fBawslogs\fP|\fBsplunk\fP|\fBetwlogs\fP|\fBgcplogs\fP|\fBnone\fP"
+  Default driver for container logs. Default is \fBjson-file\fP\&.
+  \fBWarning\fP: \fBdocker logs\fP command works only for \fBjson-file\fP logging driver.
+
+.PP
+\fB--log-opt\fP=[]
+  Logging driver specific options.
+
+.PP
+\fB--mtu\fP=\fI0\fP
+  Set the containers network mtu. Default is \fB\fC0\fR\&.
+
+.PP
+\fB--max-concurrent-downloads\fP=\fI3\fP
+  Set the max concurrent downloads. Default is \fB\fC3\fR\&.
+
+.PP
+\fB--max-concurrent-uploads\fP=\fI5\fP
+  Set the max concurrent uploads. Default is \fB\fC5\fR\&.
+
+.PP
+\fB--max-download-attempts\fP=\fI5\fP
+  Set the max download attempts for each pull. Default is \fB\fC5\fR\&.
+
+.PP
+\fB--no-proxy\fP=\fI""\fP"
+  Comma-separated values specifying hosts that should be excluded from proxying.
+
+.PP
+\fB--node-generic-resources\fP=\fI[]\fP
+  Advertise user-defined resource. Default is \fB\fC[]\fR\&.
+  Use this if your swarm cluster has some nodes with custom
+  resources (e.g: NVIDIA GPU, SSD, ...) and you need your services to land on
+  nodes advertising these resources.
+  Usage example: \fB\fC--node-generic-resources "NVIDIA-GPU=UUID1"
+  --node-generic-resources "NVIDIA-GPU=UUID2"\fR
+
+.PP
+\fB-p\fP, \fB--pidfile\fP="\fIpath\fP"
+  Path to use for daemon PID file. Default is \fI/var/run/docker.pid\fP\&.
+
+.PP
+\fB--raw-logs\fP
+  Output daemon logs in full timestamp format without ANSI coloring. If this
+  flag is not set, the daemon outputs condensed, colorized logs if a terminal
+  is detected, or full ("raw") output otherwise.
+
+.PP
+\fB--registry-mirror\fP=\fI://\fP
+  Prepend a registry mirror to be used for image pulls. May be specified
+  multiple times.
+
+.PP
+\fB-s\fP, \fB--storage-driver\fP=""
+  Force the Docker runtime to use a specific storage driver.
+
+.PP
+\fB--seccomp-profile\fP=""
+  Path to seccomp profile.
+
+.PP
+\fB--selinux-enabled\fP=\fBtrue\fP|\fBfalse\fP
+  Enable selinux support. Default is \fBfalse\fP\&.
+
+.PP
+\fB--shutdown-timeout\fP=\fIseconds\fP
+  Set the shutdown timeout value in seconds. Default is \fB15\fP\&.
+
+.PP
+\fB--storage-opt\fP=[]
+  Set storage driver options. See STORAGE DRIVER OPTIONS.
+
+.PP
+\fB--swarm-default-advertise-addr\fP=\fIIP\fP|\fIINTERFACE\fP
+  Set default address or interface for swarm to advertise as its
+  externally-reachable address to other cluster members. This can be a
+  hostname, an IP address, or an interface such as \fB\fCeth0\fR\&. A port cannot be
+  specified with this option.
+
+.PP
+\fB--tls\fP=\fBtrue\fP|\fBfalse\fP
+  Use TLS; implied by \fB--tlsverify\fP\&. Default is \fBfalse\fP\&.
+
+.PP
+\fB--tlscacert\fP=\fI~/.docker/ca.pem\fP
+  Trust certs signed only by this CA.
+
+.PP
+\fB--tlscert\fP=\fI~/.docker/cert.pem\fP
+  Path to TLS certificate file.
+
+.PP
+\fB--tlskey\fP=\fI~/.docker/key.pem\fP
+  Path to TLS key file.
+
+.PP
+\fB--tlsverify\fP=\fBtrue\fP|\fBfalse\fP
+  Use TLS and verify the remote (daemon: verify client, client: verify daemon).
+  Default is \fBfalse\fP\&.
+
+.PP
+\fB--userland-proxy\fP=\fBtrue\fP|\fBfalse\fP
+  Rely on a userland proxy implementation for inter-container and
+  outside-to-container loopback communications. Default is \fBtrue\fP\&.
+
+.PP
+\fB--userland-proxy-path\fP=""
+  Path to the userland proxy binary.
+
+.PP
+\fB--userns-remap\fP=\fIdefault\fP|\fIuid:gid\fP|\fIuser:group\fP|\fIuser\fP|\fIuid\fP
+  Enable user namespaces for containers on the daemon. Specifying "default"
+  will cause a new user and group to be created to handle UID and GID range
+  remapping for the user namespace mappings used for contained processes.
+  Specifying a user (or uid) and optionally a group (or gid) will cause the
+  daemon to lookup the user and group's subordinate ID ranges for use as the
+  user namespace mappings for contained processes.
+
+.PP
+\fB--validate\fP
+  Validate daemon configuration and exit.
+
+
+.SH STORAGE DRIVER OPTIONS
+.PP
+Docker uses storage backends (known as "graphdrivers" in the Docker
+internals) to create writable containers from images.  Many of these
+backends use operating system level technologies and can be
+configured.
+
+.PP
+Specify options to the storage backend with \fB--storage-opt\fP flags. The
+backends that currently take options are \fBdevicemapper\fP, \fBzfs\fP and \fBbtrfs\fP\&.
+Options for \fBdevicemapper\fP are prefixed with \fBdm.\fP, options for \fBzfs\fP
+start with \fBzfs.\fP, and options for \fBbtrfs\fP start with \fBbtrfs.\fP\&.
+
+.PP
+Specifically for devicemapper, the default is a "loopback" model which
+requires no pre-configuration, but is extremely inefficient.  Do not
+use it in production.
+
+.PP
+To make the best use of Docker with the devicemapper backend, you must
+have a recent version of LVM.  Use \fBlvm\fP(8) to create a thin pool; for
+more information, see \fBlvmthin\fP(7).  Then, use \fB--storage-opt
+dm.thinpooldev\fP to tell the Docker engine to use that pool for
+allocating images and container snapshots.
+
+.SH Devicemapper options
+.SS dm.thinpooldev
+.PP
+Specifies a custom block storage device to use for the thin pool.
+
+.PP
+If using a block device for device mapper storage, it is best to use \fB\fClvm\fR
+to create and manage the thin-pool volume. This volume is then handed to Docker
+to exclusively create snapshot volumes needed for images and containers.
+
+.PP
+Managing the thin-pool outside of Engine makes for the most feature-rich
+method of having Docker utilize device mapper thin provisioning as the
+backing storage for Docker containers. The highlights of the lvm-based
+thin-pool management feature include: automatic or interactive thin-pool
+resize support, dynamically changing thin-pool features, automatic thinp
+metadata checking when lvm activates the thin-pool, etc.
+
+.PP
+As a fallback if no thin pool is provided, loopback files are
+created. Loopback is very slow, but can be used without any
+pre-configuration of storage. It is strongly recommended that you do
+not use loopback in production. Ensure your Engine daemon has a
+\fB\fC--storage-opt dm.thinpooldev\fR argument provided.
+
+.PP
+Example use:
+
+.PP
+$ dockerd \\
+         --storage-opt dm.thinpooldev=/dev/mapper/thin-pool
+
+.SS dm.directlvm_device
+.PP
+As an alternative to manually creating a thin pool as above, Docker can
+automatically configure a block device for you.
+
+.PP
+Example use:
+
+.PP
+$ dockerd \\
+         --storage-opt dm.directlvm_device=/dev/xvdf
+
+.SS dm.thinp_percent
+.PP
+Sets the percentage of passed in block device to use for storage.
+
+.PP
+Example:
+
+.PP
+$ sudo dockerd \\
+        --storage-opt dm.thinp_percent=95
+
+.SS dm.thinp_metapercent
+.PP
+Sets the percentage of the passed in block device to use for metadata storage.
+
+.PP
+Example:
+
+.PP
+$ sudo dockerd \\
+         --storage-opt dm.thinp_metapercent=1
+
+.SS dm.thinp_autoextend_threshold
+.PP
+Sets the value of the percentage of space used before \fB\fClvm\fR attempts to
+autoextend the available space [100 = disabled]
+
+.PP
+Example:
+
+.PP
+$ sudo dockerd \\
+         --storage-opt dm.thinp_autoextend_threshold=80
+
+.SS dm.thinp_autoextend_percent
+.PP
+Sets the value percentage value to increase the thin pool by when \fB\fClvm\fR
+attempts to autoextend the available space [100 = disabled]
+
+.PP
+Example:
+
+.PP
+$ sudo dockerd \\
+         --storage-opt dm.thinp_autoextend_percent=20
+
+.SS dm.basesize
+.PP
+Specifies the size to use when creating the base device, which limits
+the size of images and containers. The default value is 10G. Note,
+thin devices are inherently "sparse", so a 10G device which is mostly
+empty doesn't use 10 GB of space on the pool. However, the filesystem
+will use more space for base images the larger the device
+is.
+
+.PP
+The base device size can be increased at daemon restart which will allow
+all future images and containers (based on those new images) to be of the
+new base device size.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.basesize=50G\fR
+
+.PP
+This will increase the base device size to 50G. The Docker daemon will throw an
+error if existing base device size is larger than 50G. A user can use
+this option to expand the base device size however shrinking is not permitted.
+
+.PP
+This value affects the system-wide "base" empty filesystem that may already
+be initialized and inherited by pulled images. Typically, a change to this
+value requires additional steps to take effect:
+
+.PP
+.RS
+
+.nf
+    $ sudo service docker stop
+    $ sudo rm -rf /var/lib/docker
+    $ sudo service docker start
+
+.fi
+.RE
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.basesize=20G\fR
+
+.SS dm.fs
+.PP
+Specifies the filesystem type to use for the base device. The
+supported options are \fB\fCext4\fR and \fB\fCxfs\fR\&. The default is \fB\fCext4\fR\&.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.fs=xfs\fR
+
+.SS dm.mkfsarg
+.PP
+Specifies extra mkfs arguments to be used when creating the base device.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt "dm.mkfsarg=-O ^has_journal"\fR
+
+.SS dm.mountopt
+.PP
+Specifies extra mount options used when mounting the thin devices.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.mountopt=nodiscard\fR
+
+.SS dm.use_deferred_removal
+.PP
+Enables use of deferred device removal if \fB\fClibdm\fR and the kernel driver
+support the mechanism.
+
+.PP
+Deferred device removal means that if device is busy when devices are
+being removed/deactivated, then a deferred removal is scheduled on
+device. And devices automatically go away when last user of the device
+exits.
+
+.PP
+For example, when a container exits, its associated thin device is removed. If
+that device has leaked into some other mount namespace and can't be removed,
+the container exit still succeeds and this option causes the system to schedule
+the device for deferred removal. It does not wait in a loop trying to remove a
+busy device.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.use_deferred_removal=true\fR
+
+.SS dm.use_deferred_deletion
+.PP
+Enables use of deferred device deletion for thin pool devices. By default,
+thin pool device deletion is synchronous. Before a container is deleted, the
+Docker daemon removes any associated devices. If the storage driver can not
+remove a device, the container deletion fails and daemon returns.
+
+.PP
+\fB\fCError deleting container: Error response from daemon: Cannot destroy container\fR
+
+.PP
+To avoid this failure, enable both deferred device deletion and deferred
+device removal on the daemon.
+
+.PP
+\fB\fCdockerd --storage-opt dm.use_deferred_deletion=true --storage-opt dm.use_deferred_removal=true\fR
+
+.PP
+With these two options enabled, if a device is busy when the driver is
+deleting a container, the driver marks the device as deleted. Later, when the
+device isn't in use, the driver deletes it.
+
+.PP
+In general it should be safe to enable this option by default. It will help
+when unintentional leaking of mount point happens across multiple mount
+namespaces.
+
+.SS dm.loopdatasize
+.PP
+\fBNote\fP: This option configures devicemapper loopback, which should not be
+used in production.
+
+.PP
+Specifies the size to use when creating the loopback file for the "data" device
+which is used for the thin pool. The default size is 100G. The file is sparse,
+so it will not initially take up this much space.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.loopdatasize=200G\fR
+
+.SS dm.loopmetadatasize
+.PP
+\fBNote\fP: This option configures devicemapper loopback, which should not be
+used in production.
+
+.PP
+Specifies the size to use when creating the loopback file for the "metadata"
+device which is used for the thin pool. The default size is 2G. The file is
+sparse, so it will not initially take up this much space.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.loopmetadatasize=4G\fR
+
+.SS dm.datadev
+.PP
+(Deprecated, use \fB\fCdm.thinpooldev\fR)
+
+.PP
+Specifies a custom blockdevice to use for data for a Docker-managed thin pool.
+It is better to use \fB\fCdm.thinpooldev\fR - see the documentation for it above for
+discussion of the advantages.
+
+.SS dm.metadatadev
+.PP
+(Deprecated, use \fB\fCdm.thinpooldev\fR)
+
+.PP
+Specifies a custom blockdevice to use for metadata for a Docker-managed thin
+pool.  See \fB\fCdm.datadev\fR for why this is deprecated.
+
+.SS dm.blocksize
+.PP
+Specifies a custom blocksize to use for the thin pool.  The default
+blocksize is 64K.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.blocksize=512K\fR
+
+.SS dm.blkdiscard
+.PP
+Enables or disables the use of \fB\fCblkdiscard\fR when removing devicemapper devices.
+This is disabled by default due to the additional latency, but as a special
+case with loopback devices it will be enabled, in order to re-sparsify the
+loopback file on image/container removal.
+
+.PP
+Disabling this on loopback can lead to \fImuch\fP faster container removal times,
+but it also prevents the space used in \fB\fC/var/lib/docker\fR directory from being
+returned to the system for other use when containers are removed.
+
+.PP
+Example use: \fB\fCdockerd --storage-opt dm.blkdiscard=false\fR
+
+.SS dm.override_udev_sync_check
+.PP
+By default, the devicemapper backend attempts to synchronize with the \fB\fCudev\fR
+device manager for the Linux kernel.  This option allows disabling that
+synchronization, to continue even though the configuration may be buggy.
+
+.PP
+To view the udev sync support of a Docker daemon that is using the
+devicemapper driver, run:
+
+.PP
+.RS
+
+.nf
+    $ docker info
+    [...]
+     Udev Sync Supported: true
+    [...]
+
+.fi
+.RE
+
+.PP
+When udev sync support is \fBtrue\fP, then devicemapper and udev can
+coordinate the activation and deactivation of devices for containers.
+
+.PP
+When udev sync support is \fBfalse\fP, a race condition occurs between the
+devicemapper and udev during create and cleanup. The race condition results
+in errors and failures. (For information on these failures, see
+docker#4036
+\[la]https://github.com/docker/docker/issues/4036\[ra])
+
+.PP
+To allow the docker daemon to start, regardless of whether udev sync is
+\fBfalse\fP, set \fBdm.override_udev_sync_check\fP to \fBtrue\fP:
+
+.PP
+.RS
+
+.nf
+    $ dockerd --storage-opt dm.override_udev_sync_check=true
+
+.fi
+.RE
+
+.PP
+When this value is \fBtrue\fP, the driver continues and simply warns you the errors
+are happening.
+
+.PP
+\fBNote\fP: The ideal is to pursue a \fB\fCdocker\fR daemon and environment that does
+support synchronizing with \fB\fCudev\fR\&. For further discussion on this topic, see
+docker#4036
+\[la]https://github.com/docker/docker/issues/4036\[ra]\&.
+Otherwise, set this flag for migrating existing Docker daemons to a daemon with
+a supported environment.
+
+.SS dm.min_free_space
+.PP
+Specifies the min free space percent in a thin pool require for new device
+creation to succeed. This check applies to both free data space as well
+as free metadata space. Valid values are from 0% - 99%. Value 0% disables
+free space checking logic. If user does not specify a value for this option,
+the Engine uses a default value of 10%.
+
+.PP
+Whenever a new a thin pool device is created (during \fB\fCdocker pull\fR or during
+container creation), the Engine checks if the minimum free space is available.
+If the space is unavailable, then device creation fails and any relevant
+\fB\fCdocker\fR operation fails.
+
+.PP
+To recover from this error, you must create more free space in the thin pool to
+recover from the error. You can create free space by deleting some images and
+containers from tge thin pool. You can also add more storage to the thin pool.
+
+.PP
+To add more space to an LVM (logical volume management) thin pool, just add
+more storage to the  group container thin pool; this should automatically
+resolve any errors. If your configuration uses loop devices, then stop the
+Engine daemon, grow the size of loop files and restart the daemon to resolve
+the issue.
+
+.PP
+Example use:: \fB\fCdockerd --storage-opt dm.min_free_space=10%\fR
+
+.SS dm.xfs_nospace_max_retries
+.PP
+Specifies the maximum number of retries XFS should attempt to complete IO when
+ENOSPC (no space) error is returned by underlying storage device.
+
+.PP
+By default XFS retries infinitely for IO to finish and this can result in
+unkillable process. To change this behavior one can set \fBxfs_nospace_max_retries\fP
+to e.g. \fB0\fP and XFS will not retry IO after getting ENOSPC and will shutdown
+filesystem.
+
+.PP
+Example use:
+
+.PP
+.RS
+
+.nf
+$ sudo dockerd --storage-opt dm.xfs_nospace_max_retries=0
+
+.fi
+.RE
+
+.SS dm.libdm_log_level
+.PP
+Specifies the maxmimum libdm log level that will be forwarded to the dockerd
+log (as specified by \fB--log-level\fP). This option is primarily intended for
+debugging problems involving libdm. Using values other than the defaults may
+cause false-positive warnings to be logged.
+
+.PP
+Values specified must fall within the range of valid libdm log levels. At the
+time of writing, the following is the list of libdm log levels as well as their
+corresponding levels when output by dockerd.
+
+.TS
+allbox;
+l l l 
+l l l .
+\fB\fClibdm Level\fR	\fB\fCValue\fR	\fB\fC--log-level\fR
+_LOG_FATAL	2	error
+_LOG_ERR	3	error
+_LOG_WARN	4	warn
+_LOG_NOTICE	5	info
+_LOG_INFO	6	info
+_LOG_DEBUG	7	debug
+.TE
+
+.PP
+Example use:
+
+.PP
+.RS
+
+.nf
+$ sudo dockerd \\
+      --log-level debug \\
+      --storage-opt dm.libdm_log_level=7
+
+.fi
+.RE
+
+.SH ZFS options
+.SS zfs.fsname
+.PP
+Set zfs filesystem under which docker will create its own datasets.  By default
+docker will pick up the zfs filesystem where docker graph (\fB\fC/var/lib/docker\fR)
+is located.
+
+.PP
+Example use: \fB\fCdockerd -s zfs --storage-opt zfs.fsname=zroot/docker\fR
+
+.SH Btrfs options
+.SS btrfs.min_space
+.PP
+Specifies the minimum size to use when creating the subvolume which is used for
+containers. If user uses disk quota for btrfs when creating or running a
+container with \fB--storage-opt size\fP option, docker should ensure the \fBsize\fP
+cannot be smaller than \fBbtrfs.min_space\fP\&.
+
+.PP
+Example use: \fB\fCdocker daemon -s btrfs --storage-opt btrfs.min_space=10G\fR
+
+
+.SH Access authorization
+.PP
+Docker's access authorization can be extended by authorization plugins that
+your organization can purchase or build themselves. You can install one or more
+authorization plugins when you start the Docker \fB\fCdaemon\fR using the
+\fB\fC--authorization-plugin=PLUGIN_ID\fR option.
+
+.PP
+.RS
+
+.nf
+dockerd --authorization-plugin=plugin1 --authorization-plugin=plugin2,...
+
+.fi
+.RE
+
+.PP
+The \fB\fCPLUGIN_ID\fR value is either the plugin's name or a path to its
+specification file. The plugin's implementation determines whether you can
+specify a name or path. Consult with your Docker administrator to get
+information about the plugins available to you.
+
+.PP
+Once a plugin is installed, requests made to the \fB\fCdaemon\fR through the
+command line or Docker's Engine API are allowed or denied by the plugin.
+If you have multiple plugins installed, each plugin, in order, must
+allow the request for it to complete.
+
+.PP
+For information about how to create an authorization plugin, see access authorization
+plugin
+\[la]https://docs.docker.com/engine/extend/plugins_authorization/\[ra] section in the
+Docker extend section of this documentation.
+
+
+.SH RUNTIME EXECUTION OPTIONS
+.PP
+You can configure the runtime using options specified with the \fB\fC--exec-opt\fR flag.
+All the flag's options have the \fB\fCnative\fR prefix. A single \fB\fCnative.cgroupdriver\fR
+option is available.
+
+.PP
+The \fB\fCnative.cgroupdriver\fR option specifies the management of the container's
+cgroups. You can only specify \fB\fCcgroupfs\fR or \fB\fCsystemd\fR\&. If you specify
+\fB\fCsystemd\fR and it is not available, the system errors out. If you omit the
+\fB\fCnative.cgroupdriver\fR option,\fB\fCcgroupfs\fR is used on cgroup v1 hosts, \fB\fCsystemd\fR
+is used on cgroup v2 hosts with systemd available.
+
+.PP
+This example sets the \fB\fCcgroupdriver\fR to \fB\fCsystemd\fR:
+
+.PP
+.RS
+
+.nf
+$ sudo dockerd --exec-opt native.cgroupdriver=systemd
+
+.fi
+.RE
+
+.PP
+Setting this option applies to all containers the daemon launches.
+
+
+.SH HISTORY
+.PP
+Sept 2015, Originally compiled by Shishir Mahajan shishir.mahajan@redhat.com
+\[la]mailto:shishir.mahajan@redhat.com\[ra]
+based on docker.com source material and internal work.
