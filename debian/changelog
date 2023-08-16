@@ -1,3 +1,46 @@
+docker.io-app (24.0.5-0ubuntu1) UNRELEASED; urgency=medium
+
+  * Update the way MUT are pre-processed and imported.
+    - d/get-orig-source.sh: create a script to be called by uscan when
+      importing a new version. This script is going to fetch all the needed
+      components and combine all the tarballs into a single one.
+    - d/helpers/{real,tini}-upstream-version.sh: create helper scripts to
+      support the d/get-orig-source.sh. They process the upstream version of
+      differente components.
+    - d/watch: update to track just github.com/moby/moby which is the main
+      component of this package, the others are now tracked and fetched by
+      d/get-orig-source.sh.
+  * New upstream version 24.0.5.
+  * The libnetwork component is now shipped inside the engine component.
+    - d/rules: update to build proxy from the new path.
+    - d/docker.io.docs: do not install NOTICE from the removed libnetwork
+      component.
+    - d/copyright: remove all entries for libnetwork component.
+  * Build CLI manpages before build time to avoid downloading modules from the
+    Internet.
+    - d/docker.io.manpages: install manpages from debian/manpages.
+    - d/helpers/build-manpages.sh: create a wrapper for the upstream script
+      to generate manpages and place them in the expected directory.
+    - d/rules: do not try to build manpage during build time, instead, check
+      if the manpages version matches with the upstream one.
+  * Create debian/manpages with debian/helpers/build-manpages.sh.
+  * Do not override dh_strip, it works fine with Go binaries nowadays.
+    - d/docker.io.lintian-overrides: remove unneeded overrides.
+    - d/rules: do not override dh_strip.
+  * d/control: use arch:any instead of hard-coded arches.
+    The list already contains all the supported architectures in all
+    supported releases (non-ESM).
+  * d/control: suggests docker-buildx and docker-compose-v2.
+  * d/README.source: document how to import a new upstream release.
+  * Build with Go 1.20. Let's rely on a fixed version for all supported
+    releases.
+    - d/control: b-d on golang-1.20-go instead of golang-go.
+    - d/rules: add Go 1.20 to $PATH.
+  * d/docker.io.lintian-overrides: ignore statically-linked-binary.
+    This is not a problem for Go binaries.
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Wed, 16 Aug 2023 18:32:36 -0300
+
 docker.io-app (20.10.25-0ubuntu1) mantic; urgency=medium
 
   * Initial release. See LP #2022390.
