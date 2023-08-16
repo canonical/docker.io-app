@@ -7,6 +7,8 @@ export VERSION := $(DEB_VERSION_UPSTREAM)
 
 export DOCKER_GITCOMMIT := $(DEB_VERSION)
 
+export MANPAGES_VERSION := $(shell cat debian/manpages/upstream-version)
+
 # temporary build path (see http://golang.org/doc/code.html#GOPATH)
 OUR_GOPATH := $(CURDIR)/.gopath
 export GOPATH := $(OUR_GOPATH)
@@ -46,7 +48,7 @@ override_dh_auto_configure:
 	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
 	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/docker/docker'
 
-override_dh_auto_build: _build-tini _build-proxy _build-cli _build-manpages _build-engine
+override_dh_auto_build: _check-manpages _build-tini _build-proxy _build-cli _build-engine
 	@#
 
 # several "supporting binaries" need to be built and installed
@@ -69,14 +71,14 @@ _build-cli:
 			GITCOMMIT='$(DOCKER_GITCOMMIT)' \
 			dynbinary
 
-# https://github.com/docker/docker-ce/blob/v19.03.6/components/cli/scripts/docs/generate-man.sh
-# (replacing hard-coded "/tmp/gen-manpages" with "debian/tmp/gen-manpages")
-_build-manpages:
-	cd '$(OUR_GOPATH)/src/github.com/docker/cli' \
-		&& export PATH='$(OUR_GOPATH)/bin':"$$PATH" \
-		&& sed 's!/tmp/gen-manpages!$(CURDIR)/debian/tmp/gen-manpages!g' scripts/docs/generate-man.sh \
-		&& sed 's!/go/bin/go-md2man!$(OUR_GOPATH)/bin/go-md2man!g' scripts/docs/generate-man.sh \
-			| bash
+_check-manpages:
+ifeq ($(VERSION), $(MANPAGES_VERSION))
+	@echo "Manpages are up-to-date"
+else
+	@echo "Manpages version does not match the upstream version."
+	@echo "Please, run debian/helpers/build-manpages.sh"
+	exit 1
+endif
 
 _build-engine:
 	cd engine \
