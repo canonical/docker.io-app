@@ -28,7 +28,7 @@ Vcs-Git: https://github.com/canonical/docker.io-app.git
 Vcs-Browser: https://github.com/canonical/docker.io-app
 
 Package: docker.io
-Architecture: amd64 arm64 armhf i386 ppc64el riscv64 s390x
+Architecture: any
 Depends: adduser,
          containerd (>= 1.2.6-0ubuntu1~),
          iptables,
