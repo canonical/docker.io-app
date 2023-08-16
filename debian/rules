@@ -33,15 +33,12 @@ override_dh_gencontrol:
 		-tags "$(DOCKER_BUILDTAGS)" \
 		github.com/docker/docker/cmd/dockerd \
 		github.com/docker/cli/cmd/docker \
-		github.com/docker/libnetwork/cmd/proxy \
+		github.com/docker/docker/cmd/docker-proxy \
 	' dh_golang --builddirectory='$(OUR_GOPATH:$(CURDIR)/%=%)'
 	dh_gencontrol
 
 override_dh_auto_configure:
 	# set up GOPATH symlink farm
-	# libnetwork
-	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
-	ln -sfT '$(CURDIR)/libnetwork' '$(OUR_GOPATH)/src/github.com/docker/libnetwork'
 	# cli
 	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
 	ln -sfT '$(CURDIR)/cli' '$(OUR_GOPATH)/src/github.com/docker/cli'
@@ -62,7 +59,7 @@ _build-tini: # (docker-init)
 		&& make tini-static
 
 _build-proxy: # (from libnetwork)
-	go build -o libnetwork/docker-proxy github.com/docker/libnetwork/cmd/proxy
+	go build -o libnetwork/docker-proxy github.com/docker/docker/cmd/docker-proxy
 
 _build-cli:
 	DISABLE_WARN_OUTSIDE_CONTAINER=1 \
