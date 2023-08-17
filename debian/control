@@ -44,6 +44,8 @@ Suggests: aufs-tools,
           btrfs-progs,
           cgroupfs-mount | cgroup-lite,
           debootstrap,
+          docker-buildx,
+          docker-compose-v2,
           docker-doc,
           rinse,
           zfs-fuse | zfsutils
