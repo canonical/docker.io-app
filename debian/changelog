@@ -10,7 +10,7 @@ docker.io-app (24.0.5-0ubuntu1) mantic; urgency=medium
     - d/watch: update to track just github.com/moby/moby which is the main
       component of this package, the others are now tracked and fetched by
       d/get-orig-source.sh.
-  * New upstream version 24.0.5.
+  * New upstream version 24.0.5 (LP: #2030500).
   * The libnetwork component is now shipped inside the engine component.
     - d/rules: update to build proxy from the new path.
     - d/docker.io.docs: do not install NOTICE from the removed libnetwork
