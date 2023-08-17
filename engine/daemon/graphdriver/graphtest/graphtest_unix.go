@@ -5,12 +5,10 @@ package graphtest // import "github.com/docker/docker/daemon/graphdriver/graphte
 
 import (
 	"bytes"
-	"math/rand"
+	"crypto/rand"
 	"os"
 	"path"
-	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/pkg/stringid"
@@ -98,10 +96,10 @@ func DriverTestCreateEmpty(t testing.TB, drivername string, driverOptions ...str
 	dir, err := driver.Get("empty", "")
 	assert.NilError(t, err)
 
-	verifyFile(t, dir.Path(), 0755|os.ModeDir, 0, 0)
+	verifyFile(t, dir, 0755|os.ModeDir, 0, 0)
 
 	// Verify that the directory is empty
-	fis, err := readDir(dir, dir.Path())
+	fis, err := readDir(dir)
 	assert.NilError(t, err)
 	assert.Check(t, is.Len(fis, 0))
 
@@ -294,19 +292,11 @@ func DriverTestChanges(t testing.TB, drivername string, driverOptions ...string)
 }
 
 func writeRandomFile(path string, size uint64) error {
-	buf := make([]int64, size/8)
-
-	r := rand.NewSource(0)
-	for i := range buf {
-		buf[i] = r.Int63()
+	data := make([]byte, size)
+	_, err := rand.Read(data)
+	if err != nil {
+		return err
 	}
-
-	// Cast to []byte
-	header := *(*reflect.SliceHeader)(unsafe.Pointer(&buf)) //nolint:govet // FIXME: unsafeptr: possible misuse of reflect.SliceHeader (govet) see https://github.com/moby/moby/issues/42444
-	header.Len *= 8
-	header.Cap *= 8
-	data := *(*[]byte)(unsafe.Pointer(&header)) //nolint:govet // FIXME: unsafeptr: possible misuse of reflect.SliceHeader (govet) see https://github.com/moby/moby/issues/42444
-
 	return os.WriteFile(path, data, 0700)
 }
 
@@ -334,19 +324,19 @@ func DriverTestSetQuota(t *testing.T, drivername string, required bool) {
 	quota := uint64(50 * units.MiB)
 
 	// Try to write a file smaller than quota, and ensure it works
-	err = writeRandomFile(path.Join(mountPath.Path(), "smallfile"), quota/2)
+	err = writeRandomFile(path.Join(mountPath, "smallfile"), quota/2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(path.Join(mountPath.Path(), "smallfile"))
+	defer os.Remove(path.Join(mountPath, "smallfile"))
 
 	// Try to write a file bigger than quota. We've already filled up half the quota, so hitting the limit should be easy
-	err = writeRandomFile(path.Join(mountPath.Path(), "bigfile"), quota)
+	err = writeRandomFile(path.Join(mountPath, "bigfile"), quota)
 	if err == nil {
 		t.Fatalf("expected write to fail(), instead had success")
 	}
 	if pathError, ok := err.(*os.PathError); ok && pathError.Err != unix.EDQUOT && pathError.Err != unix.ENOSPC {
-		os.Remove(path.Join(mountPath.Path(), "bigfile"))
+		os.Remove(path.Join(mountPath, "bigfile"))
 		t.Fatalf("expect write() to fail with %v or %v, got %v", unix.EDQUOT, unix.ENOSPC, pathError.Err)
 	}
 }

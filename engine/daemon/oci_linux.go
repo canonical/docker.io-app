@@ -4,30 +4,29 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
-	cdcgroups "github.com/containerd/cgroups"
+	cdcgroups "github.com/containerd/cgroups/v3"
 	"github.com/containerd/containerd/containers"
 	coci "github.com/containerd/containerd/oci"
-	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/pkg/apparmor"
+	"github.com/containerd/containerd/pkg/userns"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/container"
-	daemonconfig "github.com/docker/docker/daemon/config"
+	dconfig "github.com/docker/docker/daemon/config"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/oci"
 	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/pkg/idtools"
+	"github.com/docker/docker/pkg/rootless/specconv"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/rootless/specconv"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
-	"github.com/opencontainers/runc/libcontainer/apparmor"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
-	"github.com/opencontainers/runc/libcontainer/devices"
 	"github.com/opencontainers/runc/libcontainer/user"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -35,7 +34,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const inContainerInitPath = "/sbin/" + daemonconfig.DefaultInitBinary
+const inContainerInitPath = "/sbin/" + dconfig.DefaultInitBinary
 
 // WithRlimits sets the container's rlimits along with merging the daemon's rlimits
 func WithRlimits(daemon *Daemon, c *container.Container) coci.SpecOpts {
@@ -54,6 +53,9 @@ func WithRlimits(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			})
 		}
 
+		if s.Process == nil {
+			s.Process = &specs.Process{}
+		}
 		s.Process.Rlimits = rlimits
 		return nil
 	}
@@ -96,7 +98,11 @@ func WithRootless(daemon *Daemon) coci.SpecOpts {
 			if rootlesskitParentEUID == "" {
 				return errors.New("$ROOTLESSKIT_PARENT_EUID is not set (requires RootlessKit v0.8.0)")
 			}
-			controllersPath := fmt.Sprintf("/sys/fs/cgroup/user.slice/user-%s.slice/cgroup.controllers", rootlesskitParentEUID)
+			euid, err := strconv.Atoi(rootlesskitParentEUID)
+			if err != nil {
+				return errors.Wrap(err, "invalid $ROOTLESSKIT_PARENT_EUID: must be a numeric value")
+			}
+			controllersPath := fmt.Sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cgroup.controllers", euid)
 			controllersFile, err := os.ReadFile(controllersPath)
 			if err != nil {
 				return err
@@ -110,6 +116,9 @@ func WithRootless(daemon *Daemon) coci.SpecOpts {
 // WithOOMScore sets the oom score
 func WithOOMScore(score *int) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+		if s.Process == nil {
+			s.Process = &specs.Process{}
+		}
 		s.Process.OOMScoreAdj = score
 		return nil
 	}
@@ -118,6 +127,12 @@ func WithOOMScore(score *int) coci.SpecOpts {
 // WithSelinux sets the selinux labels
 func WithSelinux(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+		if s.Process == nil {
+			s.Process = &specs.Process{}
+		}
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
+		}
 		s.Process.SelinuxLabel = c.GetProcessLabel()
 		s.Linux.MountLabel = c.MountLabel
 		return nil
@@ -127,7 +142,7 @@ func WithSelinux(c *container.Container) coci.SpecOpts {
 // WithApparmor sets the apparmor profile
 func WithApparmor(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
-		if apparmor.IsEnabled() {
+		if apparmor.HostSupports() {
 			var appArmorProfile string
 			if c.AppArmorProfile != "" {
 				appArmorProfile = c.AppArmorProfile
@@ -147,6 +162,9 @@ func WithApparmor(c *container.Container) coci.SpecOpts {
 				if err := ensureDefaultAppArmorProfile(); err != nil {
 					return err
 				}
+			}
+			if s.Process == nil {
+				s.Process = &specs.Process{}
 			}
 			s.Process.ApparmorProfile = appArmorProfile
 		}
@@ -210,6 +228,10 @@ func getUser(c *container.Container, username string) (specs.User, error) {
 }
 
 func setNamespace(s *specs.Spec, ns specs.LinuxNamespace) {
+	if s.Linux == nil {
+		s.Linux = &specs.Linux{}
+	}
+
 	for i, n := range s.Linux.Namespaces {
 		if n.Type == ns.Type {
 			s.Linux.Namespaces[i] = ns
@@ -225,20 +247,19 @@ func WithNamespaces(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		userNS := false
 		// user
 		if c.HostConfig.UsernsMode.IsPrivate() {
-			uidMap := daemon.idMapping.UIDs()
+			uidMap := daemon.idMapping.UIDMaps
 			if uidMap != nil {
 				userNS = true
 				ns := specs.LinuxNamespace{Type: "user"}
 				setNamespace(s, ns)
 				s.Linux.UIDMappings = specMapping(uidMap)
-				s.Linux.GIDMappings = specMapping(daemon.idMapping.GIDs())
+				s.Linux.GIDMappings = specMapping(daemon.idMapping.GIDMaps)
 			}
 		}
 		// network
 		if !c.Config.NetworkDisabled {
 			ns := specs.LinuxNamespace{Type: "network"}
-			parts := strings.SplitN(string(c.HostConfig.NetworkMode), ":", 2)
-			if parts[0] == "container" {
+			if c.HostConfig.NetworkMode.IsContainer() {
 				nc, err := daemon.getNetworkedContainer(c.ID, c.HostConfig.NetworkMode.ConnectedContainer())
 				if err != nil {
 					return err
@@ -258,12 +279,15 @@ func WithNamespaces(daemon *Daemon, c *container.Container) coci.SpecOpts {
 
 		// ipc
 		ipcMode := c.HostConfig.IpcMode
+		if !ipcMode.Valid() {
+			return errdefs.InvalidParameter(errors.Errorf("invalid IPC mode: %v", ipcMode))
+		}
 		switch {
 		case ipcMode.IsContainer():
 			ns := specs.LinuxNamespace{Type: "ipc"}
 			ic, err := daemon.getIpcContainer(ipcMode.Container())
 			if err != nil {
-				return err
+				return errdefs.InvalidParameter(errors.Wrapf(err, "invalid IPC mode: %v", ipcMode))
 			}
 			ns.Path = fmt.Sprintf("/proc/%d/ns/ipc", ic.State.GetPID())
 			setNamespace(s, ns)
@@ -282,11 +306,12 @@ func WithNamespaces(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		case ipcMode.IsPrivate(), ipcMode.IsShareable(), ipcMode.IsNone():
 			ns := specs.LinuxNamespace{Type: "ipc"}
 			setNamespace(s, ns)
-		default:
-			return fmt.Errorf("Invalid IPC mode: %v", ipcMode)
 		}
 
 		// pid
+		if !c.HostConfig.PidMode.Valid() {
+			return errdefs.InvalidParameter(errors.Errorf("invalid PID mode: %v", c.HostConfig.PidMode))
+		}
 		if c.HostConfig.PidMode.IsContainer() {
 			pc, err := daemon.getPidContainer(c)
 			if err != nil {
@@ -312,18 +337,20 @@ func WithNamespaces(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			setNamespace(s, ns)
 		}
 		// uts
+		if !c.HostConfig.UTSMode.Valid() {
+			return errdefs.InvalidParameter(errors.Errorf("invalid UTS mode: %v", c.HostConfig.UTSMode))
+		}
 		if c.HostConfig.UTSMode.IsHost() {
 			oci.RemoveNamespace(s, "uts")
 			s.Hostname = ""
 		}
 
 		// cgroup
+		if !c.HostConfig.CgroupnsMode.Valid() {
+			return errdefs.InvalidParameter(errors.Errorf("invalid cgroup namespace mode: %v", c.HostConfig.CgroupnsMode))
+		}
 		if !c.HostConfig.CgroupnsMode.IsEmpty() {
-			cgroupNsMode := c.HostConfig.CgroupnsMode
-			if !cgroupNsMode.Valid() {
-				return fmt.Errorf("invalid cgroup namespace mode: %v", cgroupNsMode)
-			}
-			if cgroupNsMode.IsPrivate() {
+			if c.HostConfig.CgroupnsMode.IsPrivate() {
 				nsCgroup := specs.LinuxNamespace{Type: "cgroup"}
 				setNamespace(s, nsCgroup)
 			}
@@ -566,7 +593,7 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		for _, m := range mounts {
 			if m.Source == "tmpfs" {
 				data := m.Data
-				parser := volumemounts.NewParser("linux")
+				parser := volumemounts.NewParser()
 				options := []string{"noexec", "nosuid", "nodev", string(parser.DefaultPropagationMode())}
 				if data != "" {
 					options = append(options, strings.Split(data, ",")...)
@@ -598,6 +625,9 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 				}
 				rootpg := mountPropagationMap[s.Linux.RootfsPropagation]
 				if rootpg != mount.SHARED && rootpg != mount.RSHARED {
+					if s.Linux == nil {
+						s.Linux = &specs.Linux{}
+					}
 					s.Linux.RootfsPropagation = mountPropagationReverseMap[mount.SHARED]
 				}
 			case mount.SLAVE, mount.RSLAVE:
@@ -626,6 +656,9 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 				if !fallback {
 					rootpg := mountPropagationMap[s.Linux.RootfsPropagation]
 					if rootpg != mount.SHARED && rootpg != mount.RSHARED && rootpg != mount.SLAVE && rootpg != mount.RSLAVE {
+						if s.Linux == nil {
+							s.Linux = &specs.Linux{}
+						}
 						s.Linux.RootfsPropagation = mountPropagationReverseMap[mount.RSLAVE]
 					}
 				}
@@ -648,7 +681,7 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			// "mount" when we bind-mount. The reason for this is that at the point
 			// when runc sets up the root filesystem, it is already inside a user
 			// namespace, and thus cannot change any flags that are locked.
-			if daemon.configStore.RemappedRoot != "" || sys.RunningInUserNS() {
+			if daemon.configStore.RemappedRoot != "" || userns.RunningInUserNS() {
 				unprivOpts, err := getUnprivilegedMountFlags(m.Source)
 				if err != nil {
 					return err
@@ -681,13 +714,15 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 					clearReadOnly(&s.Mounts[i])
 				}
 			}
-			s.Linux.ReadonlyPaths = nil
-			s.Linux.MaskedPaths = nil
+			if s.Linux != nil {
+				s.Linux.ReadonlyPaths = nil
+				s.Linux.MaskedPaths = nil
+			}
 		}
 
 		// TODO: until a kernel/mount solution exists for handling remount in a user namespace,
 		// we must clear the readonly flag for the cgroups mount (@mrunalp concurs)
-		if uidMap := daemon.idMapping.UIDs(); uidMap != nil || c.HostConfig.Privileged {
+		if uidMap := daemon.idMapping.UIDMaps; uidMap != nil || c.HostConfig.Privileged {
 			for i, m := range s.Mounts {
 				if m.Type == "cgroup" {
 					clearReadOnly(&s.Mounts[i])
@@ -696,14 +731,13 @@ func WithMounts(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		}
 
 		return nil
-
 	}
 }
 
 // sysctlExists checks if a sysctl exists; runc will error if we add any that do not actually
 // exist, so do not add the default ones if running on an old kernel.
 func sysctlExists(s string) bool {
-	f := filepath.Join("/proc", "sys", strings.Replace(s, ".", "/", -1))
+	f := filepath.Join("/proc", "sys", strings.ReplaceAll(s, ".", "/"))
 	_, err := os.Stat(f)
 	return err == nil
 }
@@ -711,15 +745,15 @@ func sysctlExists(s string) bool {
 // WithCommonOptions sets common docker options
 func WithCommonOptions(daemon *Daemon, c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
-		if c.BaseFS == nil {
-			return errors.New("populateCommonSpec: BaseFS of container " + c.ID + " is unexpectedly nil")
+		if c.BaseFS == "" {
+			return errors.New("populateCommonSpec: BaseFS of container " + c.ID + " is unexpectedly empty")
 		}
 		linkedEnv, err := daemon.setupLinkedContainers(c)
 		if err != nil {
 			return err
 		}
 		s.Root = &specs.Root{
-			Path:     c.BaseFS.Path(),
+			Path:     c.BaseFS,
 			Readonly: c.HostConfig.ReadonlyRootfs,
 		}
 		if err := c.SetupWorkingDirectory(daemon.idMapping.RootPair()); err != nil {
@@ -728,6 +762,9 @@ func WithCommonOptions(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		cwd := c.Config.WorkingDir
 		if len(cwd) == 0 {
 			cwd = "/"
+		}
+		if s.Process == nil {
+			s.Process = &specs.Process{}
 		}
 		s.Process.Args = append([]string{c.Path}, c.Args...)
 
@@ -738,12 +775,9 @@ func WithCommonOptions(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			if (c.HostConfig.Init != nil && *c.HostConfig.Init) ||
 				(c.HostConfig.Init == nil && daemon.configStore.Init) {
 				s.Process.Args = append([]string{inContainerInitPath, "--", c.Path}, c.Args...)
-				path := daemon.configStore.InitPath
-				if path == "" {
-					path, err = exec.LookPath(daemonconfig.DefaultInitBinary)
-					if err != nil {
-						return err
-					}
+				path, err := daemon.configStore.LookupInitPath() // this will fall back to DefaultInitBinary and return an absolute path
+				if err != nil {
+					return err
 				}
 				s.Mounts = append(s.Mounts, specs.Mount{
 					Destination: inContainerInitPath,
@@ -768,7 +802,7 @@ func WithCommonOptions(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		if c.HostConfig.NetworkMode.IsPrivate() {
 			// We cannot set up ping socket support in a user namespace
 			userNS := daemon.configStore.RemappedRoot != "" && c.HostConfig.UsernsMode.IsPrivate()
-			if !userNS && !sys.RunningInUserNS() && sysctlExists("net.ipv4.ping_group_range") {
+			if !userNS && !userns.RunningInUserNS() && sysctlExists("net.ipv4.ping_group_range") {
 				// allow unprivileged ICMP echo sockets without CAP_NET_RAW
 				s.Linux.Sysctl["net.ipv4.ping_group_range"] = "0 2147483647"
 			}
@@ -808,22 +842,15 @@ func WithCgroups(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		} else {
 			cgroupsPath = filepath.Join(parent, c.ID)
 		}
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
+		}
 		s.Linux.CgroupsPath = cgroupsPath
 
 		// the rest is only needed for CPU RT controller
 
 		if daemon.configStore.CPURealtimePeriod == 0 && daemon.configStore.CPURealtimeRuntime == 0 {
 			return nil
-		}
-
-		if cdcgroups.Mode() == cdcgroups.Unified {
-			return errors.New("daemon-scoped cpu-rt-period and cpu-rt-runtime are not implemented for cgroup v2")
-		}
-
-		// FIXME this is very expensive way to check if cpu rt is supported
-		sysInfo := daemon.RawSysInfo(true)
-		if !sysInfo.CPURealtime {
-			return errors.New("daemon-scoped cpu-rt-period and cpu-rt-runtime are not supported by the kernel")
 		}
 
 		p := cgroupsPath
@@ -870,14 +897,12 @@ func WithDevices(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		var devs []specs.LinuxDevice
 		devPermissions := s.Linux.Resources.Devices
 
-		if c.HostConfig.Privileged && !sys.RunningInUserNS() {
-			hostDevices, err := devices.HostDevices()
+		if c.HostConfig.Privileged {
+			hostDevices, err := coci.HostDevices()
 			if err != nil {
 				return err
 			}
-			for _, d := range hostDevices {
-				devs = append(devs, oci.Device(d))
-			}
+			devs = append(devs, hostDevices...)
 
 			// adding device mappings in privileged containers
 			for _, deviceMapping := range c.HostConfig.Devices {
@@ -920,8 +945,14 @@ func WithDevices(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			}
 		}
 
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
+		}
+		if s.Linux.Resources == nil {
+			s.Linux.Resources = &specs.LinuxResources{}
+		}
 		s.Linux.Devices = append(s.Linux.Devices, devs...)
-		s.Linux.Resources.Devices = devPermissions
+		s.Linux.Resources.Devices = append(s.Linux.Resources.Devices, devPermissions...)
 
 		for _, req := range c.HostConfig.DeviceRequests {
 			if err := daemon.handleDevice(req, s); err != nil {
@@ -962,27 +993,28 @@ func WithResources(c *container.Container) coci.SpecOpts {
 		if err != nil {
 			return err
 		}
-		blkioWeight := r.BlkioWeight
 
-		specResources := &specs.LinuxResources{
-			Memory: memoryRes,
-			CPU:    cpuRes,
-			BlockIO: &specs.LinuxBlockIO{
-				Weight:                  &blkioWeight,
-				WeightDevice:            weightDevices,
-				ThrottleReadBpsDevice:   readBpsDevice,
-				ThrottleWriteBpsDevice:  writeBpsDevice,
-				ThrottleReadIOPSDevice:  readIOpsDevice,
-				ThrottleWriteIOPSDevice: writeIOpsDevice,
-			},
-			Pids: getPidsLimit(r),
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
 		}
-
-		if s.Linux.Resources != nil && len(s.Linux.Resources.Devices) > 0 {
-			specResources.Devices = s.Linux.Resources.Devices
+		if s.Linux.Resources == nil {
+			s.Linux.Resources = &specs.LinuxResources{}
 		}
+		s.Linux.Resources.Memory = memoryRes
+		s.Linux.Resources.CPU = cpuRes
+		s.Linux.Resources.BlockIO = &specs.LinuxBlockIO{
+			WeightDevice:            weightDevices,
+			ThrottleReadBpsDevice:   readBpsDevice,
+			ThrottleWriteBpsDevice:  writeBpsDevice,
+			ThrottleReadIOPSDevice:  readIOpsDevice,
+			ThrottleWriteIOPSDevice: writeIOpsDevice,
+		}
+		if r.BlkioWeight != 0 {
+			w := r.BlkioWeight
+			s.Linux.Resources.BlockIO.Weight = &w
+		}
+		s.Linux.Resources.Pids = getPidsLimit(r)
 
-		s.Linux.Resources = specResources
 		return nil
 	}
 }
@@ -990,6 +1022,15 @@ func WithResources(c *container.Container) coci.SpecOpts {
 // WithSysctls sets the container's sysctls
 func WithSysctls(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+		if len(c.HostConfig.Sysctls) == 0 {
+			return nil
+		}
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
+		}
+		if s.Linux.Sysctl == nil {
+			s.Linux.Sysctl = make(map[string]string)
+		}
 		// We merge the sysctls injected above with the HostConfig (latter takes
 		// precedence for backwards-compatibility reasons).
 		for k, v := range c.HostConfig.Sysctls {
@@ -1002,13 +1043,16 @@ func WithSysctls(c *container.Container) coci.SpecOpts {
 // WithUser sets the container's user
 func WithUser(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+		if s.Process == nil {
+			s.Process = &specs.Process{}
+		}
 		var err error
 		s.Process.User, err = getUser(c, c.Config.User)
 		return err
 	}
 }
 
-func (daemon *Daemon) createSpec(c *container.Container) (retSpec *specs.Spec, err error) {
+func (daemon *Daemon) createSpec(ctx context.Context, c *container.Container) (retSpec *specs.Spec, err error) {
 	var (
 		opts []coci.SpecOpts
 		s    = oci.DefaultSpec()
@@ -1019,7 +1063,6 @@ func (daemon *Daemon) createSpec(c *container.Container) (retSpec *specs.Spec, e
 		WithResources(c),
 		WithSysctls(c),
 		WithDevices(daemon, c),
-		WithUser(c),
 		WithRlimits(daemon, c),
 		WithNamespaces(daemon, c),
 		WithCapabilities(c),
@@ -1029,11 +1072,16 @@ func (daemon *Daemon) createSpec(c *container.Container) (retSpec *specs.Spec, e
 		WithApparmor(c),
 		WithSelinux(c),
 		WithOOMScore(&c.HostConfig.OomScoreAdj),
+		coci.WithAnnotations(c.HostConfig.Annotations),
+		WithUser(c),
 	)
+
 	if c.NoNewPrivileges {
 		opts = append(opts, coci.WithNoNewPrivileges)
 	}
-
+	if c.Config.Tty {
+		opts = append(opts, WithConsoleSize(c))
+	}
 	// Set the masked and readonly paths with regard to the host config options if they are set.
 	if c.HostConfig.MaskedPaths != nil {
 		opts = append(opts, coci.WithMaskedPaths(c.HostConfig.MaskedPaths))
@@ -1044,8 +1092,17 @@ func (daemon *Daemon) createSpec(c *container.Container) (retSpec *specs.Spec, e
 	if daemon.configStore.Rootless {
 		opts = append(opts, WithRootless(daemon))
 	}
-	return &s, coci.ApplyOpts(context.Background(), nil, &containers.Container{
-		ID: c.ID,
+
+	var snapshotter, snapshotKey string
+	if daemon.UsesSnapshotter() {
+		snapshotter = daemon.imageService.StorageDriver()
+		snapshotKey = c.ID
+	}
+
+	return &s, coci.ApplyOpts(ctx, daemon.containerdCli, &containers.Container{
+		ID:          c.ID,
+		Snapshotter: snapshotter,
+		SnapshotKey: snapshotKey,
 	}, &s, opts...)
 }
 

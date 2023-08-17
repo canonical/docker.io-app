@@ -9,7 +9,19 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-func (s *DockerSuite) TestPluginLogDriver(c *testing.T) {
+type DockerCLIPluginLogDriverSuite struct {
+	ds *DockerSuite
+}
+
+func (s *DockerCLIPluginLogDriverSuite) TearDownTest(c *testing.T) {
+	s.ds.TearDownTest(c)
+}
+
+func (s *DockerCLIPluginLogDriverSuite) OnTimeout(c *testing.T) {
+	s.ds.OnTimeout(c)
+}
+
+func (s *DockerCLIPluginLogDriverSuite) TestPluginLogDriver(c *testing.T) {
 	testRequires(c, IsAmd64, DaemonIsLinux)
 
 	pluginName := "cpuguy83/docker-logdriver-test:latest"
@@ -29,17 +41,17 @@ func (s *DockerSuite) TestPluginLogDriver(c *testing.T) {
 }
 
 // Make sure log drivers are listed in info, and v2 plugins are not.
-func (s *DockerSuite) TestPluginLogDriverInfoList(c *testing.T) {
+func (s *DockerCLIPluginLogDriverSuite) TestPluginLogDriverInfoList(c *testing.T) {
 	testRequires(c, IsAmd64, DaemonIsLinux)
 	pluginName := "cpuguy83/docker-logdriver-test"
 
 	dockerCmd(c, "plugin", "install", pluginName)
 
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.NewClientWithOpts(client.FromEnv)
 	assert.NilError(c, err)
-	defer cli.Close()
+	defer apiClient.Close()
 
-	info, err := cli.Info(context.Background())
+	info, err := apiClient.Info(context.Background())
 	assert.NilError(c, err)
 
 	drivers := strings.Join(info.Plugins.Log, " ")

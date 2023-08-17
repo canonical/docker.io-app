@@ -19,8 +19,127 @@ func TestLoadProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs := createSpec()
-	if _, err := LoadProfile(string(f), &rs); err != nil {
+	p, err := LoadProfile(string(f), &rs)
+	if err != nil {
 		t.Fatal(err)
+	}
+	var expectedErrno uint = 12345
+	var expectedDefaultErrno uint = 1
+	expected := specs.LinuxSeccomp{
+		DefaultAction:   specs.ActErrno,
+		DefaultErrnoRet: &expectedDefaultErrno,
+		Syscalls: []specs.LinuxSyscall{
+			{
+				Names:  []string{"clone"},
+				Action: specs.ActAllow,
+				Args: []specs.LinuxSeccompArg{{
+					Index:    0,
+					Value:    2114060288,
+					ValueTwo: 0,
+					Op:       specs.OpMaskedEqual,
+				}},
+			},
+			{
+
+				Names:  []string{"open"},
+				Action: specs.ActAllow,
+				Args:   []specs.LinuxSeccompArg{},
+			},
+			{
+				Names:  []string{"close"},
+				Action: specs.ActAllow,
+				Args:   []specs.LinuxSeccompArg{},
+			},
+			{
+				Names:    []string{"syslog"},
+				Action:   specs.ActErrno,
+				ErrnoRet: &expectedErrno,
+				Args:     []specs.LinuxSeccompArg{},
+			},
+		},
+	}
+
+	assert.DeepEqual(t, expected, *p)
+}
+
+func TestLoadProfileWithDefaultErrnoRet(t *testing.T) {
+	var profile = []byte(`{
+"defaultAction": "SCMP_ACT_ERRNO",
+"defaultErrnoRet": 6
+}`)
+	rs := createSpec()
+	p, err := LoadProfile(string(profile), &rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedErrnoRet := uint(6)
+	expected := specs.LinuxSeccomp{
+		DefaultAction:   specs.ActErrno,
+		DefaultErrnoRet: &expectedErrnoRet,
+	}
+
+	assert.DeepEqual(t, expected, *p)
+}
+
+func TestLoadProfileWithListenerPath(t *testing.T) {
+	var profile = []byte(`{
+"defaultAction": "SCMP_ACT_ERRNO",
+"listenerPath": "/var/run/seccompaget.sock",
+"listenerMetadata": "opaque-metadata"
+}`)
+	rs := createSpec()
+	p, err := LoadProfile(string(profile), &rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := specs.LinuxSeccomp{
+		DefaultAction:    specs.ActErrno,
+		ListenerPath:     "/var/run/seccompaget.sock",
+		ListenerMetadata: "opaque-metadata",
+	}
+
+	assert.DeepEqual(t, expected, *p)
+}
+
+func TestLoadProfileWithFlag(t *testing.T) {
+	profile := `{"defaultAction": "SCMP_ACT_ERRNO", "flags": ["SECCOMP_FILTER_FLAG_SPEC_ALLOW", "SECCOMP_FILTER_FLAG_LOG"]}`
+	expected := specs.LinuxSeccomp{
+		DefaultAction: specs.ActErrno,
+		Flags:         []specs.LinuxSeccompFlag{"SECCOMP_FILTER_FLAG_SPEC_ALLOW", "SECCOMP_FILTER_FLAG_LOG"},
+	}
+	rs := createSpec()
+	p, err := LoadProfile(profile, &rs)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, expected, *p)
+}
+
+// TestLoadProfileValidation tests that invalid profiles produce the correct error.
+func TestLoadProfileValidation(t *testing.T) {
+	tests := []struct {
+		doc      string
+		profile  string
+		expected string
+	}{
+		{
+			doc:      "conflicting architectures and archMap",
+			profile:  `{"defaultAction": "SCMP_ACT_ERRNO", "architectures": ["A", "B", "C"], "archMap": [{"architecture": "A", "subArchitectures": ["B", "C"]}]}`,
+			expected: `use either 'architectures' or 'archMap'`,
+		},
+		{
+			doc:      "conflicting syscall.name and syscall.names",
+			profile:  `{"defaultAction": "SCMP_ACT_ERRNO", "syscalls": [{"name": "accept", "names": ["accept"], "action": "SCMP_ACT_ALLOW"}]}`,
+			expected: `use either 'name' or 'names'`,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		rs := createSpec()
+		t.Run(tc.doc, func(t *testing.T) {
+			_, err := LoadProfile(tc.profile, &rs)
+			assert.ErrorContains(t, err, tc.expected)
+		})
 	}
 }
 
@@ -32,9 +151,17 @@ func TestLoadLegacyProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs := createSpec()
-	if _, err := LoadProfile(string(f), &rs); err != nil {
-		t.Fatal(err)
+	p, err := LoadProfile(string(f), &rs)
+	assert.NilError(t, err)
+	assert.Equal(t, p.DefaultAction, specs.ActErrno)
+	assert.DeepEqual(t, p.Architectures, []specs.Arch{"SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32"})
+	assert.Equal(t, len(p.Syscalls), 311)
+	expected := specs.LinuxSyscall{
+		Names:  []string{"accept"},
+		Action: specs.ActAllow,
+		Args:   []specs.LinuxSeccompArg{},
 	}
+	assert.DeepEqual(t, p.Syscalls[0], expected)
 }
 
 func TestLoadDefaultProfile(t *testing.T) {

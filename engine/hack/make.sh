@@ -36,10 +36,17 @@ DEFAULT_BUNDLES=(
 	dynbinary
 	test-integration
 	test-docker-py
-	cross
 )
 
 VERSION=${VERSION:-dev}
+if [[ $VERSION == refs/tags/* ]]; then
+	VERSION=${VERSION#refs/tags/}
+elif [[ $VERSION == refs/heads/* ]]; then
+	VERSION=$(sed <<< "${VERSION#refs/heads/}" -r 's#/+#-#g')
+elif [[ $VERSION == refs/pull/* ]]; then
+	VERSION=pr-$(grep <<< "$VERSION" -o '[0-9]\+')
+fi
+
 ! BUILDTIME=$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" --rfc-3339 ns 2> /dev/null | sed -e 's/ /T/')
 if [ "$DOCKER_GITCOMMIT" ]; then
 	GITCOMMIT="$DOCKER_GITCOMMIT"
@@ -83,44 +90,26 @@ add_buildtag() {
 	[[ " $DOCKER_BUILDTAGS" == *" $1_"* ]] || DOCKER_BUILDTAGS+=" $1_$2"
 }
 
-if ${PKG_CONFIG} 'libsystemd >= 209' 2> /dev/null; then
+if ${PKG_CONFIG} 'libsystemd' 2> /dev/null; then
 	DOCKER_BUILDTAGS+=" journald"
-elif ${PKG_CONFIG} 'libsystemd-journal' 2> /dev/null; then
-	DOCKER_BUILDTAGS+=" journald journald_compat"
 fi
 
 # test whether "libdevmapper.h" is new enough to support deferred remove
 # functionality. We favour libdm_dlsym_deferred_remove over
 # libdm_no_deferred_remove in dynamic cases because the binary could be shipped
 # with a newer libdevmapper than the one it was built with.
-if
-	command -v gcc &> /dev/null \
-		&& ! (echo -e '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }' | gcc -xc - -o /dev/null $(pkg-config --libs devmapper) &> /dev/null) \
-		;
-then
+if command -v gcc &> /dev/null && ! (echo -e '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }' | gcc -xc - -o /dev/null $(${PKG_CONFIG} --libs devmapper 2> /dev/null) &> /dev/null); then
 	add_buildtag libdm dlsym_deferred_remove
 fi
 
 # Use these flags when compiling the tests and final binary
 
-IAMSTATIC='true'
 if [ -z "$DOCKER_DEBUG" ]; then
 	LDFLAGS='-w'
 fi
 
-LDFLAGS_STATIC=''
-EXTLDFLAGS_STATIC='-static'
-# ORIG_BUILDFLAGS is necessary for the cross target which cannot always build
-# with options like -race.
-ORIG_BUILDFLAGS=(-tags "netgo osusergo static_build $DOCKER_BUILDTAGS" -installsuffix netgo)
-# see https://github.com/golang/go/issues/9369#issuecomment-69864440 for why -installsuffix is necessary here
-
-BUILDFLAGS=(${BUILDFLAGS} "${ORIG_BUILDFLAGS[@]}")
-
-LDFLAGS_STATIC_DOCKER="
-	$LDFLAGS_STATIC
-	-extldflags \"$EXTLDFLAGS_STATIC\"
-"
+BUILDFLAGS=(${BUILDFLAGS} -tags "netgo osusergo static_build $DOCKER_BUILDTAGS")
+LDFLAGS_STATIC="-extldflags -static"
 
 if [ "$(uname -s)" = 'FreeBSD' ]; then
 	# Tell cgo the compiler is Clang, not GCC

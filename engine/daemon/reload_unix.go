@@ -5,7 +5,7 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"bytes"
-	"fmt"
+	"strconv"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/daemon/config"
@@ -20,7 +20,7 @@ func (daemon *Daemon) reloadPlatform(conf *config.Config, attributes map[string]
 
 	if conf.IsValueSet("runtimes") {
 		// Always set the default one
-		conf.Runtimes[config.StockRuntimeName] = types.Runtime{Path: DefaultRuntimeBinary}
+		conf.Runtimes[config.StockRuntimeName] = types.Runtime{Path: config.DefaultRuntimeBinary}
 		if err := daemon.initRuntimes(conf.Runtimes); err != nil {
 			return err
 		}
@@ -49,12 +49,12 @@ func (daemon *Daemon) reloadPlatform(conf *config.Config, attributes map[string]
 		if runtimeList.Len() > 0 {
 			runtimeList.WriteRune(' ')
 		}
-		runtimeList.WriteString(fmt.Sprintf("%s:%s", name, rt.Path))
+		runtimeList.WriteString(name + ":" + rt.Path)
 	}
 
 	attributes["runtimes"] = runtimeList.String()
 	attributes["default-runtime"] = daemon.configStore.DefaultRuntime
-	attributes["default-shm-size"] = fmt.Sprintf("%d", daemon.configStore.ShmSize)
+	attributes["default-shm-size"] = strconv.FormatInt(int64(daemon.configStore.ShmSize), 10)
 	attributes["default-ipc-mode"] = daemon.configStore.IpcMode
 	attributes["default-cgroupns-mode"] = daemon.configStore.CgroupNamespaceMode
 

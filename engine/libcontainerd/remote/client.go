@@ -19,17 +19,17 @@ import (
 	"github.com/containerd/containerd/archive"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/content"
-	containerderrors "github.com/containerd/containerd/errdefs"
+	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/runtime/linux/runctypes"
 	v2runcoptions "github.com/containerd/containerd/runtime/v2/runc/options"
-	"github.com/containerd/typeurl"
+	"github.com/containerd/typeurl/v2"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd/queue"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	"github.com/docker/docker/pkg/ioutils"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/hashicorp/go-multierror"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -46,25 +46,38 @@ type client struct {
 	logger   *logrus.Entry
 	ns       string
 
-	backend         libcontainerdtypes.Backend
-	eventQ          queue.Queue
-	oomMu           sync.Mutex
-	oom             map[string]bool
-	v2runcoptionsMu sync.Mutex
-	// v2runcoptions is used for copying options specified on Create() to Start()
-	v2runcoptions map[string]v2runcoptions.Options
+	backend libcontainerdtypes.Backend
+	eventQ  queue.Queue
+}
+
+type container struct {
+	client *client
+	c8dCtr containerd.Container
+
+	v2runcoptions *v2runcoptions.Options
+}
+
+type task struct {
+	containerd.Task
+	ctr *container
+
+	// Workaround for https://github.com/containerd/containerd/issues/8557.
+	// See also https://github.com/moby/moby/issues/45595.
+	serializeExecStartsWorkaround sync.Mutex
+}
+
+type process struct {
+	containerd.Process
 }
 
 // NewClient creates a new libcontainerd client from a containerd client
 func NewClient(ctx context.Context, cli *containerd.Client, stateDir, ns string, b libcontainerdtypes.Backend) (libcontainerdtypes.Client, error) {
 	c := &client{
-		client:        cli,
-		stateDir:      stateDir,
-		logger:        logrus.WithField("module", "libcontainerd").WithField("namespace", ns),
-		ns:            ns,
-		backend:       b,
-		oom:           make(map[string]bool),
-		v2runcoptions: make(map[string]v2runcoptions.Options),
+		client:   cli,
+		stateDir: stateDir,
+		logger:   logrus.WithField("module", "libcontainerd").WithField("namespace", ns),
+		ns:       ns,
+		backend:  b,
 	}
 
 	go c.processEventStream(ctx, ns)
@@ -76,58 +89,36 @@ func (c *client) Version(ctx context.Context) (containerd.Version, error) {
 	return c.client.Version(ctx)
 }
 
-// Restore loads the containerd container.
-// It should not be called concurrently with any other operation for the given ID.
-func (c *client) Restore(ctx context.Context, id string, attachStdio libcontainerdtypes.StdioCallback) (alive bool, pid int, p libcontainerdtypes.Process, err error) {
+func (c *container) newTask(t containerd.Task) *task {
+	return &task{Task: t, ctr: c}
+}
+
+func (c *container) AttachTask(ctx context.Context, attachStdio libcontainerdtypes.StdioCallback) (_ libcontainerdtypes.Task, err error) {
 	var dio *cio.DirectIO
 	defer func() {
 		if err != nil && dio != nil {
 			dio.Cancel()
 			dio.Close()
 		}
-		err = wrapError(err)
 	}()
-
-	ctr, err := c.client.LoadContainer(ctx, id)
-	if err != nil {
-		return false, -1, nil, errors.WithStack(wrapError(err))
-	}
 
 	attachIO := func(fifos *cio.FIFOSet) (cio.IO, error) {
 		// dio must be assigned to the previously defined dio for the defer above
 		// to handle cleanup
-		dio, err = c.newDirectIO(ctx, fifos)
+		dio, err = c.client.newDirectIO(ctx, fifos)
 		if err != nil {
 			return nil, err
 		}
 		return attachStdio(dio)
 	}
-	t, err := ctr.Task(ctx, attachIO)
-	if err != nil && !containerderrors.IsNotFound(err) {
-		return false, -1, nil, errors.Wrap(wrapError(err), "error getting containerd task for container")
+	t, err := c.c8dCtr.Task(ctx, attachIO)
+	if err != nil {
+		return nil, errors.Wrap(wrapError(err), "error getting containerd task for container")
 	}
-
-	if t != nil {
-		s, err := t.Status(ctx)
-		if err != nil {
-			return false, -1, nil, errors.Wrap(wrapError(err), "error getting task status")
-		}
-		alive = s.Status != containerd.Stopped
-		pid = int(t.Pid())
-	}
-
-	c.logger.WithFields(logrus.Fields{
-		"container": id,
-		"alive":     alive,
-		"pid":       pid,
-	}).Debug("restored container")
-
-	return alive, pid, &restoredProcess{
-		p: t,
-	}, nil
+	return c.newTask(t), nil
 }
 
-func (c *client) Create(ctx context.Context, id string, ociSpec *specs.Spec, shim string, runtimeOptions interface{}, opts ...containerd.NewContainerOpts) error {
+func (c *client) NewContainer(ctx context.Context, id string, ociSpec *specs.Spec, shim string, runtimeOptions interface{}, opts ...containerd.NewContainerOpts) (libcontainerdtypes.Container, error) {
 	bdir := c.bundleDir(id)
 	c.logger.WithField("bundle", bdir).WithField("root", ociSpec.Root.Path).Debug("bundle dir created")
 
@@ -138,103 +129,99 @@ func (c *client) Create(ctx context.Context, id string, ociSpec *specs.Spec, shi
 	}
 	opts = append(opts, newOpts...)
 
-	_, err := c.client.NewContainer(ctx, id, opts...)
+	ctr, err := c.client.NewContainer(ctx, id, opts...)
 	if err != nil {
-		if containerderrors.IsAlreadyExists(err) {
-			return errors.WithStack(errdefs.Conflict(errors.New("id already in use")))
+		if cerrdefs.IsAlreadyExists(err) {
+			return nil, errors.WithStack(errdefs.Conflict(errors.New("id already in use")))
 		}
-		return wrapError(err)
+		return nil, wrapError(err)
+	}
+
+	created := container{
+		client: c,
+		c8dCtr: ctr,
 	}
 	if x, ok := runtimeOptions.(*v2runcoptions.Options); ok {
-		c.v2runcoptionsMu.Lock()
-		c.v2runcoptions[id] = *x
-		c.v2runcoptionsMu.Unlock()
+		created.v2runcoptions = x
 	}
-	return nil
+	return &created, nil
 }
 
 // Start create and start a task for the specified containerd id
-func (c *client) Start(ctx context.Context, id, checkpointDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
-	ctr, err := c.getContainer(ctx, id)
-	if err != nil {
-		return -1, err
-	}
+func (c *container) Start(ctx context.Context, checkpointDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (libcontainerdtypes.Task, error) {
 	var (
-		cp             *types.Descriptor
+		checkpoint     *types.Descriptor
 		t              containerd.Task
 		rio            cio.IO
-		stdinCloseSync = make(chan struct{})
+		stdinCloseSync = make(chan containerd.Process, 1)
 	)
 
 	if checkpointDir != "" {
 		// write checkpoint to the content store
 		tar := archive.Diff(ctx, "", checkpointDir)
-		cp, err = c.writeContent(ctx, images.MediaTypeContainerd1Checkpoint, checkpointDir, tar)
+		var err error
+		checkpoint, err = c.client.writeContent(ctx, images.MediaTypeContainerd1Checkpoint, checkpointDir, tar)
 		// remove the checkpoint when we're done
 		defer func() {
-			if cp != nil {
-				err := c.client.ContentStore().Delete(context.Background(), cp.Digest)
+			if checkpoint != nil {
+				err := c.client.client.ContentStore().Delete(ctx, checkpoint.Digest)
 				if err != nil {
-					c.logger.WithError(err).WithFields(logrus.Fields{
+					c.client.logger.WithError(err).WithFields(logrus.Fields{
 						"ref":    checkpointDir,
-						"digest": cp.Digest,
+						"digest": checkpoint.Digest,
 					}).Warnf("failed to delete temporary checkpoint entry")
 				}
 			}
 		}()
 		if err := tar.Close(); err != nil {
-			return -1, errors.Wrap(err, "failed to close checkpoint tar stream")
+			return nil, errors.Wrap(err, "failed to close checkpoint tar stream")
 		}
 		if err != nil {
-			return -1, errors.Wrapf(err, "failed to upload checkpoint to containerd")
+			return nil, errors.Wrapf(err, "failed to upload checkpoint to containerd")
 		}
 	}
 
-	spec, err := ctr.Spec(ctx)
+	// Optimization: assume the relevant metadata has not changed in the
+	// moment since the container was created. Elide redundant RPC requests
+	// to refresh the metadata separately for spec and labels.
+	md, err := c.c8dCtr.Info(ctx, containerd.WithoutRefreshedMetadata)
 	if err != nil {
-		return -1, errors.Wrap(err, "failed to retrieve spec")
+		return nil, errors.Wrap(err, "failed to retrieve metadata")
 	}
-	labels, err := ctr.Labels(ctx)
-	if err != nil {
-		return -1, errors.Wrap(err, "failed to retrieve labels")
+	bundle := md.Labels[DockerContainerBundlePath]
+
+	var spec specs.Spec
+	if err := json.Unmarshal(md.Spec.GetValue(), &spec); err != nil {
+		return nil, errors.Wrap(err, "failed to retrieve spec")
 	}
-	bundle := labels[DockerContainerBundlePath]
-	uid, gid := getSpecUser(spec)
+	uid, gid := getSpecUser(&spec)
 
 	taskOpts := []containerd.NewTaskOpts{
 		func(_ context.Context, _ *containerd.Client, info *containerd.TaskInfo) error {
-			info.Checkpoint = cp
+			info.Checkpoint = checkpoint
 			return nil
 		},
 	}
 
 	if runtime.GOOS != "windows" {
 		taskOpts = append(taskOpts, func(_ context.Context, _ *containerd.Client, info *containerd.TaskInfo) error {
-			c.v2runcoptionsMu.Lock()
-			opts, ok := c.v2runcoptions[id]
-			c.v2runcoptionsMu.Unlock()
-			if ok {
+			if c.v2runcoptions != nil {
+				opts := *c.v2runcoptions
 				opts.IoUid = uint32(uid)
 				opts.IoGid = uint32(gid)
 				info.Options = &opts
-			} else {
-				info.Options = &runctypes.CreateOptions{
-					IoUid:       uint32(uid),
-					IoGid:       uint32(gid),
-					NoPivotRoot: os.Getenv("DOCKER_RAMDISK") != "",
-				}
 			}
 			return nil
 		})
 	} else {
-		taskOpts = append(taskOpts, withLogLevel(c.logger.Level))
+		taskOpts = append(taskOpts, withLogLevel(c.client.logger.Level))
 	}
 
-	t, err = ctr.NewTask(ctx,
+	t, err = c.c8dCtr.NewTask(ctx,
 		func(id string) (cio.IO, error) {
-			fifos := newFIFOSet(bundle, libcontainerdtypes.InitProcessName, withStdin, spec.Process.Terminal)
+			fifos := newFIFOSet(bundle, id, withStdin, spec.Process.Terminal)
 
-			rio, err = c.createIO(fifos, id, libcontainerdtypes.InitProcessName, stdinCloseSync, attachStdio)
+			rio, err = c.createIO(fifos, stdinCloseSync, attachStdio)
 			return rio, err
 		},
 		taskOpts...,
@@ -245,21 +232,23 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, withStdin 
 			rio.Cancel()
 			rio.Close()
 		}
-		return -1, wrapError(err)
+		return nil, errors.Wrap(wrapError(err), "failed to create task for container")
 	}
 
 	// Signal c.createIO that it can call CloseIO
-	close(stdinCloseSync)
+	stdinCloseSync <- t
 
 	if err := t.Start(ctx); err != nil {
-		if _, err := t.Delete(ctx); err != nil {
-			c.logger.WithError(err).WithField("container", id).
+		// Only Stopped tasks can be deleted. Created tasks have to be
+		// killed first, to transition them to Stopped.
+		if _, err := t.Delete(ctx, containerd.WithProcessKill); err != nil {
+			c.client.logger.WithError(err).WithField("container", c.c8dCtr.ID()).
 				Error("failed to delete task after fail start")
 		}
-		return -1, wrapError(err)
+		return nil, wrapError(err)
 	}
 
-	return int(t.Pid()), nil
+	return c.newTask(t), nil
 }
 
 // Exec creates exec process.
@@ -269,31 +258,21 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, withStdin 
 // for the container main process, the stdin fifo will be created in Create not
 // the Start call. stdinCloseSync channel should be closed after Start exec
 // process.
-func (c *client) Exec(ctx context.Context, containerID, processID string, spec *specs.Process, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
-	ctr, err := c.getContainer(ctx, containerID)
-	if err != nil {
-		return -1, err
-	}
-	t, err := ctr.Task(ctx, nil)
-	if err != nil {
-		if containerderrors.IsNotFound(err) {
-			return -1, errors.WithStack(errdefs.InvalidParameter(errors.New("container is not running")))
-		}
-		return -1, wrapError(err)
-	}
-
+func (t *task) Exec(ctx context.Context, processID string, spec *specs.Process, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (libcontainerdtypes.Process, error) {
 	var (
 		p              containerd.Process
 		rio            cio.IO
-		stdinCloseSync = make(chan struct{})
+		stdinCloseSync = make(chan containerd.Process, 1)
 	)
 
-	labels, err := ctr.Labels(ctx)
+	// Optimization: assume the DockerContainerBundlePath label has not been
+	// updated since the container metadata was last loaded/refreshed.
+	md, err := t.ctr.c8dCtr.Info(ctx, containerd.WithoutRefreshedMetadata)
 	if err != nil {
-		return -1, wrapError(err)
+		return nil, wrapError(err)
 	}
 
-	fifos := newFIFOSet(labels[DockerContainerBundlePath], processID, withStdin, spec.Terminal)
+	fifos := newFIFOSet(md.Labels[DockerContainerBundlePath], processID, withStdin, spec.Terminal)
 
 	defer func() {
 		if err != nil {
@@ -304,86 +283,58 @@ func (c *client) Exec(ctx context.Context, containerID, processID string, spec *
 		}
 	}()
 
-	p, err = t.Exec(ctx, processID, spec, func(id string) (cio.IO, error) {
-		rio, err = c.createIO(fifos, containerID, processID, stdinCloseSync, attachStdio)
+	p, err = t.Task.Exec(ctx, processID, spec, func(id string) (cio.IO, error) {
+		rio, err = t.ctr.createIO(fifos, stdinCloseSync, attachStdio)
 		return rio, err
 	})
 	if err != nil {
 		close(stdinCloseSync)
-		if containerderrors.IsAlreadyExists(err) {
-			return -1, errors.WithStack(errdefs.Conflict(errors.New("id already in use")))
+		if cerrdefs.IsAlreadyExists(err) {
+			return nil, errors.WithStack(errdefs.Conflict(errors.New("id already in use")))
 		}
-		return -1, wrapError(err)
+		return nil, wrapError(err)
 	}
 
 	// Signal c.createIO that it can call CloseIO
 	//
 	// the stdin of exec process will be created after p.Start in containerd
-	defer close(stdinCloseSync)
+	defer func() { stdinCloseSync <- p }()
 
-	if err = p.Start(ctx); err != nil {
+	err = func() error {
+		t.serializeExecStartsWorkaround.Lock()
+		defer t.serializeExecStartsWorkaround.Unlock()
+		return p.Start(ctx)
+	}()
+	if err != nil {
 		// use new context for cleanup because old one may be cancelled by user, but leave a timeout to make sure
 		// we are not waiting forever if containerd is unresponsive or to work around fifo cancelling issues in
 		// older containerd-shim
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		p.Delete(ctx)
-		return -1, wrapError(err)
+		return nil, wrapError(err)
 	}
-	return int(p.Pid()), nil
+	return process{p}, nil
 }
 
-func (c *client) SignalProcess(ctx context.Context, containerID, processID string, signal int) error {
-	p, err := c.getProcess(ctx, containerID, processID)
-	if err != nil {
-		return err
-	}
-	return wrapError(p.Kill(ctx, syscall.Signal(signal)))
+func (t *task) Kill(ctx context.Context, signal syscall.Signal) error {
+	return wrapError(t.Task.Kill(ctx, signal))
 }
 
-func (c *client) ResizeTerminal(ctx context.Context, containerID, processID string, width, height int) error {
-	p, err := c.getProcess(ctx, containerID, processID)
-	if err != nil {
-		return err
-	}
-
-	return p.Resize(ctx, uint32(width), uint32(height))
+func (p process) Kill(ctx context.Context, signal syscall.Signal) error {
+	return wrapError(p.Process.Kill(ctx, signal))
 }
 
-func (c *client) CloseStdin(ctx context.Context, containerID, processID string) error {
-	p, err := c.getProcess(ctx, containerID, processID)
-	if err != nil {
-		return err
-	}
-
-	return p.CloseIO(ctx, containerd.WithStdinCloser)
+func (t *task) Pause(ctx context.Context) error {
+	return wrapError(t.Task.Pause(ctx))
 }
 
-func (c *client) Pause(ctx context.Context, containerID string) error {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return err
-	}
-
-	return wrapError(p.(containerd.Task).Pause(ctx))
+func (t *task) Resume(ctx context.Context) error {
+	return wrapError(t.Task.Resume(ctx))
 }
 
-func (c *client) Resume(ctx context.Context, containerID string) error {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return err
-	}
-
-	return p.(containerd.Task).Resume(ctx)
-}
-
-func (c *client) Stats(ctx context.Context, containerID string) (*libcontainerdtypes.Stats, error) {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return nil, err
-	}
-
-	m, err := p.(containerd.Task).Metrics(ctx)
+func (t *task) Stats(ctx context.Context) (*libcontainerdtypes.Stats, error) {
+	m, err := t.Metrics(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -395,32 +346,8 @@ func (c *client) Stats(ctx context.Context, containerID string) (*libcontainerdt
 	return libcontainerdtypes.InterfaceToStats(m.Timestamp, v), nil
 }
 
-func (c *client) ListPids(ctx context.Context, containerID string) ([]uint32, error) {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return nil, err
-	}
-
-	pis, err := p.(containerd.Task).Pids(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var pids []uint32
-	for _, i := range pis {
-		pids = append(pids, i.Pid)
-	}
-
-	return pids, nil
-}
-
-func (c *client) Summary(ctx context.Context, containerID string) ([]libcontainerdtypes.Summary, error) {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return nil, err
-	}
-
-	pis, err := p.(containerd.Task).Pids(ctx)
+func (t *task) Summary(ctx context.Context) ([]libcontainerdtypes.Summary, error) {
+	pis, err := t.Pids(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -441,57 +368,31 @@ func (c *client) Summary(ctx context.Context, containerID string) ([]libcontaine
 	return infos, nil
 }
 
-type restoredProcess struct {
-	p containerd.Process
+func (t *task) Delete(ctx context.Context) (*containerd.ExitStatus, error) {
+	s, err := t.Task.Delete(ctx)
+	return s, wrapError(err)
 }
 
-func (p *restoredProcess) Delete(ctx context.Context) (uint32, time.Time, error) {
-	if p.p == nil {
-		return 255, time.Now(), nil
-	}
-	status, err := p.p.Delete(ctx)
-	if err != nil {
-		return 255, time.Now(), nil
-	}
-	return status.ExitCode(), status.ExitTime(), nil
+func (p process) Delete(ctx context.Context) (*containerd.ExitStatus, error) {
+	s, err := p.Process.Delete(ctx)
+	return s, wrapError(err)
 }
 
-func (c *client) DeleteTask(ctx context.Context, containerID string) (uint32, time.Time, error) {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return 255, time.Now(), nil
-	}
-
-	status, err := p.Delete(ctx)
-	if err != nil {
-		return 255, time.Now(), nil
-	}
-	return status.ExitCode(), status.ExitTime(), nil
-}
-
-func (c *client) Delete(ctx context.Context, containerID string) error {
-	ctr, err := c.getContainer(ctx, containerID)
+func (c *container) Delete(ctx context.Context) error {
+	// Optimization: assume the DockerContainerBundlePath label has not been
+	// updated since the container metadata was last loaded/refreshed.
+	md, err := c.c8dCtr.Info(ctx, containerd.WithoutRefreshedMetadata)
 	if err != nil {
 		return err
 	}
-	labels, err := ctr.Labels(ctx)
-	if err != nil {
-		return err
-	}
-	bundle := labels[DockerContainerBundlePath]
-	if err := ctr.Delete(ctx); err != nil {
+	bundle := md.Labels[DockerContainerBundlePath]
+	if err := c.c8dCtr.Delete(ctx); err != nil {
 		return wrapError(err)
 	}
-	c.oomMu.Lock()
-	delete(c.oom, containerID)
-	c.oomMu.Unlock()
-	c.v2runcoptionsMu.Lock()
-	delete(c.v2runcoptions, containerID)
-	c.v2runcoptionsMu.Unlock()
 	if os.Getenv("LIBCONTAINERD_NOCLEAN") != "1" {
 		if err := os.RemoveAll(bundle); err != nil {
-			c.logger.WithError(err).WithFields(logrus.Fields{
-				"container": containerID,
+			c.client.logger.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
+				"container": c.c8dCtr.ID(),
 				"bundle":    bundle,
 			}).Error("failed to remove state dir")
 		}
@@ -499,37 +400,29 @@ func (c *client) Delete(ctx context.Context, containerID string) error {
 	return nil
 }
 
-func (c *client) Status(ctx context.Context, containerID string) (containerd.ProcessStatus, error) {
-	t, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return containerd.Unknown, err
-	}
-	s, err := t.Status(ctx)
-	if err != nil {
-		return containerd.Unknown, wrapError(err)
-	}
-	return s.Status, nil
+func (t *task) ForceDelete(ctx context.Context) error {
+	_, err := t.Task.Delete(ctx, containerd.WithProcessKill)
+	return wrapError(err)
 }
 
-func (c *client) getCheckpointOptions(id string, exit bool) containerd.CheckpointTaskOpts {
-	return func(r *containerd.CheckpointTaskInfo) error {
-		if r.Options == nil {
-			c.v2runcoptionsMu.Lock()
-			_, isV2 := c.v2runcoptions[id]
-			c.v2runcoptionsMu.Unlock()
+func (t *task) Status(ctx context.Context) (containerd.Status, error) {
+	s, err := t.Task.Status(ctx)
+	return s, wrapError(err)
+}
 
-			if isV2 {
-				r.Options = &v2runcoptions.CheckpointOptions{Exit: exit}
-			} else {
-				r.Options = &runctypes.CheckpointOptions{Exit: exit}
-			}
-			return nil
+func (p process) Status(ctx context.Context) (containerd.Status, error) {
+	s, err := p.Process.Status(ctx)
+	return s, wrapError(err)
+}
+
+func (c *container) getCheckpointOptions(exit bool) containerd.CheckpointTaskOpts {
+	return func(r *containerd.CheckpointTaskInfo) error {
+		if r.Options == nil && c.v2runcoptions != nil {
+			r.Options = &v2runcoptions.CheckpointOptions{}
 		}
 
 		switch opts := r.Options.(type) {
 		case *v2runcoptions.CheckpointOptions:
-			opts.Exit = exit
-		case *runctypes.CheckpointOptions:
 			opts.Exit = exit
 		}
 
@@ -537,40 +430,34 @@ func (c *client) getCheckpointOptions(id string, exit bool) containerd.Checkpoin
 	}
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool) error {
-	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
-	if err != nil {
-		return err
-	}
-
-	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, exit)}
-	img, err := p.(containerd.Task).Checkpoint(ctx, opts...)
+func (t *task) CreateCheckpoint(ctx context.Context, checkpointDir string, exit bool) error {
+	img, err := t.Task.Checkpoint(ctx, t.ctr.getCheckpointOptions(exit))
 	if err != nil {
 		return wrapError(err)
 	}
 	// Whatever happens, delete the checkpoint from containerd
 	defer func() {
-		err := c.client.ImageService().Delete(context.Background(), img.Name())
+		err := t.ctr.client.client.ImageService().Delete(ctx, img.Name())
 		if err != nil {
-			c.logger.WithError(err).WithField("digest", img.Target().Digest).
+			t.ctr.client.logger.WithError(err).WithField("digest", img.Target().Digest).
 				Warnf("failed to delete checkpoint image")
 		}
 	}()
 
-	b, err := content.ReadBlob(ctx, c.client.ContentStore(), img.Target())
+	b, err := content.ReadBlob(ctx, t.ctr.client.client.ContentStore(), img.Target())
 	if err != nil {
 		return errdefs.System(errors.Wrapf(err, "failed to retrieve checkpoint data"))
 	}
-	var index v1.Index
+	var index ocispec.Index
 	if err := json.Unmarshal(b, &index); err != nil {
 		return errdefs.System(errors.Wrapf(err, "failed to decode checkpoint data"))
 	}
 
-	var cpDesc *v1.Descriptor
+	var cpDesc *ocispec.Descriptor
 	for _, m := range index.Manifests {
 		m := m
 		if m.MediaType == images.MediaTypeContainerd1Checkpoint {
-			cpDesc = &m
+			cpDesc = &m //nolint:gosec
 			break
 		}
 	}
@@ -578,7 +465,7 @@ func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDi
 		return errdefs.System(errors.Wrapf(err, "invalid checkpoint"))
 	}
 
-	rat, err := c.client.ContentStore().ReaderAt(ctx, *cpDesc)
+	rat, err := t.ctr.client.client.ContentStore().ReaderAt(ctx, *cpDesc)
 	if err != nil {
 		return errdefs.System(errors.Wrapf(err, "failed to get checkpoint reader"))
 	}
@@ -591,77 +478,77 @@ func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDi
 	return err
 }
 
-func (c *client) getContainer(ctx context.Context, id string) (containerd.Container, error) {
+// LoadContainer loads the containerd container.
+func (c *client) LoadContainer(ctx context.Context, id string) (libcontainerdtypes.Container, error) {
 	ctr, err := c.client.LoadContainer(ctx, id)
 	if err != nil {
-		if containerderrors.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil, errors.WithStack(errdefs.NotFound(errors.New("no such container")))
 		}
 		return nil, wrapError(err)
 	}
-	return ctr, nil
+	return &container{client: c, c8dCtr: ctr}, nil
 }
 
-func (c *client) getProcess(ctx context.Context, containerID, processID string) (containerd.Process, error) {
-	ctr, err := c.getContainer(ctx, containerID)
+func (c *container) Task(ctx context.Context) (libcontainerdtypes.Task, error) {
+	t, err := c.c8dCtr.Task(ctx, nil)
 	if err != nil {
-		return nil, err
-	}
-	t, err := ctr.Task(ctx, nil)
-	if err != nil {
-		if containerderrors.IsNotFound(err) {
-			return nil, errors.WithStack(errdefs.NotFound(errors.New("container is not running")))
-		}
 		return nil, wrapError(err)
 	}
-	if processID == libcontainerdtypes.InitProcessName {
-		return t, nil
-	}
-	p, err := t.LoadProcess(ctx, processID, nil)
-	if err != nil {
-		if containerderrors.IsNotFound(err) {
-			return nil, errors.WithStack(errdefs.NotFound(errors.New("no such exec")))
-		}
-		return nil, wrapError(err)
-	}
-	return p, nil
+	return c.newTask(t), nil
 }
 
 // createIO creates the io to be used by a process
 // This needs to get a pointer to interface as upon closure the process may not have yet been registered
-func (c *client) createIO(fifos *cio.FIFOSet, containerID, processID string, stdinCloseSync chan struct{}, attachStdio libcontainerdtypes.StdioCallback) (cio.IO, error) {
+func (c *container) createIO(fifos *cio.FIFOSet, stdinCloseSync chan containerd.Process, attachStdio libcontainerdtypes.StdioCallback) (cio.IO, error) {
 	var (
 		io  *cio.DirectIO
 		err error
 	)
-	io, err = c.newDirectIO(context.Background(), fifos)
+	io, err = c.client.newDirectIO(context.Background(), fifos)
 	if err != nil {
 		return nil, err
 	}
 
 	if io.Stdin != nil {
 		var (
-			err       error
+			closeErr  error
 			stdinOnce sync.Once
 		)
 		pipe := io.Stdin
 		io.Stdin = ioutils.NewWriteCloserWrapper(pipe, func() error {
 			stdinOnce.Do(func() {
-				err = pipe.Close()
-				// Do the rest in a new routine to avoid a deadlock if the
-				// Exec/Start call failed.
-				go func() {
-					<-stdinCloseSync
-					p, err := c.getProcess(context.Background(), containerID, processID)
-					if err == nil {
-						err = p.CloseIO(context.Background(), containerd.WithStdinCloser)
-						if err != nil && strings.Contains(err.Error(), "transport is closing") {
-							err = nil
+				closeErr = pipe.Close()
+
+				select {
+				case p, ok := <-stdinCloseSync:
+					if !ok {
+						return
+					}
+					if err := closeStdin(context.Background(), p); err != nil {
+						if closeErr != nil {
+							closeErr = multierror.Append(closeErr, err)
+						} else {
+							// Avoid wrapping a single error in a multierror.
+							closeErr = err
 						}
 					}
-				}()
+				default:
+					// The process wasn't ready. Close its stdin asynchronously.
+					go func() {
+						p, ok := <-stdinCloseSync
+						if !ok {
+							return
+						}
+						if err := closeStdin(context.Background(), p); err != nil {
+							c.client.logger.WithError(err).
+								WithField("container", c.c8dCtr.ID()).
+								Error("failed to close container stdin")
+						}
+					}()
+				}
 			})
-			return err
+			return closeErr
 		})
 	}
 
@@ -673,54 +560,23 @@ func (c *client) createIO(fifos *cio.FIFOSet, containerID, processID string, std
 	return rio, err
 }
 
+func closeStdin(ctx context.Context, p containerd.Process) error {
+	err := p.CloseIO(ctx, containerd.WithStdinCloser)
+	if err != nil && strings.Contains(err.Error(), "transport is closing") {
+		err = nil
+	}
+	return err
+}
+
 func (c *client) processEvent(ctx context.Context, et libcontainerdtypes.EventType, ei libcontainerdtypes.EventInfo) {
 	c.eventQ.Append(ei.ContainerID, func() {
 		err := c.backend.ProcessEvent(ei.ContainerID, et, ei)
 		if err != nil {
-			c.logger.WithError(err).WithFields(logrus.Fields{
+			c.logger.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
 				"container":  ei.ContainerID,
 				"event":      et,
 				"event-info": ei,
 			}).Error("failed to process event")
-		}
-
-		if et == libcontainerdtypes.EventExit && ei.ProcessID != ei.ContainerID {
-			p, err := c.getProcess(ctx, ei.ContainerID, ei.ProcessID)
-			if err != nil {
-
-				c.logger.WithError(errors.New("no such process")).
-					WithFields(logrus.Fields{
-						"error":     err,
-						"container": ei.ContainerID,
-						"process":   ei.ProcessID,
-					}).Error("exit event")
-				return
-			}
-
-			ctr, err := c.getContainer(ctx, ei.ContainerID)
-			if err != nil {
-				c.logger.WithFields(logrus.Fields{
-					"container": ei.ContainerID,
-					"error":     err,
-				}).Error("failed to find container")
-			} else {
-				labels, err := ctr.Labels(ctx)
-				if err != nil {
-					c.logger.WithFields(logrus.Fields{
-						"container": ei.ContainerID,
-						"error":     err,
-					}).Error("failed to get container labels")
-					return
-				}
-				newFIFOSet(labels[DockerContainerBundlePath], ei.ProcessID, true, false).Close()
-			}
-			_, err = p.Delete(context.Background())
-			if err != nil {
-				c.logger.WithError(err).WithFields(logrus.Fields{
-					"container": ei.ContainerID,
-					"process":   ei.ProcessID,
-				}).Warn("failed to delete process")
-			}
 		}
 	})
 }
@@ -779,7 +635,6 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 	c.logger.Debug("processing event stream")
 
 	for {
-		var oomKilled bool
 		select {
 		case err = <-errC:
 			if err != nil {
@@ -837,9 +692,7 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 				et = libcontainerdtypes.EventOOM
 				ei = libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
-					OOMKilled:   true,
 				}
-				oomKilled = true
 			case *apievents.TaskExecAdded:
 				et = libcontainerdtypes.EventExecAdded
 				ei = libcontainerdtypes.EventInfo{
@@ -878,13 +731,6 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 				continue
 			}
 
-			c.oomMu.Lock()
-			if oomKilled {
-				c.oom[ei.ContainerID] = true
-			}
-			ei.OOMKilled = c.oom[ei.ContainerID]
-			c.oomMu.Unlock()
-
 			c.processEvent(ctx, et, ei)
 		}
 	}
@@ -921,7 +767,7 @@ func wrapError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case containerderrors.IsNotFound(err):
+	case cerrdefs.IsNotFound(err):
 		return errdefs.NotFound(err)
 	}
 

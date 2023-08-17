@@ -6,7 +6,9 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
+	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types"
 	"github.com/fvbommel/sortorder"
@@ -31,11 +33,12 @@ func newConfigListCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return RunConfigList(dockerCli, listOpts)
 		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
 	flags.BoolVarP(&listOpts.Quiet, "quiet", "q", false, "Only display IDs")
-	flags.StringVarP(&listOpts.Format, "format", "", "", "Pretty-print configs using a Go template")
+	flags.StringVarP(&listOpts.Format, "format", "", "", flagsHelper.FormatHelp)
 	flags.VarP(&listOpts.Filter, "filter", "f", "Filter output based on conditions provided")
 
 	return cmd

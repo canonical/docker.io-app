@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/pkg/signal"
+	"github.com/moby/sys/signal"
 )
 
 func TestForwardSignals(t *testing.T) {
@@ -44,5 +44,4 @@ func TestForwardSignals(t *testing.T) {
 	case <-timer.C:
 		t.Fatal("timeout waiting for signal to be processed")
 	}
-
 }

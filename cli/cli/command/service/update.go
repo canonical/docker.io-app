@@ -17,7 +17,7 @@ import (
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
 	units "github.com/docker/go-units"
-	"github.com/docker/swarmkit/api/defaults"
+	"github.com/moby/swarmkit/v2/api/defaults"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -32,6 +32,9 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdate(dockerCli, cmd.Flags(), options, args[0])
+		},
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			return CompletionFn(dockerCli)(cmd, args, toComplete)
 		},
 	}
 
@@ -59,7 +62,7 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	flags.SetAnnotation(flagDNSOptionRemove, "version", []string{"1.25"})
 	flags.Var(newListOptsVar(), flagDNSSearchRemove, "Remove a DNS search domain")
 	flags.SetAnnotation(flagDNSSearchRemove, "version", []string{"1.25"})
-	flags.Var(newListOptsVar(), flagHostRemove, "Remove a custom host-to-IP mapping (host:ip)")
+	flags.Var(newListOptsVar(), flagHostRemove, `Remove a custom host-to-IP mapping ("host:ip")`)
 	flags.SetAnnotation(flagHostRemove, "version", []string{"1.25"})
 	flags.Var(&options.labels, flagLabelAdd, "Add or update a service label")
 	flags.Var(&options.containerLabels, flagContainerLabelAdd, "Add or update a container label")
@@ -93,7 +96,7 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	flags.SetAnnotation(flagDNSOptionAdd, "version", []string{"1.25"})
 	flags.Var(&options.dnsSearch, flagDNSSearchAdd, "Add or update a custom DNS search domain")
 	flags.SetAnnotation(flagDNSSearchAdd, "version", []string{"1.25"})
-	flags.Var(&options.hosts, flagHostAdd, "Add a custom host-to-IP mapping (host:ip)")
+	flags.Var(&options.hosts, flagHostAdd, `Add a custom host-to-IP mapping ("host:ip")`)
 	flags.SetAnnotation(flagHostAdd, "version", []string{"1.25"})
 	flags.BoolVar(&options.init, flagInit, false, "Use an init inside each service container to forward signals and reap processes")
 	flags.SetAnnotation(flagInit, "version", []string{"1.37"})
@@ -876,8 +879,8 @@ func removeConfigs(flags *pflag.FlagSet, spec *swarm.ContainerSpec, credSpecName
 }
 
 func envKey(value string) string {
-	kv := strings.SplitN(value, "=", 2)
-	return kv[0]
+	k, _, _ := strings.Cut(value, "=")
+	return k
 }
 
 func buildToRemoveSet(flags *pflag.FlagSet, flag string) map[string]struct{} {
@@ -996,7 +999,6 @@ func updateDNSConfig(flags *pflag.FlagSet, config **swarm.DNSConfig) error {
 	for _, nameserver := range nameservers {
 		if _, exists := toRemove[nameserver]; !exists {
 			newConfig.Nameservers = append(newConfig.Nameservers, nameserver)
-
 		}
 	}
 	// Sort so that result is predictable.
@@ -1172,12 +1174,8 @@ func updateHosts(flags *pflag.FlagSet, hosts *[]string) error {
 	if flags.Changed(flagHostRemove) {
 		extraHostsToRemove := flags.Lookup(flagHostRemove).Value.(*opts.ListOpts).GetAll()
 		for _, entry := range extraHostsToRemove {
-			v := strings.SplitN(entry, ":", 2)
-			if len(v) > 1 {
-				toRemove = append(toRemove, hostMapping{IPAddr: v[1], Host: v[0]})
-			} else {
-				toRemove = append(toRemove, hostMapping{Host: v[0]})
-			}
+			hostName, ipAddr, _ := strings.Cut(entry, ":")
+			toRemove = append(toRemove, hostMapping{IPAddr: ipAddr, Host: hostName})
 		}
 	}
 

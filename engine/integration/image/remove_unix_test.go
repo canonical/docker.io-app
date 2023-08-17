@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -45,19 +44,17 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	ctx := context.Background()
 	client := d.NewClientT(t)
 
-	layerStores := make(map[string]layer.Store)
-	layerStores[runtime.GOOS], _ = layer.NewStoreFromOptions(layer.StoreOptions{
+	layerStore, _ := layer.NewStoreFromOptions(layer.StoreOptions{
 		Root:                      d.Root,
 		MetadataStorePathTemplate: filepath.Join(d.RootDir(), "image", "%s", "layerdb"),
 		GraphDriver:               d.StorageDriver(),
 		GraphDriverOptions:        nil,
-		IDMapping:                 &idtools.IdentityMapping{},
+		IDMapping:                 idtools.IdentityMapping{},
 		PluginGetter:              nil,
 		ExperimentalEnabled:       false,
-		OS:                        runtime.GOOS,
 	})
 	i := images.NewImageService(images.ImageServiceConfig{
-		LayerStores: layerStores,
+		LayerStore: layerStore,
 	})
 
 	img := "test-garbage-collector"

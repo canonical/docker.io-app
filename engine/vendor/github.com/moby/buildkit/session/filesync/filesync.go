@@ -27,27 +27,35 @@ const (
 )
 
 type fsSyncProvider struct {
-	dirs   map[string]SyncedDir
+	dirs   DirSource
 	p      progressCb
 	doneCh chan error
 }
 
 type SyncedDir struct {
-	Name     string
 	Dir      string
 	Excludes []string
-	Map      func(string, *fstypes.Stat) bool
+	Map      func(string, *fstypes.Stat) fsutil.MapResult
+}
+
+type DirSource interface {
+	LookupDir(string) (SyncedDir, bool)
+}
+
+type StaticDirSource map[string]SyncedDir
+
+var _ DirSource = StaticDirSource{}
+
+func (dirs StaticDirSource) LookupDir(name string) (SyncedDir, bool) {
+	dir, found := dirs[name]
+	return dir, found
 }
 
 // NewFSSyncProvider creates a new provider for sending files from client
-func NewFSSyncProvider(dirs []SyncedDir) session.Attachable {
-	p := &fsSyncProvider{
-		dirs: map[string]SyncedDir{},
+func NewFSSyncProvider(dirs DirSource) session.Attachable {
+	return &fsSyncProvider{
+		dirs: dirs,
 	}
-	for _, d := range dirs {
-		p.dirs[d.Name] = d
-	}
-	return p
 }
 
 func (sp *fsSyncProvider) Register(server *grpc.Server) {
@@ -64,13 +72,13 @@ func (sp *fsSyncProvider) TarStream(stream FileSync_TarStreamServer) error {
 func (sp *fsSyncProvider) handle(method string, stream grpc.ServerStream) (retErr error) {
 	var pr *protocol
 	for _, p := range supportedProtocols {
-		if method == p.name && isProtoSupported(p.name) {
+		if method == p.name {
 			pr = &p
 			break
 		}
 	}
 	if pr == nil {
-		return errors.New("failed to negotiate protocol")
+		return InvalidSessionError{errors.New("failed to negotiate protocol")}
 	}
 
 	opts, _ := metadata.FromIncomingContext(stream.Context()) // if no metadata continue with empty object
@@ -81,9 +89,9 @@ func (sp *fsSyncProvider) handle(method string, stream grpc.ServerStream) (retEr
 		dirName = name[0]
 	}
 
-	dir, ok := sp.dirs[dirName]
+	dir, ok := sp.dirs.LookupDir(dirName)
 	if !ok {
-		return status.Errorf(codes.NotFound, "no access allowed to dir %q", dirName)
+		return InvalidSessionError{status.Errorf(codes.NotFound, "no access allowed to dir %q", dirName)}
 	}
 
 	excludes := opts[keyExcludePatterns]
@@ -130,15 +138,7 @@ type progressCb func(int, bool)
 type protocol struct {
 	name   string
 	sendFn func(stream Stream, fs fsutil.FS, progress progressCb) error
-	recvFn func(stream grpc.ClientStream, destDir string, cu CacheUpdater, progress progressCb, mapFunc func(string, *fstypes.Stat) bool) error
-}
-
-func isProtoSupported(p string) bool {
-	// TODO: this should be removed after testing if stability is confirmed
-	if override := os.Getenv("BUILD_STREAM_PROTOCOL"); override != "" {
-		return strings.EqualFold(p, override)
-	}
-	return true
+	recvFn func(stream grpc.ClientStream, destDir string, cu CacheUpdater, progress progressCb, differ fsutil.DiffType, mapFunc func(string, *fstypes.Stat) bool) error
 }
 
 var supportedProtocols = []protocol{
@@ -160,6 +160,7 @@ type FSSendRequestOpt struct {
 	CacheUpdater     CacheUpdater
 	ProgressCb       func(int, bool)
 	Filter           func(string, *fstypes.Stat) bool
+	Differ           fsutil.DiffType
 }
 
 // CacheUpdater is an object capable of sending notifications for the cache hash changes
@@ -173,7 +174,7 @@ type CacheUpdater interface {
 func FSSync(ctx context.Context, c session.Caller, opt FSSendRequestOpt) error {
 	var pr *protocol
 	for _, p := range supportedProtocols {
-		if isProtoSupported(p.name) && c.Supports(session.MethodURL(_FileSync_serviceDesc.ServiceName, p.name)) {
+		if c.Supports(session.MethodURL(_FileSync_serviceDesc.ServiceName, p.name)) {
 			pr = &p
 			break
 		}
@@ -227,7 +228,7 @@ func FSSync(ctx context.Context, c session.Caller, opt FSSendRequestOpt) error {
 		panic(fmt.Sprintf("invalid protocol: %q", pr.name))
 	}
 
-	return pr.recvFn(stream, opt.DestDir, opt.CacheUpdater, opt.ProgressCb, opt.Filter)
+	return pr.recvFn(stream, opt.DestDir, opt.CacheUpdater, opt.ProgressCb, opt.Differ, opt.Filter)
 }
 
 // NewFSSyncTargetDir allows writing into a directory
@@ -323,4 +324,16 @@ func CopyFileWriter(ctx context.Context, md map[string]string, c session.Caller)
 	}
 
 	return newStreamWriter(cc), nil
+}
+
+type InvalidSessionError struct {
+	err error
+}
+
+func (e InvalidSessionError) Error() string {
+	return e.err.Error()
+}
+
+func (e InvalidSessionError) Unwrap() error {
+	return e.err
 }

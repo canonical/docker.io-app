@@ -6,7 +6,9 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
+	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/templates"
 	"github.com/docker/docker/api/types"
@@ -15,14 +17,15 @@ import (
 )
 
 type psOptions struct {
-	quiet   bool
-	size    bool
-	all     bool
-	noTrunc bool
-	nLatest bool
-	last    int
-	format  string
-	filter  opts.FilterOpt
+	quiet       bool
+	size        bool
+	sizeChanged bool
+	all         bool
+	noTrunc     bool
+	nLatest     bool
+	last        int
+	format      string
+	filter      opts.FilterOpt
 }
 
 // NewPsCommand creates a new cobra.Command for `docker ps`
@@ -34,8 +37,14 @@ func NewPsCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "List containers",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			options.sizeChanged = cmd.Flags().Changed("size")
 			return runPs(dockerCli, &options)
 		},
+		Annotations: map[string]string{
+			"category-top": "3",
+			"aliases":      "docker container ls, docker container list, docker container ps, docker ps",
+		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
@@ -46,7 +55,7 @@ func NewPsCommand(dockerCli command.Cli) *cobra.Command {
 	flags.BoolVar(&options.noTrunc, "no-trunc", false, "Don't truncate output")
 	flags.BoolVarP(&options.nLatest, "latest", "l", false, "Show the latest created container (includes all states)")
 	flags.IntVarP(&options.last, "last", "n", -1, "Show n last created containers (includes all states)")
-	flags.StringVarP(&options.format, "format", "", "", "Pretty-print containers using a Go template")
+	flags.StringVarP(&options.format, "format", "", "", flagsHelper.FormatHelp)
 	flags.VarP(&options.filter, "filter", "f", "Filter output based on conditions provided")
 
 	return cmd
@@ -71,16 +80,9 @@ func buildContainerListOptions(opts *psOptions) (*types.ContainerListOptions, er
 		options.Limit = 1
 	}
 
-	options.Size = opts.size
-	if !options.Size && len(opts.format) > 0 {
-		// The --size option isn't set, but .Size may be used in the template.
-		// Parse and execute the given template to detect if the .Size field is
-		// used. If it is, then automatically enable the --size option. See #24696
-		//
-		// Only requesting container size information when needed is an optimization,
-		// because calculating the size is a costly operation.
+	// always validate template when `--format` is used, for consistency
+	if len(opts.format) > 0 {
 		tmpl, err := templates.NewParse("", opts.format)
-
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to parse template")
 		}
@@ -93,8 +95,19 @@ func buildContainerListOptions(opts *psOptions) (*types.ContainerListOptions, er
 			return nil, errors.Wrap(err, "failed to execute template")
 		}
 
-		if _, ok := optionsProcessor.FieldsUsed["Size"]; ok {
-			options.Size = true
+		// if `size` was not explicitly set to false (with `--size=false`)
+		// and `--quiet` is not set, request size if the template requires it
+		if !opts.quiet && !options.Size && !opts.sizeChanged {
+			// The --size option isn't set, but .Size may be used in the template.
+			// Parse and execute the given template to detect if the .Size field is
+			// used. If it is, then automatically enable the --size option. See #24696
+			//
+			// Only requesting container size information when needed is an optimization,
+			// because calculating the size is a costly operation.
+
+			if _, ok := optionsProcessor.FieldsUsed["Size"]; ok {
+				options.Size = true
+			}
 		}
 	}
 
@@ -103,6 +116,13 @@ func buildContainerListOptions(opts *psOptions) (*types.ContainerListOptions, er
 
 func runPs(dockerCli command.Cli, options *psOptions) error {
 	ctx := context.Background()
+
+	if len(options.format) == 0 {
+		// load custom psFormat from CLI config (if any)
+		options.format = dockerCli.ConfigFile().PsFormat
+	} else if options.quiet {
+		_, _ = dockerCli.Err().Write([]byte("WARNING: Ignoring custom format, because both --format and --quiet are set.\n"))
+	}
 
 	listOptions, err := buildContainerListOptions(options)
 	if err != nil {
@@ -114,18 +134,9 @@ func runPs(dockerCli command.Cli, options *psOptions) error {
 		return err
 	}
 
-	format := options.format
-	if len(format) == 0 {
-		if len(dockerCli.ConfigFile().PsFormat) > 0 && !options.quiet {
-			format = dockerCli.ConfigFile().PsFormat
-		} else {
-			format = formatter.TableFormatKey
-		}
-	}
-
 	containerCtx := formatter.Context{
 		Output: dockerCli.Out(),
-		Format: formatter.NewContainerFormat(format, options.quiet, listOptions.Size),
+		Format: formatter.NewContainerFormat(options.format, options.quiet, listOptions.Size),
 		Trunc:  !options.noTrunc,
 	}
 	return formatter.ContainerWrite(containerCtx, containers)

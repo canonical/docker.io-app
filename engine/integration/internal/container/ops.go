@@ -1,7 +1,6 @@
 package container
 
 import (
-	"fmt"
 	"strings"
 
 	containertypes "github.com/docker/docker/api/types/container"
@@ -9,7 +8,7 @@ import (
 	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/go-connections/nat"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // WithName sets the name of the container
@@ -91,23 +90,20 @@ func WithVolume(target string) func(*TestContainerConfig) {
 // WithBind sets the bind mount of the container
 func WithBind(src, target string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
-		c.HostConfig.Binds = append(c.HostConfig.Binds, fmt.Sprintf("%s:%s", src, target))
+		c.HostConfig.Binds = append(c.HostConfig.Binds, src+":"+target)
 	}
 }
 
-// WithTmpfs sets a target path in the container to a tmpfs
-func WithTmpfs(target string) func(config *TestContainerConfig) {
+// WithTmpfs sets a target path in the container to a tmpfs, with optional options
+// (separated with a colon).
+func WithTmpfs(targetAndOpts string) func(config *TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.HostConfig.Tmpfs == nil {
 			c.HostConfig.Tmpfs = make(map[string]string)
 		}
 
-		spec := strings.SplitN(target, ":", 2)
-		var opts string
-		if len(spec) > 1 {
-			opts = spec[1]
-		}
-		c.HostConfig.Tmpfs[spec[0]] = opts
+		target, opts, _ := strings.Cut(targetAndOpts, ":")
+		c.HostConfig.Tmpfs[target] = opts
 	}
 }
 
@@ -208,8 +204,36 @@ func WithExtraHost(extraHost string) func(*TestContainerConfig) {
 }
 
 // WithPlatform specifies the desired platform the image should have.
-func WithPlatform(p *specs.Platform) func(*TestContainerConfig) {
+func WithPlatform(p *ocispec.Platform) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.Platform = p
+	}
+}
+
+// WithWindowsDevice specifies a Windows Device, ala `--device` on the CLI
+func WithWindowsDevice(device string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.Devices = append(c.HostConfig.Devices, containertypes.DeviceMapping{PathOnHost: device})
+	}
+}
+
+// WithIsolation specifies the isolation technology to apply to the container
+func WithIsolation(isolation containertypes.Isolation) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.Isolation = isolation
+	}
+}
+
+// WithConsoleSize sets the initial console size of the container
+func WithConsoleSize(width, height uint) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.ConsoleSize = [2]uint{height, width}
+	}
+}
+
+// WithRuntime sets the runtime to use to start the container
+func WithRuntime(name string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.Runtime = name
 	}
 }

@@ -13,4 +13,3 @@ engine/vendor/github.com/containerd/containerd/NOTICE
 engine/vendor/github.com/docker/go-metrics/NOTICE
 engine/vendor/github.com/opencontainers/runc/NOTICE
 engine/vendor/github.com/prometheus/client_golang/NOTICE
-libnetwork/vendor/github.com/docker/docker/NOTICE

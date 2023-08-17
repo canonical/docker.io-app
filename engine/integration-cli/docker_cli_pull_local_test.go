@@ -14,7 +14,7 @@ import (
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/schema2"
 	"github.com/docker/docker/integration-cli/cli/build"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/go-digest"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/icmd"
 )
@@ -323,7 +323,7 @@ func (s *DockerRegistrySuite) TestPullManifestList(c *testing.T) {
 	assert.NilError(c, err, "error marshalling manifest list")
 
 	manifestListDigest := digest.FromBytes(manifestListJSON)
-	hexDigest := manifestListDigest.Hex()
+	hexDigest := manifestListDigest.Encoded()
 
 	registryV2Path := s.reg.Path()
 
@@ -367,16 +367,14 @@ func (s *DockerRegistrySuite) TestPullManifestList(c *testing.T) {
 
 // #23100
 func (s *DockerRegistryAuthHtpasswdSuite) TestPullWithExternalAuthLoginWithScheme(c *testing.T) {
-	osPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", osPath)
-
 	workingDir, err := os.Getwd()
 	assert.NilError(c, err)
 	absolute, err := filepath.Abs(filepath.Join(workingDir, "fixtures", "auth"))
 	assert.NilError(c, err)
-	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
 
-	os.Setenv("PATH", testPath)
+	osPath := os.Getenv("PATH")
+	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
+	c.Setenv("PATH", testPath)
 
 	repoName := fmt.Sprintf("%v/dockercli/busybox:authtest", privateRegistryURL)
 
@@ -393,7 +391,7 @@ func (s *DockerRegistryAuthHtpasswdSuite) TestPullWithExternalAuthLoginWithSchem
 
 	b, err := os.ReadFile(configPath)
 	assert.NilError(c, err)
-	assert.Assert(c, !strings.Contains(string(b), "\"auth\":"))
+	assert.Assert(c, !strings.Contains(string(b), `"auth":`))
 	dockerCmd(c, "--config", tmp, "tag", "busybox", repoName)
 	dockerCmd(c, "--config", tmp, "push", repoName)
 
@@ -411,16 +409,14 @@ func (s *DockerRegistryAuthHtpasswdSuite) TestPullWithExternalAuthLoginWithSchem
 }
 
 func (s *DockerRegistryAuthHtpasswdSuite) TestPullWithExternalAuth(c *testing.T) {
-	osPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", osPath)
-
 	workingDir, err := os.Getwd()
 	assert.NilError(c, err)
 	absolute, err := filepath.Abs(filepath.Join(workingDir, "fixtures", "auth"))
 	assert.NilError(c, err)
-	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
 
-	os.Setenv("PATH", testPath)
+	osPath := os.Getenv("PATH")
+	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
+	c.Setenv("PATH", testPath)
 
 	repoName := fmt.Sprintf("%v/dockercli/busybox:authtest", privateRegistryURL)
 
@@ -437,7 +433,7 @@ func (s *DockerRegistryAuthHtpasswdSuite) TestPullWithExternalAuth(c *testing.T)
 
 	b, err := os.ReadFile(configPath)
 	assert.NilError(c, err)
-	assert.Assert(c, !strings.Contains(string(b), "\"auth\":"))
+	assert.Assert(c, !strings.Contains(string(b), `"auth":`))
 	dockerCmd(c, "--config", tmp, "tag", "busybox", repoName)
 	dockerCmd(c, "--config", tmp, "push", repoName)
 

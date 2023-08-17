@@ -39,12 +39,12 @@ func TestValidateOutputPath(t *testing.T) {
 	basedir := t.TempDir()
 	dir := filepath.Join(basedir, "dir")
 	notexist := filepath.Join(basedir, "notexist")
-	err := os.MkdirAll(dir, 0755)
+	err := os.MkdirAll(dir, 0o755)
 	assert.NilError(t, err)
 	file := filepath.Join(dir, "file")
-	err = os.WriteFile(file, []byte("hi"), 0644)
+	err = os.WriteFile(file, []byte("hi"), 0o644)
 	assert.NilError(t, err)
-	var testcases = []struct {
+	testcases := []struct {
 		path string
 		err  error
 	}{

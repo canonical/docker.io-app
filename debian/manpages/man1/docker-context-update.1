@@ -1,0 +1,53 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-context-update - Update a context
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker context update [OPTIONS] CONTEXT\fP
+
+
+.SH DESCRIPTION
+.PP
+Update a context
+
+.PP
+Docker endpoint config:
+
+.PP
+NAME                DESCRIPTION
+from                Copy named context's Docker endpoint configuration
+host                Docker endpoint on which to connect
+ca                  Trust certs signed only by this CA
+cert                Path to TLS certificate file
+key                 Path to TLS key file
+skip-tls-verify     Skip TLS certificate validation
+
+.PP
+Example:
+
+.PP
+$ docker context update my-context --description "some description" --docker "host=tcp://myserver:2376,ca=~/ca-file,cert=~/cert-file,key=~/key-file"
+
+
+.SH OPTIONS
+.PP
+\fB--description\fP=""
+	Description of the context
+
+.PP
+\fB--docker\fP=[]
+	set the docker endpoint
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for update
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-context(1)\fP

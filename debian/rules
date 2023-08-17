@@ -7,6 +7,11 @@ export VERSION := $(DEB_VERSION_UPSTREAM)
 
 export DOCKER_GITCOMMIT := $(DEB_VERSION)
 
+export MANPAGES_VERSION := $(shell cat debian/manpages/upstream-version)
+
+# Build with Golang 1.20
+export PATH := /usr/lib/go-1.20/bin:$(PATH)
+
 # temporary build path (see http://golang.org/doc/code.html#GOPATH)
 OUR_GOPATH := $(CURDIR)/.gopath
 export GOPATH := $(OUR_GOPATH)
@@ -33,15 +38,12 @@ override_dh_gencontrol:
 		-tags "$(DOCKER_BUILDTAGS)" \
 		github.com/docker/docker/cmd/dockerd \
 		github.com/docker/cli/cmd/docker \
-		github.com/docker/libnetwork/cmd/proxy \
+		github.com/docker/docker/cmd/docker-proxy \
 	' dh_golang --builddirectory='$(OUR_GOPATH:$(CURDIR)/%=%)'
 	dh_gencontrol
 
 override_dh_auto_configure:
 	# set up GOPATH symlink farm
-	# libnetwork
-	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
-	ln -sfT '$(CURDIR)/libnetwork' '$(OUR_GOPATH)/src/github.com/docker/libnetwork'
 	# cli
 	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
 	ln -sfT '$(CURDIR)/cli' '$(OUR_GOPATH)/src/github.com/docker/cli'
@@ -49,7 +51,7 @@ override_dh_auto_configure:
 	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
 	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/docker/docker'
 
-override_dh_auto_build: _build-tini _build-proxy _build-cli _build-manpages _build-engine
+override_dh_auto_build: _check-manpages _build-tini _build-proxy _build-cli _build-engine
 	@#
 
 # several "supporting binaries" need to be built and installed
@@ -62,7 +64,7 @@ _build-tini: # (docker-init)
 		&& make tini-static
 
 _build-proxy: # (from libnetwork)
-	go build -o libnetwork/docker-proxy github.com/docker/libnetwork/cmd/proxy
+	go build -o libnetwork/docker-proxy github.com/docker/docker/cmd/docker-proxy
 
 _build-cli:
 	DISABLE_WARN_OUTSIDE_CONTAINER=1 \
@@ -72,14 +74,14 @@ _build-cli:
 			GITCOMMIT='$(DOCKER_GITCOMMIT)' \
 			dynbinary
 
-# https://github.com/docker/docker-ce/blob/v19.03.6/components/cli/scripts/docs/generate-man.sh
-# (replacing hard-coded "/tmp/gen-manpages" with "debian/tmp/gen-manpages")
-_build-manpages:
-	cd '$(OUR_GOPATH)/src/github.com/docker/cli' \
-		&& export PATH='$(OUR_GOPATH)/bin':"$$PATH" \
-		&& sed 's!/tmp/gen-manpages!$(CURDIR)/debian/tmp/gen-manpages!g' scripts/docs/generate-man.sh \
-		&& sed 's!/go/bin/go-md2man!$(OUR_GOPATH)/bin/go-md2man!g' scripts/docs/generate-man.sh \
-			| bash
+_check-manpages:
+ifeq ($(VERSION), $(MANPAGES_VERSION))
+	@echo "Manpages are up-to-date"
+else
+	@echo "Manpages version does not match the upstream version."
+	@echo "Please, run debian/helpers/build-manpages.sh"
+	exit 1
+endif
 
 _build-engine:
 	cd engine \
@@ -94,9 +96,6 @@ override_dh_auto_test:
 	./cli/build/docker --version
 	# engine
 	./engine/bundles/dynbinary-daemon/dockerd --version
-
-override_dh_strip:
-	# Go has lots of problems with stripping, so just don't
 
 override_dh_auto_install:
 	# we use dh_install / dh-exec for installing files where they need to be

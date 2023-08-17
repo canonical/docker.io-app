@@ -13,6 +13,131 @@ keywords: "API, Docker, rcli, REST, documentation"
      will be rejected.
 -->
 
+## v1.43 API changes
+
+[Docker Engine API v1.43](https://docs.docker.com/engine/api/v1.43/) documentation
+
+* `POST /containers/create` now accepts `Annotations` as part of `HostConfig`.
+  Can be used to attach arbitrary metadata to the container, which will also be
+  passed to the runtime when the container is started.
+* `GET /images/json` no longer includes hardcoded `<none>:<none>` and
+  `<none>@<none>` in `RepoTags` and`RepoDigests` for untagged images.
+  In such cases, empty arrays will be produced instead.
+* The `VirtualSize` field in the `GET /images/{name}/json`, `GET /images/json`,
+  and `GET /system/df` responses is deprecated and will no longer be included
+  in API v1.44. Use the `Size` field instead, which contains the same information.
+* `GET /info` now includes `no-new-privileges` in the `SecurityOptions` string
+  list when this option is enabled globally. This change is not versioned, and
+  affects all API versions if the daemon has this patch.
+
+## v1.42 API changes
+
+[Docker Engine API v1.42](https://docs.docker.com/engine/api/v1.42/) documentation
+
+* Removed the `BuilderSize` field on the `GET /system/df` endpoint. This field
+  was introduced in API 1.31 as part of an experimental feature, and no longer
+  used since API 1.40.
+  Use field `BuildCache` instead to track storage used by the builder component.
+* `POST /containers/{id}/stop` and `POST /containers/{id}/restart` now accept a
+  `signal` query parameter, which allows overriding the container's default stop-
+  signal.
+* `GET /images/json` now accepts query parameter `shared-size`. When set `true`,
+  images returned will include `SharedSize`, which provides the size on disk shared
+  with other images present on the system.
+* `GET /system/df` now accepts query parameter `type`. When set,
+  computes and returns data only for the specified object type.
+  The parameter can be specified multiple times to select several object types.
+  Supported values are: `container`, `image`, `volume`, `build-cache`.
+* `GET /system/df` can now be used concurrently. If a request is made while a
+  previous request is still being processed, the request will receive the result
+  of the already running calculation, once completed. Previously, an error
+  (`a disk usage operation is already running`) would be returned in this
+  situation. This change is not versioned, and affects all API versions if the
+  daemon has this patch.
+* The `POST /images/create` now supports both the operating system and architecture
+  that is passed through the `platform` query parameter when using the `fromSrc`
+  option to import an image from an archive. Previously, only the operating system
+  was used and the architecture was ignored. If no `platform` option is set, the
+  host's operating system and architecture as used as default. This change is not
+  versioned, and affects all API versions if the daemon has this patch.
+* The `POST /containers/{id}/wait` endpoint now returns a `400` status code if an
+  invalid `condition` is provided (on API 1.30 and up).
+* Removed the `KernelMemory` field from the `POST /containers/create` and
+  `POST /containers/{id}/update` endpoints, any value it is set to will be ignored
+  on API version `v1.42` and up. Older API versions still accept this field, but
+  may take no effect, depending on the kernel version and OCI runtime in use.
+* `GET /containers/{id}/json` now omits the `KernelMemory` and `KernelMemoryTCP`
+  if they are not set.
+* `GET /info` now omits the `KernelMemory` and `KernelMemoryTCP` if they are not
+  supported by the host or host's configuration (if cgroups v2 are in use).
+* `GET /_ping` and `HEAD /_ping` now return `Builder-Version` by default.
+  This header contains the default builder to use, and is a recommendation as
+  advertised by the daemon. However, it is up to the client to choose which builder
+  to use.
+
+  The default value on Linux is version "2" (BuildKit), but the daemon can be
+  configured to recommend version "1" (classic Builder). Windows does not yet
+  support BuildKit for native Windows images, and uses "1" (classic builder) as
+  a default.
+
+  This change is not versioned, and affects all API versions if the daemon has
+  this patch. 
+* `GET /_ping` and `HEAD /_ping` now return a `Swarm` header, which allows a
+  client to detect if Swarm is enabled on the daemon, without having to call
+  additional endpoints.
+  This change is not versioned, and affects all API versions if the daemon has
+  this patch. Clients must consider this header "optional", and fall back to
+  using other endpoints to get this information if the header is not present.
+
+  The `Swarm` header can contain one of the following values:
+
+    - "inactive"
+    - "pending"
+    - "error"
+    - "locked"
+    - "active/worker"
+    - "active/manager"
+* `POST /containers/create` for Windows containers now accepts a new syntax in
+  `HostConfig.Resources.Devices.PathOnHost`. As well as the existing `class/<GUID>`
+  syntax, `<IDType>://<ID>` is now recognised. Support for specific `<IDType>` values
+  depends on the underlying implementation and Windows version. This change is not
+  versioned, and affects all API versions if the daemon has this patch.
+* `GET /containers/{id}/attach`, `GET /exec/{id}/start`, `GET /containers/{id}/logs`
+  `GET /services/{id}/logs` and `GET /tasks/{id}/logs` now set Content-Type header
+  to `application/vnd.docker.multiplexed-stream` when a multiplexed stdout/stderr 
+  stream is sent to client, `application/vnd.docker.raw-stream` otherwise.
+* `POST /volumes/create` now accepts a new `ClusterVolumeSpec` to create a cluster
+  volume (CNI). This option can only be used if the daemon is a Swarm manager.
+  The Volume response on creation now also can contain a `ClusterVolume` field
+  with information about the created volume.
+* The `BuildCache.Parent` field, as returned by `GET /system/df` is deprecated
+  and is now omitted. API versions before v1.42 continue to include this field.
+* `GET /system/df` now includes a new `Parents` field, for "build-cache" records,
+  which contains a list of parent IDs for the build-cache record.
+* Volume information returned by `GET /volumes/{name}`, `GET /volumes` and
+  `GET /system/df` can now contain a `ClusterVolume` if the volume is a cluster
+  volume (requires the daemon to be a Swarm manager).
+* The `Volume` type, as returned by `Added new `ClusterVolume` fields 
+* Added a new `PUT /volumes{name}` endpoint to update cluster volumes (CNI).
+  Cluster volumes are only supported if the daemon is a Swarm manager.
+* `GET /containers/{name}/attach/ws` endpoint now accepts `stdin`, `stdout` and
+  `stderr` query parameters to only attach to configured streams.
+
+  NOTE: These parameters were documented before in older API versions, but not
+  actually supported. API versions before v1.42 continue to ignore these parameters
+  and default to attaching to all streams. To preserve the pre-v1.42 behavior,
+  set all three query parameters (`?stdin=1,stdout=1,stderr=1`).
+* `POST /containers/create` on Linux now respects the `HostConfig.ConsoleSize` property.
+  Container is immediately created with the desired terminal size and clients no longer
+  need to set the desired size on their own.
+* `POST /containers/create` allow to set `CreateMountpoint` for host path to be
+  created if missing. This brings parity with `Binds`
+* `POST /containers/create` rejects request if BindOptions|VolumeOptions|TmpfsOptions
+  is set with a non-matching mount Type.
+* `POST /containers/{id}/exec` now accepts an optional `ConsoleSize` parameter.
+  It allows to set the console size of the executed process immediately when it's created.
+* `POST /volumes/prune` will now only prune "anonymous" volumes (volumes which were not given a name) by default. A new filter parameter `all` can be set to a truth-y value (`true`, `1`) to get the old behavior.
+
 ## v1.41 API changes
 
 [Docker Engine API v1.41](https://docs.docker.com/engine/api/v1.41/) documentation
@@ -350,6 +475,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 * `POST /services/create` and `POST /services/(id or name)/update` now accept an optional `RollbackConfig` object which specifies rollback options.
 * `GET /services` now supports a `mode` filter to filter services based on the service mode (either `global` or `replicated`).
 * `POST /containers/(name)/update` now supports updating `NanoCpus` that represents CPU quota in units of 10<sup>-9</sup> CPUs.
+* `POST /plugins/{name}/disable` now accepts a `force` query-parameter to disable a plugin even if still in use.
 
 ## v1.27 API changes
 

@@ -105,12 +105,12 @@ func TestBadHelp(t *testing.T) {
 		Err: icmd.None,
 	})
 	// Short -h should be the same, modulo the deprecation message
-	exp := shortHFlagDeprecated + res.Stdout()
+	usage := res.Stdout()
 	res = icmd.RunCmd(run("badmeta", "-h"))
 	res.Assert(t, icmd.Expected{
 		ExitCode: 0,
 		// This should be identical to the --help case above
-		Out: exp,
+		Out: shortHFlagDeprecated + usage,
 		Err: icmd.None,
 	})
 }

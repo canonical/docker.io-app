@@ -1,0 +1,38 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-container-inspect - Display detailed information on one or more containers
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker container inspect [OPTIONS] CONTAINER [CONTAINER...]\fP
+
+
+.SH DESCRIPTION
+.PP
+Display detailed information on one or more containers
+
+
+.SH OPTIONS
+.PP
+\fB-f\fP, \fB--format\fP=""
+	Format output using a custom template:
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for inspect
+
+.PP
+\fB-s\fP, \fB--size\fP[=false]
+	Display total file sizes
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-container(1)\fP

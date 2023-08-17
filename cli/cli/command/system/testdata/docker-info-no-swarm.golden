@@ -1,4 +1,5 @@
-Client:
+Client: Docker Engine - Community
+ Version:    24.0.0
  Context:    default
  Debug Mode: true
 
@@ -45,7 +46,6 @@ Server:
   Goroutines: 135
   System Time: 2017-08-24T17:44:34.077811894Z
   EventsListeners: 0
- Registry: https://index.docker.io/v1/
  Labels:
   provider=digitalocean
  Experimental: false

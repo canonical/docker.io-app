@@ -1,0 +1,40 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-context-ls - List contexts
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker context ls [OPTIONS]\fP
+
+
+.SH DESCRIPTION
+.PP
+List contexts
+
+
+.SH OPTIONS
+.PP
+\fB--format\fP=""
+	Format output using a custom template:
+'table':            Print output in table format with column headers (default)
+'table TEMPLATE':   Print output in table format using the given Go template
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for ls
+
+.PP
+\fB-q\fP, \fB--quiet\fP[=false]
+	Only show context names
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-context(1)\fP

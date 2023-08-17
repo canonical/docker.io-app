@@ -9,7 +9,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 )
 
@@ -20,11 +20,11 @@ type TestContainerConfig struct {
 	Config           *container.Config
 	HostConfig       *container.HostConfig
 	NetworkingConfig *network.NetworkingConfig
-	Platform         *specs.Platform
+	Platform         *ocispec.Platform
 }
 
 // create creates a container with the specified options
-func create(ctx context.Context, t *testing.T, client client.APIClient, ops ...func(*TestContainerConfig)) (container.ContainerCreateCreatedBody, error) {
+func create(ctx context.Context, t *testing.T, client client.APIClient, ops ...func(*TestContainerConfig)) (container.CreateResponse, error) {
 	t.Helper()
 	cmd := []string{"top"}
 	if runtime.GOOS == "windows" {
@@ -48,6 +48,7 @@ func create(ctx context.Context, t *testing.T, client client.APIClient, ops ...f
 
 // Create creates a container with the specified options, asserting that there was no error
 func Create(ctx context.Context, t *testing.T, client client.APIClient, ops ...func(*TestContainerConfig)) string {
+	t.Helper()
 	c, err := create(ctx, t, client, ops...)
 	assert.NilError(t, err)
 

@@ -1,0 +1,48 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-history - Show the history of an image
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker history [OPTIONS] IMAGE\fP
+
+
+.SH DESCRIPTION
+.PP
+Alias for \fB\fCdocker image history\fR\&.
+
+
+.SH OPTIONS
+.PP
+\fB--format\fP=""
+	Format output using a custom template:
+'table':            Print output in table format with column headers (default)
+'table TEMPLATE':   Print output in table format using the given Go template
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for history
+
+.PP
+\fB-H\fP, \fB--human\fP[=true]
+	Print sizes and dates in human readable format
+
+.PP
+\fB--no-trunc\fP[=false]
+	Don't truncate output
+
+.PP
+\fB-q\fP, \fB--quiet\fP[=false]
+	Only show image IDs
+
+
+.SH SEE ALSO
+.PP
+\fBdocker(1)\fP

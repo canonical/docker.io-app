@@ -6,7 +6,8 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
-	dclient "github.com/docker/docker/client"
+	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/errdefs"
 	"gotest.tools/v3/assert"
 )
 
@@ -94,16 +95,15 @@ func ProtectImages(t testing.TB, testEnv *Execution) {
 		images = append(images, frozenImages...)
 	}
 	testEnv.ProtectImage(t, images...)
+	testEnv.ProtectImage(t, DanglingImageIdGraphDriver, DanglingImageIdSnapshotter)
 }
 
 func getExistingImages(t testing.TB, testEnv *Execution) []string {
 	t.Helper()
 	client := testEnv.APIClient()
-	filter := filters.NewArgs()
-	filter.Add("dangling", "false")
 	imageList, err := client.ImageList(context.Background(), types.ImageListOptions{
 		All:     true,
-		Filters: filter,
+		Filters: filters.NewArgs(filters.Arg("dangling", "false")),
 	})
 	assert.NilError(t, err, "failed to list images")
 
@@ -117,6 +117,9 @@ func getExistingImages(t testing.TB, testEnv *Execution) []string {
 func tagsFromImageSummary(image types.ImageSummary) []string {
 	var result []string
 	for _, tag := range image.RepoTags {
+		// Starting from API 1.43 no longer outputs the hardcoded <none>
+		// strings. But since the tests might be ran against a remote
+		// daemon/pre 1.43 CLI we must still be able to handle it.
 		if tag != "<none>:<none>" {
 			result = append(result, tag)
 		}
@@ -180,7 +183,7 @@ func getExistingPlugins(t testing.TB, testEnv *Execution) []string {
 	client := testEnv.APIClient()
 	pluginList, err := client.PluginList(context.Background(), filters.Args{})
 	// Docker EE does not allow cluster-wide plugin management.
-	if dclient.IsErrNotImplemented(err) {
+	if errdefs.IsNotImplemented(err) {
 		return []string{}
 	}
 	assert.NilError(t, err, "failed to list plugins")
@@ -195,8 +198,8 @@ func getExistingPlugins(t testing.TB, testEnv *Execution) []string {
 // ProtectVolume adds the specified volume(s) to be protected in case of clean
 func (e *Execution) ProtectVolume(t testing.TB, volumes ...string) {
 	t.Helper()
-	for _, volume := range volumes {
-		e.protectedElements.volumes[volume] = struct{}{}
+	for _, vol := range volumes {
+		e.protectedElements.volumes[vol] = struct{}{}
 	}
 }
 
@@ -211,12 +214,12 @@ func ProtectVolumes(t testing.TB, testEnv *Execution) {
 func getExistingVolumes(t testing.TB, testEnv *Execution) []string {
 	t.Helper()
 	client := testEnv.APIClient()
-	volumeList, err := client.VolumeList(context.Background(), filters.Args{})
+	volumeList, err := client.VolumeList(context.Background(), volume.ListOptions{})
 	assert.NilError(t, err, "failed to list volumes")
 
 	var volumes []string
-	for _, volume := range volumeList.Volumes {
-		volumes = append(volumes, volume.Name)
+	for _, vol := range volumeList.Volumes {
+		volumes = append(volumes, vol.Name)
 	}
 	return volumes
 }

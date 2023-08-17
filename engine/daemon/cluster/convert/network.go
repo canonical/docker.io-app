@@ -6,9 +6,9 @@ import (
 	basictypes "github.com/docker/docker/api/types"
 	networktypes "github.com/docker/docker/api/types/network"
 	types "github.com/docker/docker/api/types/swarm"
-	netconst "github.com/docker/libnetwork/datastore"
-	swarmapi "github.com/docker/swarmkit/api"
+	netconst "github.com/docker/docker/libnetwork/datastore"
 	gogotypes "github.com/gogo/protobuf/types"
+	swarmapi "github.com/moby/swarmkit/v2/api"
 )
 
 func networkAttachmentFromGRPC(na *swarmapi.NetworkAttachment) types.NetworkAttachment {
@@ -120,7 +120,6 @@ func endpointFromGRPC(e *swarmapi.Endpoint) types.Endpoint {
 				NetworkID: v.NetworkID,
 				Addr:      v.Addr})
 		}
-
 	}
 
 	return endpoint

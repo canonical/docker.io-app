@@ -96,20 +96,19 @@ while true; do sleep 1; done
 
 // TestHealthCheckProcessKilled verifies that health-checks exec get killed on time-out.
 func TestHealthCheckProcessKilled(t *testing.T) {
-	// FIXME: Broken on Windows + containerd combination
 	defer setupTest(t)()
 	ctx := context.Background()
 	apiClient := testEnv.APIClient()
 
 	cID := container.Run(ctx, t, apiClient, func(c *container.TestContainerConfig) {
 		c.Config.Healthcheck = &containertypes.HealthConfig{
-			Test:     []string{"CMD", "sh", "-c", "sleep 60"},
+			Test:     []string{"CMD", "sh", "-c", `echo "logs logs logs"; sleep 60`},
 			Interval: 100 * time.Millisecond,
 			Timeout:  50 * time.Millisecond,
 			Retries:  1,
 		}
 	})
-	poll.WaitOn(t, pollForHealthCheckLog(ctx, apiClient, cID, "Health check exceeded timeout (50ms)"))
+	poll.WaitOn(t, pollForHealthCheckLog(ctx, apiClient, cID, "Health check exceeded timeout (50ms): logs logs logs\n"))
 }
 
 func pollForHealthCheckLog(ctx context.Context, client client.APIClient, containerID string, expected string) func(log poll.LogT) poll.Result {

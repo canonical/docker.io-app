@@ -1,0 +1,34 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-plugin-inspect - Display detailed information on one or more plugins
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker plugin inspect [OPTIONS] PLUGIN [PLUGIN...]\fP
+
+
+.SH DESCRIPTION
+.PP
+Display detailed information on one or more plugins
+
+
+.SH OPTIONS
+.PP
+\fB-f\fP, \fB--format\fP=""
+	Format output using a custom template:
+'json':             Print in JSON format
+'TEMPLATE':         Print output using the given Go template.
+Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for inspect
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-plugin(1)\fP

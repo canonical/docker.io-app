@@ -15,7 +15,7 @@ func generateMountOpts(resolvConf, hostsFile string) ([]oci.SpecOpts, error) {
 }
 
 // generateSecurityOpts may affect mounts, so must be called after generateMountOpts
-func generateSecurityOpts(mode pb.SecurityMode, apparmorProfile string) ([]oci.SpecOpts, error) {
+func generateSecurityOpts(mode pb.SecurityMode, apparmorProfile string, selinuxB bool) ([]oci.SpecOpts, error) {
 	if mode == pb.SecurityMode_INSECURE {
 		return nil, errors.New("no support for running in insecure mode on Windows")
 	}
@@ -35,4 +35,11 @@ func generateIDmapOpts(idmap *idtools.IdentityMapping) ([]oci.SpecOpts, error) {
 		return nil, nil
 	}
 	return nil, errors.New("no support for IdentityMapping on Windows")
+}
+
+func generateRlimitOpts(ulimits []*pb.Ulimit) ([]oci.SpecOpts, error) {
+	if len(ulimits) == 0 {
+		return nil, nil
+	}
+	return nil, errors.New("no support for POSIXRlimit on Windows")
 }

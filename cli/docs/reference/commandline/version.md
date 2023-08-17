@@ -1,21 +1,16 @@
----
-title: "version"
-description: "The version command description and usage"
-keywords: "version, architecture, api"
----
-
 # version
 
-```markdown
-Usage:  docker version [OPTIONS]
-
+<!---MARKER_GEN_START-->
 Show the Docker version information
 
-Options:
-  -f, --format string       Format the output using the given Go template
-      --help                Print usage
-      --kubeconfig string   Kubernetes config file
-```
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                        |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#format), [`--format`](#format) | `string` |         | Format output using a custom template:<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -42,30 +37,30 @@ machine running Docker Desktop:
 ```console
 $ docker version
 
-Client:
- Version:           20.10.16
- API version:       1.41
- Go version:        go1.17.10
- Git commit:        aa7e414
- Built:             Thu May 12 09:17:28 2022
+Client: Docker Engine - Community
+ Version:           23.0.3
+ API version:       1.42
+ Go version:        go1.19.7
+ Git commit:        3e7cbfd
+ Built:             Tue Apr  4 22:05:41 2023
  OS/Arch:           darwin/amd64
  Context:           default
 
-Server: Docker Desktop 4.8.2 (77141)
+Server: Docker Desktop 4.19.0 (12345)
  Engine:
-  Version:          20.10.16
-  API version:      1.41 (minimum version 1.12)
-  Go version:       go1.17.10
-  Git commit:       f756502
-  Built:            Thu May 12 09:15:33 2022
+  Version:          23.0.3
+  API version:      1.42 (minimum version 1.12)
+  Go version:       go1.19.7
+  Git commit:       59118bf
+  Built:            Tue Apr  4 22:05:41 2023
   OS/Arch:          linux/amd64
   Experimental:     false
  containerd:
-  Version:          1.6.4
-  GitCommit:        212e8b6fa2f44b9c21b2798135fc6fb7c53efc16
+  Version:          1.6.20
+  GitCommit:        2806fc1057397dbaeefbea0e4e17bddfbd388f38
  runc:
-  Version:          1.1.1
-  GitCommit:        v1.1.1-0-g52de29d
+  Version:          1.1.5
+  GitCommit:        v1.1.5-0-gf19387a
  docker-init:
   Version:          0.19.0
   GitCommit:        de40ad0
@@ -87,12 +82,12 @@ remote-test-server
 
 $ docker version
 
-Client:
- Version:           20.10.16
- API version:       1.40 (downgraded from 1.41)
- Go version:        go1.17.10
- Git commit:        aa7e414
- Built:             Thu May 12 09:17:28 2022
+Client: Docker Engine - Community
+ Version:           23.0.3
+ API version:       1.40 (downgraded from 1.42)
+ Go version:        go1.19.7
+ Git commit:        3e7cbfd
+ Built:             Tue Apr  4 22:05:41 2023
  OS/Arch:           darwin/amd64
  Context:           remote-test-server
 
@@ -115,6 +110,41 @@ Server: Docker Engine - Community
   GitCommit:        fec3683
 ```
 
+### API version and version negotiation
+
+The API version used by the client depends on the Docker Engine that the Docker
+CLI is connecting with. When connecting with the Docker Engine, the Docker CLI
+and Docker Engine perform API version negotiation, and select the highest API
+version that is supported by both the Docker CLI and the Docker Engine.
+
+For example, if the CLI is connecting with a Docker 19.03 engine, it downgrades
+to API version 1.40 (refer to the [API version matrix](https://docs.docker.com/engine/api/#api-version-matrix)
+to learn about the supported API versions for Docker Engine):
+
+```console
+$ docker version --format '{{.Client.APIVersion}}'
+
+1.40
+```
+
+Be aware that API version can also be overridden using the `DOCKER_API_VERSION`
+environment variable, which can be useful for debugging purposes, and disables
+API version negotiation. The following example illustrates an environment where
+the `DOCKER_API_VERSION` environment variable is set. Unsetting the environment
+variable removes the override, and re-enables API version negotiation:
+
+```console
+$ env | grep DOCKER_API_VERSION
+DOCKER_API_VERSION=1.39
+
+$ docker version --format '{{.Client.APIVersion}}'
+1.39
+
+$ unset DOCKER_API_VERSION
+$ docker version --format '{{.Client.APIVersion}}'
+1.42
+```
+
 ## Examples
 
 ### <a name="format"></a> Format the output (--format)
@@ -129,57 +159,27 @@ page for details of the format.
 ```console
 $ docker version --format '{{.Server.Version}}'
 
-20.10.16
+23.0.3
 ```
+
+### Get the client API version
+
+The following example prints the API version that is used by the client:
+
+```console
+$ docker version --format '{{.Client.APIVersion}}'
+
+1.42
+```
+
+The version shown is the API version that is negotiated between the client
+and the Docker Engine. Refer to [API version and version negotiation](#api-version-and-version-negotiation)
+above for more information.
 
 ### Dump raw JSON data
 
 ```console
 $ docker version --format '{{json .}}'
 
-{"Client":{"Platform":{"Name":"Docker Engine - Community"},"Version":"19.03.8","ApiVersion":"1.40","DefaultAPIVersion":"1.40","GitCommit":"afacb8b","GoVersion":"go1.12.17","Os":"darwin","Arch":"amd64","BuildTime":"Wed Mar 11 01:21:11 2020","Experimental":true},"Server":{"Platform":{"Name":"Docker Engine - Community"},"Components":[{"Name":"Engine","Version":"19.03.8","Details":{"ApiVersion":"1.40","Arch":"amd64","BuildTime":"Wed Mar 11 01:29:16 2020","Experimental":"true","GitCommit":"afacb8b","GoVersion":"go1.12.17","KernelVersion":"4.19.76-linuxkit","MinAPIVersion":"1.12","Os":"linux"}},{"Name":"containerd","Version":"v1.2.13","Details":{"GitCommit":"7ad184331fa3e55e52b890ea95e65ba581ae3429"}},{"Name":"runc","Version":"1.0.0-rc10","Details":{"GitCommit":"dc9208a3303feef5b3839f4323d9beb36df0a9dd"}},{"Name":"docker-init","Version":"0.18.0","Details":{"GitCommit":"fec3683"}}],"Version":"19.03.8","ApiVersion":"1.40","MinAPIVersion":"1.12","GitCommit":"afacb8b","GoVersion":"go1.12.17","Os":"linux","Arch":"amd64","KernelVersion":"4.19.76-linuxkit","Experimental":true,"BuildTime":"2020-03-11T01:29:16.000000000+00:00"}}
+{"Client":"Version":"23.0.3","ApiVersion":"1.42", ...}
 ```
-
-### Print the current context
-
-The following example prints the currently used [`docker context`](context.md):
-
-```console
-$ docker version --format='{{.Client.Context}}'
-default
-```
-
-As an example, this output can be used to dynamically change your shell prompt
-to indicate your active context. The example below illustrates how this output
-could be used when using Bash as your shell.
-
-Declare a function to obtain the current context in your `~/.bashrc`, and set
-this command as your `PROMPT_COMMAND`
-
-```console
-function docker_context_prompt() {
-        PS1="context: $(docker version --format='{{.Client.Context}}')> "
-}
-
-PROMPT_COMMAND=docker_context_prompt
-```
-
-After reloading the `~/.bashrc`, the prompt now shows the currently selected
-`docker context`:
-
-```console
-$ source ~/.bashrc
-context: default> docker context create --docker host=unix:///var/run/docker.sock my-context
-my-context
-Successfully created context "my-context"
-context: default> docker context use my-context
-my-context
-Current context is now "my-context"
-context: my-context> docker context use default
-default
-Current context is now "default"
-context: default>
-```
-
-Refer to the [`docker context` section](context.md) in the command line reference
-for more information about `docker context`.

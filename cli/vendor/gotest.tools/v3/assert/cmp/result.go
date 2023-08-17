@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"reflect"
 	"text/template"
 
 	"gotest.tools/v3/internal/source"
@@ -52,13 +53,12 @@ func ResultFromError(err error) Result {
 }
 
 type templatedResult struct {
-	success  bool
 	template string
 	data     map[string]interface{}
 }
 
 func (r templatedResult) Success() bool {
-	return r.success
+	return false
 }
 
 func (r templatedResult) FailureMessage(args []ast.Expr) string {
@@ -67,6 +67,11 @@ func (r templatedResult) FailureMessage(args []ast.Expr) string {
 		return fmt.Sprintf("failed to render failure message: %s", err)
 	}
 	return msg
+}
+
+func (r templatedResult) UpdatedExpected(stackIndex int) error {
+	// TODO: would be nice to have structured data instead of a map
+	return source.UpdateExpectedValue(stackIndex+1, r.data["x"], r.data["y"])
 }
 
 // ResultFailureTemplate returns a Result with a template string and data which
@@ -85,6 +90,11 @@ func renderMessage(result templatedResult, args []ast.Expr) (string, error) {
 				return nil
 			}
 			return args[index]
+		},
+		// TODO: any way to include this from ErrorIS instead of here?
+		"notStdlibErrorType": func(typ interface{}) bool {
+			r := reflect.TypeOf(typ)
+			return r != stdlibFmtErrorType && r != stdlibErrorNewType
 		},
 	})
 	var err error

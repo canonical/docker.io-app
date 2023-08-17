@@ -8,10 +8,11 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	configtypes "github.com/docker/cli/cli/config/types"
-	"github.com/docker/docker/api/types"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -35,8 +36,8 @@ func NewLoginCommand(dockerCli command.Cli) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "login [OPTIONS] [SERVER]",
-		Short: "Log in to a Docker registry",
-		Long:  "Log in to a Docker registry.\nIf no server is specified, the default is defined by the daemon.",
+		Short: "Log in to a registry",
+		Long:  "Log in to a registry.\nIf no server is specified, the default is defined by the daemon.",
 		Args:  cli.RequiresMaxArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -44,6 +45,10 @@ func NewLoginCommand(dockerCli command.Cli) *cobra.Command {
 			}
 			return runLogin(dockerCli, opts)
 		},
+		Annotations: map[string]string{
+			"category-top": "8",
+		},
+		ValidArgsFunction: completion.NoComplete,
 	}
 
 	flags := cmd.Flags()
@@ -103,16 +108,15 @@ func runLogin(dockerCli command.Cli, opts loginOptions) error { //nolint:gocyclo
 	}
 	var (
 		serverAddress string
-		authServer    = command.ElectAuthServer(ctx, dockerCli)
+		response      registrytypes.AuthenticateOKBody
 	)
 	if opts.serverAddress != "" && opts.serverAddress != registry.DefaultNamespace {
 		serverAddress = opts.serverAddress
 	} else {
-		serverAddress = authServer
+		serverAddress = registry.IndexServer
 	}
 
-	var response registrytypes.AuthenticateOKBody
-	isDefaultRegistry := serverAddress == authServer
+	isDefaultRegistry := serverAddress == registry.IndexServer
 	authConfig, err := command.GetDefaultAuthConfig(dockerCli, opts.user == "" && opts.password == "", serverAddress, isDefaultRegistry)
 	if err == nil && authConfig.Username != "" && authConfig.Password != "" {
 		response, err = loginWithCredStoreCreds(ctx, dockerCli, &authConfig)
@@ -159,12 +163,12 @@ func runLogin(dockerCli command.Cli, opts loginOptions) error { //nolint:gocyclo
 	return nil
 }
 
-func loginWithCredStoreCreds(ctx context.Context, dockerCli command.Cli, authConfig *types.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
+func loginWithCredStoreCreds(ctx context.Context, dockerCli command.Cli, authConfig *registrytypes.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
 	fmt.Fprintf(dockerCli.Out(), "Authenticating with existing credentials...\n")
 	cliClient := dockerCli.Client()
 	response, err := cliClient.RegistryLogin(ctx, *authConfig)
 	if err != nil {
-		if client.IsErrUnauthorized(err) {
+		if errdefs.IsUnauthorized(err) {
 			fmt.Fprintf(dockerCli.Err(), "Stored credentials invalid or expired\n")
 		} else {
 			fmt.Fprintf(dockerCli.Err(), "Login did not succeed, error: %s\n", err)
@@ -173,7 +177,7 @@ func loginWithCredStoreCreds(ctx context.Context, dockerCli command.Cli, authCon
 	return response, err
 }
 
-func loginClientSide(ctx context.Context, auth types.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
+func loginClientSide(ctx context.Context, auth registrytypes.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
 	svc, err := registry.NewService(registry.ServiceOptions{})
 	if err != nil {
 		return registrytypes.AuthenticateOKBody{}, err

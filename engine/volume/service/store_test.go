@@ -121,6 +121,7 @@ func TestList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Shutdown()
 	ls, _, err = s.Find(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +368,7 @@ var cmpVolume = cmp.AllowUnexported(volumetestutils.FakeVolume{}, volumeWrapper{
 func setupTest(t *testing.T) (*VolumeStore, func()) {
 	t.Helper()
 
-	dirName := strings.Replace(t.Name(), string(os.PathSeparator), "_", -1)
+	dirName := strings.ReplaceAll(t.Name(), string(os.PathSeparator), "_")
 	dir, err := os.MkdirTemp("", dirName)
 	assert.NilError(t, err)
 

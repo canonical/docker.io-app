@@ -16,11 +16,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	runtimeName       = "io.containerd.runhcs.v1"
-	shimV2RuntimeName = runtimeName
-)
-
 func summaryFromInterface(i interface{}) (*libcontainerdtypes.Summary, error) {
 	switch pd := i.(type) {
 	case *options.ProcessDetails:
@@ -92,13 +87,12 @@ func (c *client) newDirectIO(ctx context.Context, fifos *cio.FIFOSet) (*cio.Dire
 	return cio.NewDirectIOFromFIFOSet(ctx, pipes.stdin, pipes.stdout, pipes.stderr, fifos), nil
 }
 
-func (c *client) UpdateResources(ctx context.Context, containerID string, resources *libcontainerdtypes.Resources) error {
+func (t *task) UpdateResources(ctx context.Context, resources *libcontainerdtypes.Resources) error {
 	// TODO: (containerd): Not implemented, but don't error.
 	return nil
 }
 
 func getSpecUser(ociSpec *specs.Spec) (int, int) {
 	// TODO: (containerd): Not implemented, but don't error.
-	// Not clear if we can even do this for LCOW.
 	return 0, 0
 }

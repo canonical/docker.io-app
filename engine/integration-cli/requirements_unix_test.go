@@ -62,7 +62,7 @@ func cgroupCpuset() bool {
 }
 
 func seccompEnabled() bool {
-	return supportsSeccomp && SysInfo.Seccomp
+	return SysInfo.Seccomp
 }
 
 func bridgeNfIptables() bool {
@@ -85,6 +85,6 @@ func overlayFSSupported() bool {
 
 func init() {
 	if testEnv.IsLocalDaemon() {
-		SysInfo = sysinfo.New(true)
+		SysInfo = sysinfo.New()
 	}
 }

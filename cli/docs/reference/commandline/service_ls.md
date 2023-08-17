@@ -1,25 +1,22 @@
----
-title: "service ls"
-description: "The service ls command description and usage"
-keywords: "service, ls"
----
-
 # service ls
 
-```Markdown
-Usage:  docker service ls [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List services
 
-Aliases:
-  ls, list
+### Aliases
 
-Options:
-  -f, --filter filter   Filter output based on conditions provided
-      --format string   Pretty-print services using a Go template
-      --help            Print usage
-  -q, --quiet           Only display IDs
-```
+`docker service ls`, `docker service list`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `-q`, `--quiet`                        |          |         | Only display IDs                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -151,6 +148,13 @@ $ docker service ls --format "{{.ID}}: {{.Mode}} {{.Replicas}}"
 
 0zmvwuiu3vue: replicated 10/10
 fm6uf97exkul: global 5/5
+```
+
+To list all services in JSON format, use the `json` directive:
+
+```console
+$ docker service ls --format json
+{"ID":"ssniordqolsi","Image":"hello-world:latest","Mode":"replicated","Name":"hello","Ports":"","Replicas":"0/1"}
 ```
 
 ## Related commands

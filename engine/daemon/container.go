@@ -3,10 +3,8 @@ package daemon // import "github.com/docker/docker/daemon"
 import (
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	containertypes "github.com/docker/docker/api/types/container"
@@ -17,12 +15,11 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/pkg/truncindex"
 	"github.com/docker/docker/runconfig"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/go-connections/nat"
+	"github.com/moby/sys/signal"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -51,15 +48,22 @@ func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, e
 		return containerByName, nil
 	}
 
-	containerID, indexError := daemon.idIndex.Get(prefixOrName)
-	if indexError != nil {
-		// When truncindex defines an error type, use that instead
-		if indexError == truncindex.ErrNotExist {
-			return nil, containerNotFound(prefixOrName)
-		}
-		return nil, errdefs.System(indexError)
+	containerID, err := daemon.containersReplica.GetByPrefix(prefixOrName)
+	if err != nil {
+		return nil, err
 	}
-	return daemon.containers.Get(containerID), nil
+	ctr := daemon.containers.Get(containerID)
+	if ctr == nil {
+		// Updates to the daemon.containersReplica ViewDB are not atomic
+		// or consistent w.r.t. the live daemon.containers Store so
+		// while reaching this code path may be indicative of a bug,
+		// it is not _necessarily_ the case.
+		logrus.WithField("prefixOrName", prefixOrName).
+			WithField("id", containerID).
+			Debugf("daemon.GetContainer: container is known to daemon.containersReplica but not daemon.containers")
+		return nil, containerNotFound(prefixOrName)
+	}
+	return ctr, nil
 }
 
 // checkContainer make sure the specified container validates the specified conditions
@@ -121,7 +125,6 @@ func (daemon *Daemon) Register(c *container.Container) error {
 	defer c.Unlock()
 
 	daemon.containers.Add(c.ID, c)
-	daemon.idIndex.Add(c.ID)
 	return c.CheckpointTo(daemon.containersReplica)
 }
 
@@ -158,7 +161,7 @@ func (daemon *Daemon) newContainer(name string, operatingSystem string, config *
 	base.ImageID = imgID
 	base.NetworkSettings = &network.Settings{IsAnonymousEndpoint: noExplicitName}
 	base.Name = name
-	base.Driver = daemon.imageService.GraphDriverForOS(operatingSystem)
+	base.Driver = daemon.imageService.StorageDriver()
 	base.OS = operatingSystem
 	return base, err
 }
@@ -206,7 +209,7 @@ func (daemon *Daemon) generateHostname(id string, config *containertypes.Config)
 func (daemon *Daemon) setSecurityOptions(container *container.Container, hostConfig *containertypes.HostConfig) error {
 	container.Lock()
 	defer container.Unlock()
-	return daemon.parseSecurityOpt(container, hostConfig)
+	return daemon.parseSecurityOpt(&container.SecurityOptions, hostConfig)
 }
 
 func (daemon *Daemon) setHostConfig(container *container.Container, hostConfig *containertypes.HostConfig) error {
@@ -226,17 +229,17 @@ func (daemon *Daemon) setHostConfig(container *container.Container, hostConfig *
 
 	runconfig.SetDefaultNetModeIfBlank(hostConfig)
 	container.HostConfig = hostConfig
-	return container.CheckpointTo(daemon.containersReplica)
+	return nil
 }
 
 // verifyContainerSettings performs validation of the hostconfig and config
 // structures.
-func (daemon *Daemon) verifyContainerSettings(platform string, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, err error) {
+func (daemon *Daemon) verifyContainerSettings(hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, err error) {
 	// First perform verification of settings common across all platforms.
-	if err = validateContainerConfig(config, platform); err != nil {
+	if err = validateContainerConfig(config); err != nil {
 		return warnings, err
 	}
-	if err := validateHostConfig(hostConfig, platform); err != nil {
+	if err := validateHostConfig(hostConfig); err != nil {
 		return warnings, err
 	}
 
@@ -248,11 +251,11 @@ func (daemon *Daemon) verifyContainerSettings(platform string, hostConfig *conta
 	return warnings, err
 }
 
-func validateContainerConfig(config *containertypes.Config, platform string) error {
+func validateContainerConfig(config *containertypes.Config) error {
 	if config == nil {
 		return nil
 	}
-	if err := translateWorkingDir(config, platform); err != nil {
+	if err := translateWorkingDir(config); err != nil {
 		return err
 	}
 	if len(config.StopSignal) > 0 {
@@ -269,7 +272,7 @@ func validateContainerConfig(config *containertypes.Config, platform string) err
 	return validateHealthCheck(config.Healthcheck)
 }
 
-func validateHostConfig(hostConfig *containertypes.HostConfig, platform string) error {
+func validateHostConfig(hostConfig *containertypes.HostConfig) error {
 	if hostConfig == nil {
 		return nil
 	}
@@ -278,7 +281,7 @@ func validateHostConfig(hostConfig *containertypes.HostConfig, platform string) 
 		return errors.Errorf("can't create 'AutoRemove' container with restart policy")
 	}
 	// Validate mounts; check if host directories still exist
-	parser := volumemounts.NewParser(platform)
+	parser := volumemounts.NewParser()
 	for _, c := range hostConfig.Mounts {
 		cfg := c
 		if err := parser.ValidateMountConfig(&cfg); err != nil {
@@ -301,6 +304,11 @@ func validateHostConfig(hostConfig *containertypes.HostConfig, platform string) 
 	}
 	if !hostConfig.Isolation.IsValid() {
 		return errors.Errorf("invalid isolation '%s' on %s", hostConfig.Isolation, runtime.GOOS)
+	}
+	for k := range hostConfig.Annotations {
+		if k == "" {
+			return errors.Errorf("invalid Annotations: the empty string is not permitted as an annotation key")
+		}
 	}
 	return nil
 }
@@ -373,23 +381,13 @@ func validateRestartPolicy(policy containertypes.RestartPolicy) error {
 
 // translateWorkingDir translates the working-dir for the target platform,
 // and returns an error if the given path is not an absolute path.
-func translateWorkingDir(config *containertypes.Config, platform string) error {
+func translateWorkingDir(config *containertypes.Config) error {
 	if config.WorkingDir == "" {
 		return nil
 	}
-	wd := config.WorkingDir
-	switch {
-	case runtime.GOOS != platform:
-		// LCOW. Force Unix semantics
-		wd = strings.Replace(wd, string(os.PathSeparator), "/", -1)
-		if !path.IsAbs(wd) {
-			return fmt.Errorf("the working directory '%s' is invalid, it needs to be an absolute path", config.WorkingDir)
-		}
-	default:
-		wd = filepath.FromSlash(wd) // Ensure in platform semantics
-		if !system.IsAbs(wd) {
-			return fmt.Errorf("the working directory '%s' is invalid, it needs to be an absolute path", config.WorkingDir)
-		}
+	wd := filepath.FromSlash(config.WorkingDir) // Ensure in platform semantics
+	if !system.IsAbs(wd) {
+		return fmt.Errorf("the working directory '%s' is invalid, it needs to be an absolute path", config.WorkingDir)
 	}
 	config.WorkingDir = wd
 	return nil

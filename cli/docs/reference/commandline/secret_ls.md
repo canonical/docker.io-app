@@ -1,25 +1,22 @@
----
-title: "secret ls"
-description: "The secret ls command description and usage"
-keywords: ["secret, ls"]
----
-
 # secret ls
 
-```Markdown
-Usage:  docker secret ls [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List secrets
 
-Aliases:
-  ls, list
+### Aliases
 
-Options:
-  -f, --filter filter   Filter output based on conditions provided
-      --format string   Pretty-print secrets using a Go template
-      --help            Print usage
-  -q, --quiet           Only display IDs
-```
+`docker secret ls`, `docker secret list`
+
+### Options
+
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                                                                                                                                                                                           |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `-q`, `--quiet`                        |          |         | Only display IDs                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -146,6 +143,12 @@ ID                  NAME                      CREATED
 77af4d6b9913        secret-1                  5 minutes ago
 b6fa739cedf5        secret-2                  3 hours ago
 78a85c484f71        secret-3                  10 days ago
+```
+
+To list all secrets in JSON format, use the `json` directive:
+```console
+$ docker secret ls --format json
+{"CreatedAt":"28 seconds ago","Driver":"","ID":"4y7hvwrt1u8e9uxh5ygqj7mzc","Labels":"","Name":"mysecret","UpdatedAt":"28 seconds ago"}
 ```
 
 ## Related commands

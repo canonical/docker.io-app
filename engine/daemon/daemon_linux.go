@@ -4,23 +4,26 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"regexp"
 	"strings"
 
 	"github.com/docker/docker/daemon/config"
-	"github.com/docker/libnetwork/resolvconf"
+	"github.com/docker/docker/libnetwork/ns"
+	"github.com/docker/docker/libnetwork/resolvconf"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
 )
 
 // On Linux, plugins use a static path for storing execution state,
 // instead of deriving path from daemon's exec-root. This is because
 // plugin socket files are created here and they cannot exceed max
 // path length of 108 bytes.
-func getPluginExecRoot(root string) string {
+func getPluginExecRoot(_ *config.Config) string {
 	return "/run/docker/plugins"
 }
 
@@ -44,7 +47,7 @@ func (daemon *Daemon) cleanupMountsFromReaderByID(reader io.Reader, id string, u
 	regexps := getCleanPatterns(id)
 	sc := bufio.NewScanner(reader)
 	for sc.Scan() {
-		if fields := strings.Fields(sc.Text()); len(fields) >= 4 {
+		if fields := strings.Fields(sc.Text()); len(fields) > 4 {
 			if mnt := fields[4]; strings.HasPrefix(mnt, daemon.root) {
 				for _, p := range regexps {
 					if p.MatchString(mnt) {
@@ -111,9 +114,9 @@ func getCleanPatterns(id string) (regexps []*regexp.Regexp) {
 	var patterns []string
 	if id == "" {
 		id = "[0-9a-f]{64}"
-		patterns = append(patterns, "containers/"+id+"/shm")
+		patterns = append(patterns, "containers/"+id+"/mounts/shm", "containers/"+id+"/shm")
 	}
-	patterns = append(patterns, "aufs/mnt/"+id+"$", "overlay/"+id+"/merged$", "zfs/graph/"+id+"$")
+	patterns = append(patterns, "overlay2/"+id+"/merged$", "zfs/graph/"+id+"$")
 	for _, p := range patterns {
 		r, err := regexp.Compile(p)
 		if err == nil {
@@ -140,4 +143,42 @@ func setupResolvConf(config *config.Config) {
 		return
 	}
 	config.ResolvConf = resolvconf.Path()
+}
+
+// ifaceAddrs returns the IPv4 and IPv6 addresses assigned to the network
+// interface with name linkName.
+//
+// No error is returned if the named interface does not exist.
+func ifaceAddrs(linkName string) (v4, v6 []*net.IPNet, err error) {
+	nl := ns.NlHandle()
+	link, err := nl.LinkByName(linkName)
+	if err != nil {
+		if !errors.As(err, new(netlink.LinkNotFoundError)) {
+			return nil, nil, err
+		}
+		return nil, nil, nil
+	}
+
+	get := func(family int) ([]*net.IPNet, error) {
+		addrs, err := nl.AddrList(link, family)
+		if err != nil {
+			return nil, err
+		}
+
+		ipnets := make([]*net.IPNet, len(addrs))
+		for i := range addrs {
+			ipnets[i] = addrs[i].IPNet
+		}
+		return ipnets, nil
+	}
+
+	v4, err = get(netlink.FAMILY_V4)
+	if err != nil {
+		return nil, nil, err
+	}
+	v6, err = get(netlink.FAMILY_V6)
+	if err != nil {
+		return nil, nil, err
+	}
+	return v4, v6, nil
 }

@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/pkg/userns"
 	"github.com/docker/docker/pkg/system"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
@@ -25,7 +25,7 @@ import (
 //	    └── f1 # whiteout, 0644
 func setupOverlayTestDir(t *testing.T, src string) {
 	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
-	skip.If(t, sys.RunningInUserNS(), "skipping test that requires initial userns (trusted.overlay.opaque xattr cannot be set in userns, even with Ubuntu kernel)")
+	skip.If(t, userns.RunningInUserNS(), "skipping test that requires initial userns (trusted.overlay.opaque xattr cannot be set in userns, even with Ubuntu kernel)")
 	// Create opaque directory containing single file and permission 0700
 	err := os.Mkdir(filepath.Join(src, "d1"), 0700)
 	assert.NilError(t, err)
@@ -61,7 +61,6 @@ func checkOpaqueness(t *testing.T, path string, opaque string) {
 	if string(xattrOpaque) != opaque {
 		t.Fatalf("Unexpected opaque value: %q, expected %q", string(xattrOpaque), opaque)
 	}
-
 }
 
 func checkOverlayWhiteout(t *testing.T, path string) {
@@ -87,9 +86,8 @@ func checkFileMode(t *testing.T, path string, perm os.FileMode) {
 }
 
 func TestOverlayTarUntar(t *testing.T) {
-	oldmask, err := system.Umask(0)
-	assert.NilError(t, err)
-	defer system.Umask(oldmask)
+	restore := overrideUmask(0)
+	defer restore()
 
 	src, err := os.MkdirTemp("", "docker-test-overlay-tar-src")
 	assert.NilError(t, err)
@@ -126,9 +124,8 @@ func TestOverlayTarUntar(t *testing.T) {
 }
 
 func TestOverlayTarAUFSUntar(t *testing.T) {
-	oldmask, err := system.Umask(0)
-	assert.NilError(t, err)
-	defer system.Umask(oldmask)
+	restore := overrideUmask(0)
+	defer restore()
 
 	src, err := os.MkdirTemp("", "docker-test-overlay-tar-src")
 	assert.NilError(t, err)

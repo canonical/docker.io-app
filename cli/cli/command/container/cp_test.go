@@ -17,7 +17,7 @@ import (
 )
 
 func TestRunCopyWithInvalidArguments(t *testing.T) {
-	var testcases = []struct {
+	testcases := []struct {
 		doc         string
 		options     copyOptions
 		expectedErr string
@@ -76,7 +76,7 @@ func TestRunCopyFromContainerToFilesystem(t *testing.T) {
 			return readCloser, types.ContainerPathStat{}, err
 		},
 	}
-	options := copyOptions{source: "container:/path", destination: destDir.Path()}
+	options := copyOptions{source: "container:/path", destination: destDir.Path(), quiet: true}
 	cli := test.NewFakeCli(fakeClient)
 	err := runCopy(cli, options)
 	assert.NilError(t, err)
@@ -143,7 +143,7 @@ func TestRunCopyToContainerSourceDoesNotExist(t *testing.T) {
 }
 
 func TestSplitCpArg(t *testing.T) {
-	var testcases = []struct {
+	testcases := []struct {
 		doc               string
 		path              string
 		os                string

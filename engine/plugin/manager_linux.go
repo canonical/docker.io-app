@@ -12,14 +12,13 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/daemon/initlayer"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/containerfs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/plugins"
 	"github.com/docker/docker/pkg/stringid"
 	v2 "github.com/docker/docker/plugin/v2"
 	"github.com/moby/sys/mount"
-	digest "github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -55,7 +54,7 @@ func (pm *Manager) enable(p *v2.Plugin, c *controller, force bool) error {
 		}
 	}
 
-	rootFS := containerfs.NewLocalContainerFS(filepath.Join(pm.config.Root, p.PluginObj.ID, rootFSFileName))
+	rootFS := filepath.Join(pm.config.Root, p.PluginObj.ID, rootFSFileName)
 	if err := initlayer.Setup(rootFS, idtools.Identity{UID: 0, GID: 0}); err != nil {
 		return errors.WithStack(err)
 	}
@@ -112,7 +111,6 @@ func (pm *Manager) pluginPostStart(p *v2.Plugin, c *controller) error {
 			shutdownPlugin(p, c.exitChan, pm.executor)
 			return err
 		}
-
 	}
 	pm.config.Store.SetState(p, true)
 	pm.config.Store.CallHandler(p)
@@ -154,31 +152,30 @@ const shutdownTimeout = 10 * time.Second
 func shutdownPlugin(p *v2.Plugin, ec chan bool, executor Executor) {
 	pluginID := p.GetID()
 
-	err := executor.Signal(pluginID, int(unix.SIGTERM))
-	if err != nil {
+	if err := executor.Signal(pluginID, unix.SIGTERM); err != nil {
 		logrus.Errorf("Sending SIGTERM to plugin failed with error: %v", err)
-	} else {
+		return
+	}
 
-		timeout := time.NewTimer(shutdownTimeout)
-		defer timeout.Stop()
+	timeout := time.NewTimer(shutdownTimeout)
+	defer timeout.Stop()
+
+	select {
+	case <-ec:
+		logrus.Debug("Clean shutdown of plugin")
+	case <-timeout.C:
+		logrus.Debug("Force shutdown plugin")
+		if err := executor.Signal(pluginID, unix.SIGKILL); err != nil {
+			logrus.Errorf("Sending SIGKILL to plugin failed with error: %v", err)
+		}
+
+		timeout.Reset(shutdownTimeout)
 
 		select {
 		case <-ec:
-			logrus.Debug("Clean shutdown of plugin")
+			logrus.Debug("SIGKILL plugin shutdown")
 		case <-timeout.C:
-			logrus.Debug("Force shutdown plugin")
-			if err := executor.Signal(pluginID, int(unix.SIGKILL)); err != nil {
-				logrus.Errorf("Sending SIGKILL to plugin failed with error: %v", err)
-			}
-
-			timeout.Reset(shutdownTimeout)
-
-			select {
-			case <-ec:
-				logrus.Debug("SIGKILL plugin shutdown")
-			case <-timeout.C:
-				logrus.WithField("plugin", p.Name).Warn("Force shutdown plugin FAILED")
-			}
+			logrus.WithField("plugin", p.Name).Warn("Force shutdown plugin FAILED")
 		}
 	}
 }
@@ -217,7 +214,7 @@ func (pm *Manager) Shutdown() {
 }
 
 func (pm *Manager) upgradePlugin(p *v2.Plugin, configDigest, manifestDigest digest.Digest, blobsums []digest.Digest, tmpRootFSDir string, privileges *types.PluginPrivileges) (err error) {
-	config, err := pm.setupNewPlugin(configDigest, blobsums, privileges)
+	config, err := pm.setupNewPlugin(configDigest, privileges)
 	if err != nil {
 		return err
 	}
@@ -269,8 +266,8 @@ func (pm *Manager) upgradePlugin(p *v2.Plugin, configDigest, manifestDigest dige
 	return errors.Wrap(err, "error saving upgraded plugin config")
 }
 
-func (pm *Manager) setupNewPlugin(configDigest digest.Digest, blobsums []digest.Digest, privileges *types.PluginPrivileges) (types.PluginConfig, error) {
-	configRA, err := pm.blobStore.ReaderAt(context.TODO(), specs.Descriptor{Digest: configDigest})
+func (pm *Manager) setupNewPlugin(configDigest digest.Digest, privileges *types.PluginPrivileges) (types.PluginConfig, error) {
+	configRA, err := pm.blobStore.ReaderAt(context.TODO(), ocispec.Descriptor{Digest: configDigest})
 	if err != nil {
 		return types.PluginConfig{}, err
 	}
@@ -303,7 +300,7 @@ func (pm *Manager) createPlugin(name string, configDigest, manifestDigest digest
 		return nil, errdefs.InvalidParameter(err)
 	}
 
-	config, err := pm.setupNewPlugin(configDigest, blobsums, privileges)
+	config, err := pm.setupNewPlugin(configDigest, privileges)
 	if err != nil {
 		return nil, err
 	}

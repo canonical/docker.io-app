@@ -4,17 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
+	"net/url"
 	"os"
-	"reflect"
+	"path/filepath"
 	"strings"
 	"sync"
 
-	daemondiscovery "github.com/docker/docker/daemon/discovery"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
+
+	"github.com/containerd/containerd/runtime/v2/shim"
 	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/authorization"
-	"github.com/docker/docker/pkg/discovery"
 	"github.com/docker/docker/registry"
 	"github.com/imdario/mergo"
 	"github.com/pkg/errors"
@@ -25,53 +27,62 @@ import (
 const (
 	// DefaultMaxConcurrentDownloads is the default value for
 	// maximum number of downloads that
-	// may take place at a time for each pull.
+	// may take place at a time.
 	DefaultMaxConcurrentDownloads = 3
 	// DefaultMaxConcurrentUploads is the default value for
 	// maximum number of uploads that
-	// may take place at a time for each push.
+	// may take place at a time.
 	DefaultMaxConcurrentUploads = 5
 	// DefaultDownloadAttempts is the default value for
 	// maximum number of attempts that
 	// may take place at a time for each pull when the connection is lost.
 	DefaultDownloadAttempts = 5
-	// DefaultShmSize is the default value for container's shm size
-	DefaultShmSize = int64(67108864)
+	// DefaultShmSize is the default value for container's shm size (64 MiB)
+	DefaultShmSize int64 = 64 * 1024 * 1024
 	// DefaultNetworkMtu is the default value for network MTU
 	DefaultNetworkMtu = 1500
 	// DisableNetworkBridge is the default value of the option to disable network bridge
 	DisableNetworkBridge = "none"
+	// DefaultShutdownTimeout is the default shutdown timeout (in seconds) for
+	// the daemon for containers to stop when it is shutting down.
+	DefaultShutdownTimeout = 15
 	// DefaultInitBinary is the name of the default init binary
 	DefaultInitBinary = "docker-init"
+	// DefaultRuntimeBinary is the default runtime to be used by
+	// containerd if none is specified
+	DefaultRuntimeBinary = "runc"
+	// DefaultContainersNamespace is the name of the default containerd namespace used for users containers.
+	DefaultContainersNamespace = "moby"
+	// DefaultPluginNamespace is the name of the default containerd namespace used for plugins.
+	DefaultPluginNamespace = "plugins.moby"
 
-	// StockRuntimeName is the reserved name/alias used to represent the
-	// OCI runtime being shipped with the docker daemon package.
-	StockRuntimeName = "runc"
-	// LinuxV1RuntimeName is the runtime used to specify the containerd v1 shim with the runc binary
-	// Note this is different than io.containerd.runc.v1 which would be the v1 shim using the v2 shim API.
-	// This is specifically for the v1 shim using the v1 shim API.
-	LinuxV1RuntimeName = "io.containerd.runtime.v1.linux"
 	// LinuxV2RuntimeName is the runtime used to specify the containerd v2 runc shim
 	LinuxV2RuntimeName = "io.containerd.runc.v2"
+
+	// SeccompProfileDefault is the built-in default seccomp profile.
+	SeccompProfileDefault = "builtin"
+	// SeccompProfileUnconfined is a special profile name for seccomp to use an
+	// "unconfined" seccomp profile.
+	SeccompProfileUnconfined = "unconfined"
 )
 
 var builtinRuntimes = map[string]bool{
 	StockRuntimeName:   true,
-	LinuxV1RuntimeName: true,
 	LinuxV2RuntimeName: true,
 }
 
 // flatOptions contains configuration keys
 // that MUST NOT be parsed as deep structures.
 // Use this to differentiate these options
-// with others like the ones in CommonTLSOptions.
+// with others like the ones in TLSOptions.
 var flatOptions = map[string]bool{
-	"cluster-store-opts": true,
-	"log-opts":           true,
-	"runtimes":           true,
-	"default-ulimits":    true,
-	"features":           true,
-	"builder":            true,
+	"cluster-store-opts":   true,
+	"default-network-opts": true,
+	"log-opts":             true,
+	"runtimes":             true,
+	"default-ulimits":      true,
+	"features":             true,
+	"builder":              true,
 }
 
 // skipValidateOptions contains configuration keys
@@ -115,12 +126,14 @@ type NetworkConfig struct {
 	DefaultAddressPools opts.PoolsOpt `json:"default-address-pools,omitempty"`
 	// NetworkControlPlaneMTU allows to specify the control plane MTU, this will allow to optimize the network use in some components
 	NetworkControlPlaneMTU int `json:"network-control-plane-mtu,omitempty"`
+	// Default options for newly created networks
+	DefaultNetworkOpts map[string]map[string]string `json:"default-network-opts,omitempty"`
 }
 
-// CommonTLSOptions defines TLS configuration for the daemon server.
+// TLSOptions defines TLS configuration for the daemon server.
 // It includes json tags to deserialize configuration from a file
 // using the same names that the flags in the command line use.
-type CommonTLSOptions struct {
+type TLSOptions struct {
 	CAFile   string `json:"tlscacert,omitempty"`
 	CertFile string `json:"tlscert,omitempty"`
 	KeyFile  string `json:"tlskey,omitempty"`
@@ -139,63 +152,41 @@ type DNSConfig struct {
 // It includes json tags to deserialize configuration from a file
 // using the same names that the flags in the command line use.
 type CommonConfig struct {
-	AuthzMiddleware       *authorization.Middleware `json:"-"`
-	AuthorizationPlugins  []string                  `json:"authorization-plugins,omitempty"` // AuthorizationPlugins holds list of authorization plugins
-	AutoRestart           bool                      `json:"-"`
-	Context               map[string][]string       `json:"-"`
-	DisableBridge         bool                      `json:"-"`
-	ExecOptions           []string                  `json:"exec-opts,omitempty"`
-	GraphDriver           string                    `json:"storage-driver,omitempty"`
-	GraphOptions          []string                  `json:"storage-opts,omitempty"`
-	Labels                []string                  `json:"labels,omitempty"`
-	Mtu                   int                       `json:"mtu,omitempty"`
-	NetworkDiagnosticPort int                       `json:"network-diagnostic-port,omitempty"`
-	Pidfile               string                    `json:"pidfile,omitempty"`
-	RawLogs               bool                      `json:"raw-logs,omitempty"`
-	RootDeprecated        string                    `json:"graph,omitempty"`
-	Root                  string                    `json:"data-root,omitempty"`
-	ExecRoot              string                    `json:"exec-root,omitempty"`
-	SocketGroup           string                    `json:"group,omitempty"`
-	CorsHeaders           string                    `json:"api-cors-header,omitempty"`
+	AuthorizationPlugins  []string            `json:"authorization-plugins,omitempty"` // AuthorizationPlugins holds list of authorization plugins
+	AutoRestart           bool                `json:"-"`
+	Context               map[string][]string `json:"-"`
+	DisableBridge         bool                `json:"-"`
+	ExecOptions           []string            `json:"exec-opts,omitempty"`
+	GraphDriver           string              `json:"storage-driver,omitempty"`
+	GraphOptions          []string            `json:"storage-opts,omitempty"`
+	Labels                []string            `json:"labels,omitempty"`
+	Mtu                   int                 `json:"mtu,omitempty"`
+	NetworkDiagnosticPort int                 `json:"network-diagnostic-port,omitempty"`
+	Pidfile               string              `json:"pidfile,omitempty"`
+	RawLogs               bool                `json:"raw-logs,omitempty"`
+	Root                  string              `json:"data-root,omitempty"`
+	ExecRoot              string              `json:"exec-root,omitempty"`
+	SocketGroup           string              `json:"group,omitempty"`
+	CorsHeaders           string              `json:"api-cors-header,omitempty"`
 
-	// TrustKeyPath is used to generate the daemon ID and for signing schema 1 manifests
-	// when pushing to a registry which does not support schema 2. This field is marked as
-	// deprecated because schema 1 manifests are deprecated in favor of schema 2 and the
-	// daemon ID will use a dedicated identifier not shared with exported signatures.
-	TrustKeyPath string `json:"deprecated-key-path,omitempty"`
+	// Proxies holds the proxies that are configured for the daemon.
+	Proxies `json:"proxies"`
 
 	// LiveRestoreEnabled determines whether we should keep containers
 	// alive upon daemon shutdown/start
 	LiveRestoreEnabled bool `json:"live-restore,omitempty"`
 
-	// ClusterStore is the storage backend used for the cluster information. It is used by both
-	// multihost networking (to store networks and endpoints information) and by the node discovery
-	// mechanism.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterStore string `json:"cluster-store,omitempty"`
-
-	// ClusterOpts is used to pass options to the discovery package for tuning libkv settings, such
-	// as TLS configuration settings.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterOpts map[string]string `json:"cluster-store-opts,omitempty"`
-
-	// ClusterAdvertise is the network endpoint that the Engine advertises for the purpose of node
-	// discovery. This should be a 'host:port' combination on which that daemon instance is
-	// reachable by other hosts.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterAdvertise string `json:"cluster-advertise,omitempty"`
-
 	// MaxConcurrentDownloads is the maximum number of downloads that
 	// may take place at a time for each pull.
-	MaxConcurrentDownloads *int `json:"max-concurrent-downloads,omitempty"`
+	MaxConcurrentDownloads int `json:"max-concurrent-downloads,omitempty"`
 
 	// MaxConcurrentUploads is the maximum number of uploads that
 	// may take place at a time for each push.
-	MaxConcurrentUploads *int `json:"max-concurrent-uploads,omitempty"`
+	MaxConcurrentUploads int `json:"max-concurrent-uploads,omitempty"`
 
 	// MaxDownloadAttempts is the maximum number of attempts that
 	// may take place at a time for each push.
-	MaxDownloadAttempts *int `json:"max-download-attempts,omitempty"`
+	MaxDownloadAttempts int `json:"max-download-attempts,omitempty"`
 
 	// ShutdownTimeout is the timeout value (in seconds) the daemon will wait for the container
 	// to stop when daemon is being shutdown
@@ -209,7 +200,7 @@ type CommonConfig struct {
 
 	// Embedded structs that allow config
 	// deserialization without the full struct.
-	CommonTLSOptions
+	TLSOptions
 
 	// SwarmDefaultAdvertiseAddr is the default host/IP or network interface
 	// to use if a wildcard address is specified in the ListenAddr value
@@ -231,7 +222,7 @@ type CommonConfig struct {
 
 	DNSConfig
 	LogConfig
-	BridgeConfig // bridgeConfig holds bridge network specific configuration.
+	BridgeConfig // BridgeConfig holds bridge network specific configuration.
 	NetworkConfig
 	registry.ServiceOptions
 
@@ -263,6 +254,15 @@ type CommonConfig struct {
 
 	ContainerdNamespace       string `json:"containerd-namespace,omitempty"`
 	ContainerdPluginNamespace string `json:"containerd-plugin-namespace,omitempty"`
+
+	DefaultRuntime string `json:"default-runtime,omitempty"`
+}
+
+// Proxies holds the proxies that are configured for the daemon.
+type Proxies struct {
+	HTTPProxy  string `json:"http-proxy,omitempty"`
+	HTTPSProxy string `json:"https-proxy,omitempty"`
+	NoProxy    string `json:"no-proxy,omitempty"`
 }
 
 // IsValueSet returns true if a configuration value
@@ -275,28 +275,34 @@ func (conf *Config) IsValueSet(name string) bool {
 	return ok
 }
 
-// New returns a new fully initialized Config struct
-func New() *Config {
-	config := Config{}
-	config.LogConfig.Config = make(map[string]string)
-	config.ClusterOpts = make(map[string]string)
-	return &config
-}
+// New returns a new fully initialized Config struct with default values set.
+func New() (*Config, error) {
+	// platform-agnostic default values for the Config.
+	cfg := &Config{
+		CommonConfig: CommonConfig{
+			ShutdownTimeout: DefaultShutdownTimeout,
+			LogConfig: LogConfig{
+				Config: make(map[string]string),
+			},
+			MaxConcurrentDownloads: DefaultMaxConcurrentDownloads,
+			MaxConcurrentUploads:   DefaultMaxConcurrentUploads,
+			MaxDownloadAttempts:    DefaultDownloadAttempts,
+			Mtu:                    DefaultNetworkMtu,
+			NetworkConfig: NetworkConfig{
+				NetworkControlPlaneMTU: DefaultNetworkMtu,
+				DefaultNetworkOpts:     make(map[string]map[string]string),
+			},
+			ContainerdNamespace:       DefaultContainersNamespace,
+			ContainerdPluginNamespace: DefaultPluginNamespace,
+			DefaultRuntime:            StockRuntimeName,
+		},
+	}
 
-// ParseClusterAdvertiseSettings parses the specified advertise settings
-func ParseClusterAdvertiseSettings(clusterStore, clusterAdvertise string) (string, error) {
-	if clusterAdvertise == "" {
-		return "", daemondiscovery.ErrDiscoveryDisabled
-	}
-	if clusterStore == "" {
-		return "", errors.New("invalid cluster configuration. --cluster-advertise must be accompanied by --cluster-store configuration")
+	if err := setPlatformDefaults(cfg); err != nil {
+		return nil, err
 	}
 
-	advertise, err := discovery.ParseAdvertise(clusterAdvertise)
-	if err != nil {
-		return "", errors.Wrap(err, "discovery advertise parsing failed")
-	}
-	return advertise, nil
+	return cfg, nil
 }
 
 // GetConflictFreeLabels validates Labels for conflict
@@ -306,19 +312,19 @@ func ParseClusterAdvertiseSettings(clusterStore, clusterAdvertise string) (strin
 func GetConflictFreeLabels(labels []string) ([]string, error) {
 	labelMap := map[string]string{}
 	for _, label := range labels {
-		stringSlice := strings.SplitN(label, "=", 2)
-		if len(stringSlice) > 1 {
+		key, val, ok := strings.Cut(label, "=")
+		if ok {
 			// If there is a conflict we will return an error
-			if v, ok := labelMap[stringSlice[0]]; ok && v != stringSlice[1] {
-				return nil, fmt.Errorf("conflict labels for %s=%s and %s=%s", stringSlice[0], stringSlice[1], stringSlice[0], v)
+			if v, ok := labelMap[key]; ok && v != val {
+				return nil, errors.Errorf("conflict labels for %s=%s and %s=%s", key, val, key, v)
 			}
-			labelMap[stringSlice[0]] = stringSlice[1]
+			labelMap[key] = val
 		}
 	}
 
 	newLabels := []string{}
 	for k, v := range labelMap {
-		newLabels = append(newLabels, fmt.Sprintf("%s=%s", k, v))
+		newLabels = append(newLabels, k+"="+v)
 	}
 	return newLabels, nil
 }
@@ -331,11 +337,10 @@ func Reload(configFile string, flags *pflag.FlagSet, reload func(*Config)) error
 		if flags.Changed("config-file") || !os.IsNotExist(err) {
 			return errors.Wrapf(err, "unable to configure the Docker daemon with file %s", configFile)
 		}
-		newConfig = New()
-	}
-
-	if err := Validate(newConfig); err != nil {
-		return errors.Wrap(err, "file configuration validation failed")
+		newConfig, err = New()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Check if duplicate label-keys with different values are found
@@ -344,6 +349,30 @@ func Reload(configFile string, flags *pflag.FlagSet, reload func(*Config)) error
 		return err
 	}
 	newConfig.Labels = newLabels
+
+	// TODO(thaJeztah) This logic is problematic and needs a rewrite;
+	// This is validating newConfig before the "reload()" callback is executed.
+	// At this point, newConfig may be a partial configuration, to be merged
+	// with the existing configuration in the "reload()" callback. Validating
+	// this config before it's merged can result in incorrect validation errors.
+	//
+	// However, the current "reload()" callback we use is DaemonCli.reloadConfig(),
+	// which includes a call to Daemon.Reload(), which both performs "merging"
+	// and validation, as well as actually updating the daemon configuration.
+	// Calling DaemonCli.reloadConfig() *before* validation, could thus lead to
+	// a failure in that function (making the reload non-atomic).
+	//
+	// While *some* errors could always occur when applying/updating the config,
+	// we should make it more atomic, and;
+	//
+	// 1. get (a copy of) the active configuration
+	// 2. get the new configuration
+	// 3. apply the (reloadable) options from the new configuration
+	// 4. validate the merged results
+	// 5. apply the new configuration.
+	if err := Validate(newConfig); err != nil {
+		return errors.Wrap(err, "file configuration validation failed")
+	}
 
 	reload(newConfig)
 	return nil
@@ -365,17 +394,12 @@ func MergeDaemonConfigurations(flagsConfig *Config, flags *pflag.FlagSet, config
 		return nil, err
 	}
 
-	if err := Validate(fileConfig); err != nil {
-		return nil, errors.Wrap(err, "configuration validation from file failed")
-	}
-
 	// merge flags configuration on top of the file configuration
 	if err := mergo.Merge(fileConfig, flagsConfig); err != nil {
 		return nil, err
 	}
 
-	// We need to validate again once both fileConfig and flagsConfig
-	// have been merged
+	// validate the merged fileConfig and flagsConfig
 	if err := Validate(fileConfig); err != nil {
 		return nil, errors.Wrap(err, "merged configuration validation from file and command line flags failed")
 	}
@@ -392,12 +416,46 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 		return nil, err
 	}
 
+	// Decode the contents of the JSON file using a [byte order mark] if present, instead of assuming UTF-8 without BOM.
+	// The BOM, if present, will be used to determine the encoding. If no BOM is present, we will assume the default
+	// and preferred encoding for JSON as defined by [RFC 8259], UTF-8 without BOM.
+	//
+	// While JSON is normatively UTF-8 with no BOM, there are a couple of reasons to decode here:
+	//   * UTF-8 with BOM is something that new implementations should avoid producing; however, [RFC 8259 Section 8.1]
+	//     allows implementations to ignore the UTF-8 BOM when present for interoperability. Older versions of Notepad,
+	//     the only text editor available out of the box on Windows Server, writes UTF-8 with a BOM by default.
+	//   * The default encoding for [Windows PowerShell] is UTF-16 LE with BOM. While encodings in PowerShell can be a
+	//     bit idiosyncratic, BOMs are still generally written. There is no support for selecting UTF-8 without a BOM as
+	//     the encoding in Windows PowerShell, though some Cmdlets only write UTF-8 with no BOM. PowerShell Core
+	//     introduces `utf8NoBOM` and makes it the default, but PowerShell Core is unlikely to be the implementation for
+	//     a majority of Windows Server + PowerShell users.
+	//   * While [RFC 8259 Section 8.1] asserts that software that is not part of a closed ecosystem or that crosses a
+	//     network boundary should only support UTF-8, and should never write a BOM, it does acknowledge older versions
+	//     of the standard, such as [RFC 7159 Section 8.1]. In the interest of pragmatism and easing pain for Windows
+	//     users, we consider Windows tools such as Windows PowerShell and Notepad part of our ecosystem, and support
+	//     the two most common encodings: UTF-16 LE with BOM, and UTF-8 with BOM, in addition to the standard UTF-8
+	//     without BOM.
+	//
+	// [byte order mark]: https://www.unicode.org/faq/utf_bom.html#BOM
+	// [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259
+	// [RFC 8259 Section 8.1]: https://www.rfc-editor.org/rfc/rfc8259#section-8.1
+	// [RFC 7159 Section 8.1]: https://www.rfc-editor.org/rfc/rfc7159#section-8.1
+	// [Windows PowerShell]: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_character_encoding?view=powershell-5.1
+	b, n, err := transform.Bytes(transform.Chain(unicode.BOMOverride(transform.Nop), encoding.UTF8Validator), b)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to decode configuration JSON at offset %d", n)
+	}
+	// Trim whitespace so that an empty config can be detected for an early return.
+	b = bytes.TrimSpace(b)
+
 	var config Config
-	var reader io.Reader
+	if len(b) == 0 {
+		return &config, nil // early return on empty config
+	}
+
 	if flags != nil {
 		var jsonConfig map[string]interface{}
-		reader = bytes.NewReader(b)
-		if err := json.NewDecoder(reader).Decode(&jsonConfig); err != nil {
+		if err := json.Unmarshal(b, &jsonConfig); err != nil {
 			return nil, err
 		}
 
@@ -440,19 +498,8 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 		config.ValuesSet = configSet
 	}
 
-	reader = bytes.NewReader(b)
-	if err := json.NewDecoder(reader).Decode(&config); err != nil {
+	if err := json.Unmarshal(b, &config); err != nil {
 		return nil, err
-	}
-
-	if config.RootDeprecated != "" {
-		logrus.Warn(`The "graph" config file option is deprecated. Please use "data-root" instead.`)
-
-		if config.Root != "" {
-			return nil, errors.New(`cannot specify both "graph" and "data-root" config file options`)
-		}
-
-		config.Root = config.RootDeprecated
 	}
 
 	return &config, nil
@@ -502,11 +549,16 @@ func findConfigurationConflicts(config map[string]interface{}, flags *pflag.Flag
 		for key := range unknownKeys {
 			unknown = append(unknown, key)
 		}
-		return fmt.Errorf("the following directives don't match any configuration option: %s", strings.Join(unknown, ", "))
+		return errors.Errorf("the following directives don't match any configuration option: %s", strings.Join(unknown, ", "))
 	}
 
 	var conflicts []string
 	printConflict := func(name string, flagValue, fileValue interface{}) string {
+		switch name {
+		case "http-proxy", "https-proxy":
+			flagValue = MaskCredentials(flagValue.(string))
+			fileValue = MaskCredentials(fileValue.(string))
+		}
 		return fmt.Sprintf("%s: (from flag: %v, from file: %v)", name, flagValue, fileValue)
 	}
 
@@ -531,7 +583,7 @@ func findConfigurationConflicts(config map[string]interface{}, flags *pflag.Flag
 	flags.Visit(duplicatedConflicts)
 
 	if len(conflicts) > 0 {
-		return fmt.Errorf("the following directives are specified both as a flag and in the configuration file: %s", strings.Join(conflicts, ", "))
+		return errors.Errorf("the following directives are specified both as a flag and in the configuration file: %s", strings.Join(conflicts, ", "))
 	}
 	return nil
 }
@@ -540,6 +592,13 @@ func findConfigurationConflicts(config map[string]interface{}, flags *pflag.Flag
 // such as config.DNS, config.Labels, config.DNSSearch,
 // as well as config.MaxConcurrentDownloads, config.MaxConcurrentUploads and config.MaxDownloadAttempts.
 func Validate(config *Config) error {
+	// validate log-level
+	if config.LogLevel != "" {
+		if _, err := logrus.ParseLevel(config.LogLevel); err != nil {
+			return errors.Errorf("invalid logging level: %s", config.LogLevel)
+		}
+	}
+
 	// validate DNS
 	for _, dns := range config.DNS {
 		if _, err := opts.ValidateIPAddress(dns); err != nil {
@@ -560,22 +619,25 @@ func Validate(config *Config) error {
 			return err
 		}
 	}
-	// validate MaxConcurrentDownloads
-	if config.MaxConcurrentDownloads != nil && *config.MaxConcurrentDownloads < 0 {
-		return fmt.Errorf("invalid max concurrent downloads: %d", *config.MaxConcurrentDownloads)
+
+	// TODO(thaJeztah) Validations below should not accept "0" to be valid; see Validate() for a more in-depth description of this problem
+	if config.Mtu < 0 {
+		return errors.Errorf("invalid default MTU: %d", config.Mtu)
 	}
-	// validate MaxConcurrentUploads
-	if config.MaxConcurrentUploads != nil && *config.MaxConcurrentUploads < 0 {
-		return fmt.Errorf("invalid max concurrent uploads: %d", *config.MaxConcurrentUploads)
+	if config.MaxConcurrentDownloads < 0 {
+		return errors.Errorf("invalid max concurrent downloads: %d", config.MaxConcurrentDownloads)
 	}
-	if err := ValidateMaxDownloadAttempts(config); err != nil {
-		return err
+	if config.MaxConcurrentUploads < 0 {
+		return errors.Errorf("invalid max concurrent uploads: %d", config.MaxConcurrentUploads)
+	}
+	if config.MaxDownloadAttempts < 0 {
+		return errors.Errorf("invalid max download attempts: %d", config.MaxDownloadAttempts)
 	}
 
 	// validate that "default" runtime is not reset
 	if runtimes := config.GetAllRuntimes(); len(runtimes) > 0 {
 		if _, ok := runtimes[StockRuntimeName]; ok {
-			return fmt.Errorf("runtime name '%s' is reserved", StockRuntimeName)
+			return errors.Errorf("runtime name '%s' is reserved", StockRuntimeName)
 		}
 	}
 
@@ -586,9 +648,15 @@ func Validate(config *Config) error {
 	if defaultRuntime := config.GetDefaultRuntimeName(); defaultRuntime != "" {
 		if !builtinRuntimes[defaultRuntime] {
 			runtimes := config.GetAllRuntimes()
-			if _, ok := runtimes[defaultRuntime]; !ok {
-				return fmt.Errorf("specified default runtime '%s' does not exist", defaultRuntime)
+			if _, ok := runtimes[defaultRuntime]; !ok && !IsPermissibleC8dRuntimeName(defaultRuntime) {
+				return errors.Errorf("specified default runtime '%s' does not exist", defaultRuntime)
 			}
+		}
+	}
+
+	for _, h := range config.Hosts {
+		if _, err := opts.ValidateHost(h); err != nil {
+			return err
 		}
 	}
 
@@ -596,25 +664,55 @@ func Validate(config *Config) error {
 	return config.ValidatePlatformConfig()
 }
 
-// ValidateMaxDownloadAttempts validates if the max-download-attempts is within the valid range
-func ValidateMaxDownloadAttempts(config *Config) error {
-	if config.MaxDownloadAttempts != nil && *config.MaxDownloadAttempts <= 0 {
-		return fmt.Errorf("invalid max download attempts: %d", *config.MaxDownloadAttempts)
-	}
-	return nil
+// GetDefaultRuntimeName returns the current default runtime
+func (conf *Config) GetDefaultRuntimeName() string {
+	conf.Lock()
+	rt := conf.DefaultRuntime
+	conf.Unlock()
+
+	return rt
 }
 
-// ModifiedDiscoverySettings returns whether the discovery configuration has been modified or not.
-func ModifiedDiscoverySettings(config *Config, backendType, advertise string, clusterOpts map[string]string) bool {
-	if config.ClusterStore != backendType || config.ClusterAdvertise != advertise {
-		return true
+// MaskCredentials masks credentials that are in an URL.
+func MaskCredentials(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.User == nil {
+		return rawURL
 	}
+	parsedURL.User = url.UserPassword("xxxxx", "xxxxx")
+	return parsedURL.String()
+}
 
-	if (config.ClusterOpts == nil && clusterOpts == nil) ||
-		(config.ClusterOpts == nil && len(clusterOpts) == 0) ||
-		(len(config.ClusterOpts) == 0 && clusterOpts == nil) {
-		return false
-	}
-
-	return !reflect.DeepEqual(config.ClusterOpts, clusterOpts)
+// IsPermissibleC8dRuntimeName tests whether name is safe to pass into
+// containerd as a runtime name, and whether the name is well-formed.
+// It does not check if the runtime is installed.
+//
+// A runtime name containing slash characters is interpreted by containerd as
+// the path to a runtime binary. If we allowed this, anyone with Engine API
+// access could get containerd to execute an arbitrary binary as root. Although
+// Engine API access is already equivalent to root on the host, the runtime name
+// has not historically been a vector to run arbitrary code as root so users are
+// not expecting it to become one.
+//
+// This restriction is not configurable. There are viable workarounds for
+// legitimate use cases: administrators and runtime developers can make runtimes
+// available for use with Docker by installing them onto PATH following the
+// [binary naming convention] for containerd Runtime v2.
+//
+// [binary naming convention]: https://github.com/containerd/containerd/blob/main/runtime/v2/README.md#binary-naming
+func IsPermissibleC8dRuntimeName(name string) bool {
+	// containerd uses a rather permissive test to validate runtime names:
+	//
+	//   - Any name for which filepath.IsAbs(name) is interpreted as the absolute
+	//     path to a shim binary. We want to block this behaviour.
+	//   - Any name which contains at least one '.' character and no '/' characters
+	//     and does not begin with a '.' character is a valid runtime name. The shim
+	//     binary name is derived from the final two components of the name and
+	//     searched for on the PATH. The name "a.." is technically valid per
+	//     containerd's implementation: it would resolve to a binary named
+	//     "containerd-shim---".
+	//
+	// https://github.com/containerd/containerd/blob/11ded166c15f92450958078cd13c6d87131ec563/runtime/v2/manager.go#L297-L317
+	// https://github.com/containerd/containerd/blob/11ded166c15f92450958078cd13c6d87131ec563/runtime/v2/shim/util.go#L83-L93
+	return !filepath.IsAbs(name) && !strings.ContainsRune(name, '/') && shim.BinaryName(name) != ""
 }

@@ -18,11 +18,13 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/testutil/request"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/skip"
 )
 
 var expectedNetworkInterfaceStats = strings.Split("rx_bytes rx_dropped rx_errors rx_packets tx_bytes tx_dropped tx_errors tx_packets", " ")
 
-func (s *DockerSuite) TestAPIStatsNoStreamGetCpu(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsNoStreamGetCpu(c *testing.T) {
+	skip.If(c, RuntimeIsWindowsContainerd(), "FIXME: Broken on Windows + containerd combination")
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", "while true;usleep 100; do echo 'Hello'; done")
 
 	id := strings.TrimSpace(out)
@@ -62,7 +64,7 @@ func (s *DockerSuite) TestAPIStatsNoStreamGetCpu(c *testing.T) {
 	assert.Assert(c, cpuPercent != 0.0, "docker stats with no-stream get cpu usage failed: was %v", cpuPercent)
 }
 
-func (s *DockerSuite) TestAPIStatsStoppedContainerInGoroutines(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsStoppedContainerInGoroutines(c *testing.T) {
 	out, _ := dockerCmd(c, "run", "-d", "busybox", "/bin/sh", "-c", "echo 1")
 	id := strings.TrimSpace(out)
 
@@ -97,7 +99,8 @@ func (s *DockerSuite) TestAPIStatsStoppedContainerInGoroutines(c *testing.T) {
 	}
 }
 
-func (s *DockerSuite) TestAPIStatsNetworkStats(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsNetworkStats(c *testing.T) {
+	skip.If(c, RuntimeIsWindowsContainerd(), "FIXME: Broken on Windows + containerd combination")
 	testRequires(c, testEnv.IsLocalDaemon)
 
 	out := runSleepingContainer(c)
@@ -162,7 +165,7 @@ func (s *DockerSuite) TestAPIStatsNetworkStats(c *testing.T) {
 	assert.Assert(c, postRxPackets >= expRxPkts, "Reported less RxPackets than expected. Expected >= %d. Found %d. %s", expRxPkts, postRxPackets, pingouts)
 }
 
-func (s *DockerSuite) TestAPIStatsNetworkStatsVersioning(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsNetworkStatsVersioning(c *testing.T) {
 	// Windows doesn't support API versions less than 1.25, so no point testing 1.17 .. 1.21
 	testRequires(c, testEnv.IsLocalDaemon, DaemonIsLinux)
 
@@ -257,21 +260,21 @@ func jsonBlobHasGTE121NetworkStats(blob map[string]interface{}) bool {
 	return true
 }
 
-func (s *DockerSuite) TestAPIStatsContainerNotFound(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsContainerNotFound(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.NewClientWithOpts(client.FromEnv)
 	assert.NilError(c, err)
-	defer cli.Close()
+	defer apiClient.Close()
 
 	expected := "No such container: nonexistent"
 
-	_, err = cli.ContainerStats(context.Background(), "nonexistent", true)
+	_, err = apiClient.ContainerStats(context.Background(), "nonexistent", true)
 	assert.ErrorContains(c, err, expected)
-	_, err = cli.ContainerStats(context.Background(), "nonexistent", false)
+	_, err = apiClient.ContainerStats(context.Background(), "nonexistent", false)
 	assert.ErrorContains(c, err, expected)
 }
 
-func (s *DockerSuite) TestAPIStatsNoStreamConnectedContainers(c *testing.T) {
+func (s *DockerAPISuite) TestAPIStatsNoStreamConnectedContainers(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 
 	out1 := runSleepingContainer(c)

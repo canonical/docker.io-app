@@ -1,16 +1,15 @@
 package git // import "github.com/docker/docker/builder/remotecontext/git"
 
 import (
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/moby/sys/symlink"
 	"github.com/pkg/errors"
-	exec "golang.org/x/sys/execabs"
 )
 
 type gitRepo struct {
@@ -51,7 +50,7 @@ func Clone(remoteURL string, opts ...CloneOption) (string, error) {
 func (repo gitRepo) clone() (checkoutDir string, err error) {
 	fetch := fetchArgs(repo.remote, repo.ref)
 
-	root, err := ioutil.TempDir("", "docker-build-git")
+	root, err := os.MkdirTemp("", "docker-build-git")
 	if err != nil {
 		return "", err
 	}
@@ -98,15 +97,10 @@ func parseRemoteURL(remoteURL string) (gitRepo, error) {
 		remoteURL = "https://" + remoteURL
 	}
 
-	var fragment string
 	if strings.HasPrefix(remoteURL, "git@") {
 		// git@.. is not an URL, so cannot be parsed as URL
-		parts := strings.SplitN(remoteURL, "#", 2)
-
-		repo.remote = parts[0]
-		if len(parts) == 2 {
-			fragment = parts[1]
-		}
+		var fragment string
+		repo.remote, fragment, _ = strings.Cut(remoteURL, "#")
 		repo.ref, repo.subdir = getRefAndSubdir(fragment)
 	} else {
 		u, err := url.Parse(remoteURL)
@@ -127,15 +121,11 @@ func parseRemoteURL(remoteURL string) (gitRepo, error) {
 }
 
 func getRefAndSubdir(fragment string) (ref string, subdir string) {
-	refAndDir := strings.SplitN(fragment, ":", 2)
-	ref = "master"
-	if len(refAndDir[0]) != 0 {
-		ref = refAndDir[0]
+	ref, subdir, _ = strings.Cut(fragment, ":")
+	if ref == "" {
+		ref = "master"
 	}
-	if len(refAndDir) > 1 && len(refAndDir[1]) != 0 {
-		subdir = refAndDir[1]
-	}
-	return
+	return ref, subdir
 }
 
 func fetchArgs(remoteURL string, ref string) []string {

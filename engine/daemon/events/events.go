@@ -5,7 +5,7 @@ import (
 	"time"
 
 	eventtypes "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/pkg/pubsub"
+	"github.com/moby/pubsub"
 )
 
 const (
@@ -79,7 +79,7 @@ func (e *Events) Evict(l chan interface{}) {
 }
 
 // Log creates a local scope message and publishes it
-func (e *Events) Log(action, eventType string, actor eventtypes.Actor) {
+func (e *Events) Log(action string, eventType eventtypes.Type, actor eventtypes.Actor) {
 	now := time.Now().UTC()
 	jm := eventtypes.Message{
 		Action:   action,

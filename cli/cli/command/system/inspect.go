@@ -8,6 +8,7 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/inspect"
+	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/docker/api/types"
 	apiclient "github.com/docker/docker/client"
 	"github.com/pkg/errors"
@@ -36,7 +37,7 @@ func NewInspectCommand(dockerCli command.Cli) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVarP(&opts.format, "format", "f", "", "Format the output using the given Go template")
+	flags.StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
 	flags.StringVar(&opts.inspectType, "type", "", "Return JSON for specified type")
 	flags.BoolVarP(&opts.size, "size", "s", false, "Display total file sizes if the type is container")
 
@@ -110,7 +111,7 @@ func inspectSecret(ctx context.Context, dockerCli command.Cli) inspect.GetRefFun
 }
 
 func inspectAll(ctx context.Context, dockerCli command.Cli, getSize bool, typeConstraint string) inspect.GetRefFunc {
-	var inspectAutodetect = []struct {
+	inspectAutodetect := []struct {
 		objectType      string
 		isSizeSupported bool
 		isSwarmObject   bool

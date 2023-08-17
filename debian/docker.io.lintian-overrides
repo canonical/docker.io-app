@@ -1,11 +1,9 @@
 # This script is not used nor installed by the package
 docker.io: script-without-interpreter [config]
 
-# Go binaries have some problems with stripping
-docker.io: unstripped-binary-or-object [usr/bin/docker-proxy]
-docker.io: unstripped-binary-or-object [usr/bin/docker]
-docker.io: unstripped-binary-or-object [usr/bin/dockerd]
-
 # config script would duplicate the debconf prompt during installation and
 # upgrade. For more info, read the comment in the postinst script.
 docker.io: no-debconf-config
+
+# This is fine for a Go binary
+docker.io: statically-linked-binary [usr/bin/docker-init]

@@ -19,7 +19,7 @@ import (
 
 // Check that copying from a local path to a symlink in a container copies to
 // the symlink target and does not overwrite the container symlink itself.
-func (s *DockerSuite) TestCpToSymlinkDestination(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToSymlinkDestination(c *testing.T) {
 	//  stat /tmp/test-cp-to-symlink-destination-262430901/vol3 gets permission denied for the user
 	testRequires(c, NotUserNamespace)
 	testRequires(c, DaemonIsLinux)
@@ -99,9 +99,9 @@ func (s *DockerSuite) TestCpToSymlinkDestination(c *testing.T) {
 
 // A. SRC specifies a file and DST (no trailing path separator) doesn't	exist.
 //
-// This should create a file with the name DST and copy the contents of the
+// This should create a file with the name DST and copy the	contents of the
 // source file into it.
-func (s *DockerSuite) TestCpToCaseA(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseA(c *testing.T) {
 	containerID := makeTestContainer(c, testContainerOptions{
 		workDir: "/root", command: makeCatFileCommand("itWorks.txt"),
 	})
@@ -122,7 +122,7 @@ func (s *DockerSuite) TestCpToCaseA(c *testing.T) {
 //
 // This should cause an error because the copy operation cannot	create a
 // directory when copying a single file.
-func (s *DockerSuite) TestCpToCaseB(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseB(c *testing.T) {
 	containerID := makeTestContainer(c, testContainerOptions{
 		command: makeCatFileCommand("testDir/file1"),
 	})
@@ -143,7 +143,7 @@ func (s *DockerSuite) TestCpToCaseB(c *testing.T) {
 // C. SRC specifies a file and DST exists as a file.
 //
 // This should overwrite the file at DST with the contents of the source file.
-func (s *DockerSuite) TestCpToCaseC(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseC(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true, workDir: "/root",
@@ -168,7 +168,7 @@ func (s *DockerSuite) TestCpToCaseC(c *testing.T) {
 //
 // This should place a copy of the source file inside it using the basename from
 // SRC. Ensure this works whether DST has a trailing path separator or not.
-func (s *DockerSuite) TestCpToCaseD(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseD(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true,
@@ -207,7 +207,7 @@ func (s *DockerSuite) TestCpToCaseD(c *testing.T) {
 // This should create a	directory at DST and copy the contents of the SRC
 // directory into the DST directory. Ensure this works whether DST has a
 // trailing path separator or not.
-func (s *DockerSuite) TestCpToCaseE(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseE(c *testing.T) {
 	containerID := makeTestContainer(c, testContainerOptions{
 		command: makeCatFileCommand("/testDir/file1-1"),
 	})
@@ -240,7 +240,7 @@ func (s *DockerSuite) TestCpToCaseE(c *testing.T) {
 //
 // This should cause an error as it is not possible to overwrite a file with a
 // directory.
-func (s *DockerSuite) TestCpToCaseF(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseF(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true, workDir: "/root",
@@ -263,7 +263,7 @@ func (s *DockerSuite) TestCpToCaseF(c *testing.T) {
 //
 // This should copy the SRC directory and all its contents to the DST directory.
 // Ensure this works whether DST has a trailing path separator or not.
-func (s *DockerSuite) TestCpToCaseG(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseG(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true, workDir: "/root",
@@ -302,7 +302,7 @@ func (s *DockerSuite) TestCpToCaseG(c *testing.T) {
 // This should create a directory at DST and copy the contents of the SRC
 // directory (but not the directory itself) into the DST directory. Ensure
 // this works whether DST has a trailing path separator or not.
-func (s *DockerSuite) TestCpToCaseH(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseH(c *testing.T) {
 	containerID := makeTestContainer(c, testContainerOptions{
 		command: makeCatFileCommand("/testDir/file1-1"),
 	})
@@ -335,7 +335,7 @@ func (s *DockerSuite) TestCpToCaseH(c *testing.T) {
 //
 // This	should cause an error as it is not possible to overwrite a file with a
 // directory.
-func (s *DockerSuite) TestCpToCaseI(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseI(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true, workDir: "/root",
@@ -359,7 +359,7 @@ func (s *DockerSuite) TestCpToCaseI(c *testing.T) {
 // This should copy the contents of the SRC directory (but not the directory
 // itself) into the DST directory. Ensure this works whether DST has a
 // trailing path separator or not.
-func (s *DockerSuite) TestCpToCaseJ(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToCaseJ(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	containerID := makeTestContainer(c, testContainerOptions{
 		addContent: true, workDir: "/root",
@@ -394,7 +394,7 @@ func (s *DockerSuite) TestCpToCaseJ(c *testing.T) {
 
 // The `docker cp` command should also ensure that you cannot
 // write to a container rootfs that is marked as read-only.
-func (s *DockerSuite) TestCpToErrReadOnlyRootfs(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToErrReadOnlyRootfs(c *testing.T) {
 	// --read-only + userns has remount issues
 	testRequires(c, DaemonIsLinux, NotUserNamespace)
 	tmpDir := getTestDir(c, "test-cp-to-err-read-only-rootfs")
@@ -411,15 +411,13 @@ func (s *DockerSuite) TestCpToErrReadOnlyRootfs(c *testing.T) {
 	dstPath := containerCpPath(containerID, "/root/shouldNotExist")
 
 	err := runDockerCp(c, srcPath, dstPath)
-	assert.ErrorContains(c, err, "")
-
-	assert.Assert(c, isCpCannotCopyReadOnly(err), "expected ErrContainerRootfsReadonly error, but got %T: %s", err, err)
+	assert.ErrorContains(c, err, "marked read-only")
 	assert.NilError(c, containerStartOutputEquals(c, containerID, ""), "dstPath should not have existed")
 }
 
 // The `docker cp` command should also ensure that you
 // cannot write to a volume that is mounted as read-only.
-func (s *DockerSuite) TestCpToErrReadOnlyVolume(c *testing.T) {
+func (s *DockerCLICpSuite) TestCpToErrReadOnlyVolume(c *testing.T) {
 	// --read-only + userns has remount issues
 	testRequires(c, DaemonIsLinux, NotUserNamespace)
 	tmpDir := getTestDir(c, "test-cp-to-err-read-only-volume")
@@ -436,8 +434,7 @@ func (s *DockerSuite) TestCpToErrReadOnlyVolume(c *testing.T) {
 	dstPath := containerCpPath(containerID, "/vol_ro/shouldNotExist")
 
 	err := runDockerCp(c, srcPath, dstPath)
-	assert.ErrorContains(c, err, "")
+	assert.ErrorContains(c, err, "marked read-only")
 
-	assert.Assert(c, isCpCannotCopyReadOnly(err), "expected ErrVolumeReadonly error, but got %T: %s", err, err)
 	assert.NilError(c, containerStartOutputEquals(c, containerID, ""), "dstPath should not have existed")
 }

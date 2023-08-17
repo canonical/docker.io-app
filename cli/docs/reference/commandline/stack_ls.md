@@ -1,26 +1,20 @@
----
-title: "stack ls"
-description: "The stack ls command description and usage"
-keywords: "stack, ls"
----
-
 # stack ls
 
-```markdown
-Usage:  docker stack ls [OPTIONS]
-
+<!---MARKER_GEN_START-->
 List stacks
 
-Aliases:
-  ls, list
+### Aliases
 
-Options:
-      --help                  Print usage
-      --format string         Pretty-print stacks using a Go template
-      --kubeconfig string     Kubernetes config file
-      --namespace string      Kubernetes namespace to use
-      --orchestrator string   Orchestrator to use (swarm|kubernetes|all)
-```
+`docker stack ls`, `docker stack list`
+
+### Options
+
+| Name                  | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|:----------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`--format`](#format) | `string` |         | Format output using a custom template:<br>'table':            Print output in table format with column headers (default)<br>'table TEMPLATE':   Print output in table format using the given Go template<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+
+
+<!---MARKER_GEN_END-->
 
 ## Description
 
@@ -69,6 +63,13 @@ The following example uses a template without headers and outputs the
 $ docker stack ls --format "{{.Name}}: {{.Services}}"
 web-server: 1
 web-cache: 4
+```
+
+To list all stacks in JSON format, use the `json` directive:
+
+```console
+$ docker stack ls --format json
+{"Name":"myapp","Namespace":"","Orchestrator":"Swarm","Services":"3"}
 ```
 
 ## Related commands

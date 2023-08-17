@@ -3,7 +3,7 @@ package contentutil
 import (
 	"bytes"
 	"context"
-	"io/ioutil"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -11,7 +11,7 @@ import (
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
@@ -112,12 +112,12 @@ func (b *buffer) Writer(ctx context.Context, opts ...content.WriterOpt) (content
 	}, nil
 }
 
-func (b *buffer) ReaderAt(ctx context.Context, desc ocispec.Descriptor) (content.ReaderAt, error) {
+func (b *buffer) ReaderAt(ctx context.Context, desc ocispecs.Descriptor) (content.ReaderAt, error) {
 	r, err := b.getBytesReader(ctx, desc.Digest)
 	if err != nil {
 		return nil, err
 	}
-	return &readerAt{Reader: r, Closer: ioutil.NopCloser(r), size: int64(r.Len())}, nil
+	return &readerAt{Reader: r, Closer: io.NopCloser(r), size: int64(r.Len())}, nil
 }
 
 func (b *buffer) getBytesReader(ctx context.Context, dgst digest.Digest) (*bytes.Reader, error) {

@@ -959,7 +959,7 @@ definitions:
     type: "object"
     properties:
       Bridge:
-        description: Name of the network'a bridge (for example, `docker0`).
+        description: Name of the network's bridge (for example, `docker0`).
         type: "string"
         example: "docker0"
       SandboxID:
@@ -8257,6 +8257,12 @@ paths:
           description: "The name of the plugin. The `:latest` tag is optional, and is the default if omitted."
           required: true
           type: "string"
+        - name: "force"
+          in: "query"
+          description: |
+            Force disable a plugin even if still in use.
+          required: false
+          type: "boolean"
       tags: ["Plugin"]
   /plugins/{name}/upgrade:
     post:

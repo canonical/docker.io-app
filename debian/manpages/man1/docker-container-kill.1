@@ -1,0 +1,59 @@
+.nh
+.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+
+.SH NAME
+.PP
+docker-container-kill - Kill one or more running containers
+
+
+.SH SYNOPSIS
+.PP
+\fBdocker container kill [OPTIONS] CONTAINER [CONTAINER...]\fP
+
+
+.SH DESCRIPTION
+.PP
+The \fB\fCdocker kill\fR subcommand kills one or more containers. The main process
+inside the container is sent \fB\fCSIGKILL\fR signal (default), or the signal that is
+specified with the \fB\fC--signal\fR option. You can reference a container by its
+ID, ID-prefix, or name.
+
+.PP
+The \fB\fC--signal\fR flag sets the system call signal that is sent to the container.
+This signal can be a signal name in the format \fB\fCSIG<NAME>\fR, for instance \fB\fCSIGINT\fR,
+or an unsigned number that matches a position in the kernel's syscall table,
+for instance \fB\fC2\fR\&.
+
+.PP
+While the default (\fB\fCSIGKILL\fR) signal will terminate the container, the signal
+set through \fB\fC--signal\fR may be non-terminal, depending on the container's main
+process. For example, the \fB\fCSIGHUP\fR signal in most cases will be non-terminal,
+and the container will continue running after receiving the signal.
+
+.PP
+.RS
+
+.PP
+\fBNote\fP
+
+.PP
+\fB\fCENTRYPOINT\fR and \fB\fCCMD\fR in the \fIshell\fP form run as a child process of
+\fB\fC/bin/sh -c\fR, which does not pass signals. This means that the executable is
+not the container’s PID 1 and does not receive Unix signals.
+
+.RE
+
+
+.SH OPTIONS
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for kill
+
+.PP
+\fB-s\fP, \fB--signal\fP=""
+	Signal to send to the container
+
+
+.SH SEE ALSO
+.PP
+\fBdocker-container(1)\fP

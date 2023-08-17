@@ -1,6 +1,8 @@
 package images
 
 import (
+	"context"
+
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/system"
@@ -8,9 +10,9 @@ import (
 )
 
 // GetContainerLayerSize returns real size & virtual size
-func (i *ImageService) GetContainerLayerSize(containerID string) (int64, int64) {
+func (i *ImageService) GetContainerLayerSize(ctx context.Context, containerID string) (int64, int64, error) {
 	// TODO Windows
-	return 0, 0
+	return 0, 0, nil
 }
 
 // GetLayerFolders returns the layer folders from an image RootFS
@@ -23,9 +25,9 @@ func (i *ImageService) GetLayerFolders(img *image.Image, rwLayer layer.RWLayer) 
 		if !system.IsOSSupported(img.OperatingSystem()) {
 			return nil, errors.Wrapf(system.ErrNotSupportedOperatingSystem, "cannot get layerpath for ImageID %s", img.RootFS.ChainID())
 		}
-		layerPath, err := layer.GetLayerPath(i.layerStores[img.OperatingSystem()], img.RootFS.ChainID())
+		layerPath, err := layer.GetLayerPath(i.layerStore, img.RootFS.ChainID())
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get layer path from graphdriver %s for ImageID %s", i.layerStores[img.OperatingSystem()], img.RootFS.ChainID())
+			return nil, errors.Wrapf(err, "failed to get layer path from graphdriver %s for ImageID %s", i.layerStore, img.RootFS.ChainID())
 		}
 		// Reverse order, expecting parent first
 		folders = append([]string{layerPath}, folders...)

@@ -2,7 +2,6 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"strconv"
 	"sync/atomic"
@@ -13,8 +12,8 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	timetypes "github.com/docker/docker/api/types/time"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/libnetwork"
 	"github.com/docker/docker/runconfig"
-	"github.com/docker/libnetwork"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -73,9 +72,12 @@ func (daemon *Daemon) ContainersPrune(ctx context.Context, pruneFilters filters.
 			if !matchLabels(pruneFilters, c.Config.Labels) {
 				continue
 			}
-			cSize, _ := daemon.imageService.GetContainerLayerSize(c.ID)
+			cSize, _, err := daemon.imageService.GetContainerLayerSize(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
 			// TODO: sets RmLink to true?
-			err := daemon.ContainerRm(c.ID, &types.ContainerRmConfig{})
+			err = daemon.ContainerRm(c.ID, &types.ContainerRmConfig{})
 			if err != nil {
 				logrus.Warnf("failed to prune container %s: %v", c.ID, err)
 				continue
@@ -227,15 +229,15 @@ func getUntilFromPruneFilters(pruneFilters filters.Args) (time.Time, error) {
 	}
 	untilFilters := pruneFilters.Get("until")
 	if len(untilFilters) > 1 {
-		return until, fmt.Errorf("more than one until filter specified")
+		return until, errdefs.InvalidParameter(errors.New("more than one until filter specified"))
 	}
 	ts, err := timetypes.GetTimestamp(untilFilters[0], time.Now())
 	if err != nil {
-		return until, err
+		return until, errdefs.InvalidParameter(err)
 	}
 	seconds, nanoseconds, err := timetypes.ParseTimestamps(ts, 0)
 	if err != nil {
-		return until, err
+		return until, errdefs.InvalidParameter(err)
 	}
 	until = time.Unix(seconds, nanoseconds)
 	return until, nil

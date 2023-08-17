@@ -5,7 +5,7 @@ import (
 
 	dockercontainer "github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/libnetwork"
+	"github.com/docker/docker/libnetwork"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -16,7 +16,7 @@ import (
 func (daemon *Daemon) ContainerRename(oldName, newName string) error {
 	var (
 		sid string
-		sb  libnetwork.Sandbox
+		sb  *libnetwork.Sandbox
 	)
 
 	if oldName == "" || newName == "" {

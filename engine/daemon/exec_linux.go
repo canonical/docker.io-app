@@ -3,21 +3,69 @@ package daemon // import "github.com/docker/docker/daemon"
 import (
 	"context"
 
+	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/containers"
+	"github.com/containerd/containerd/oci"
+	coci "github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/pkg/apparmor"
 	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/exec"
 	"github.com/docker/docker/oci/caps"
-	"github.com/opencontainers/runc/libcontainer/apparmor"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-func (daemon *Daemon) execSetPlatformOpt(c *container.Container, ec *exec.Config, p *specs.Process) error {
-	if len(ec.User) > 0 {
-		var err error
-		p.User, err = getUser(c, ec.User)
-		if err != nil {
-			return err
+func withResetAdditionalGIDs() oci.SpecOpts {
+	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+		s.Process.User.AdditionalGids = nil
+		return nil
+	}
+}
+
+func getUserFromContainerd(ctx context.Context, containerdCli *containerd.Client, ec *container.ExecConfig) (specs.User, error) {
+	ctr, err := containerdCli.LoadContainer(ctx, ec.Container.ID)
+	if err != nil {
+		return specs.User{}, err
+	}
+
+	cinfo, err := ctr.Info(ctx)
+	if err != nil {
+		return specs.User{}, err
+	}
+
+	spec, err := ctr.Spec(ctx)
+	if err != nil {
+		return specs.User{}, err
+	}
+
+	opts := []oci.SpecOpts{
+		coci.WithUser(ec.User),
+		withResetAdditionalGIDs(),
+		coci.WithAdditionalGIDs(ec.User),
+	}
+	for _, opt := range opts {
+		if err := opt(ctx, containerdCli, &cinfo, spec); err != nil {
+			return specs.User{}, err
 		}
 	}
+
+	return spec.Process.User, nil
+}
+
+func (daemon *Daemon) execSetPlatformOpt(ctx context.Context, ec *container.ExecConfig, p *specs.Process) error {
+	if len(ec.User) > 0 {
+		var err error
+		if daemon.UsesSnapshotter() {
+			p.User, err = getUserFromContainerd(ctx, daemon.containerdCli, ec)
+			if err != nil {
+				return err
+			}
+		} else {
+			p.User, err = getUser(ec.Container, ec.User)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	if ec.Privileged {
 		p.Capabilities = &specs.LinuxCapabilities{
 			Bounding:  caps.GetAllCapabilities(),
@@ -25,11 +73,12 @@ func (daemon *Daemon) execSetPlatformOpt(c *container.Container, ec *exec.Config
 			Effective: caps.GetAllCapabilities(),
 		}
 	}
-	if apparmor.IsEnabled() {
+
+	if apparmor.HostSupports() {
 		var appArmorProfile string
-		if c.AppArmorProfile != "" {
-			appArmorProfile = c.AppArmorProfile
-		} else if c.HostConfig.Privileged {
+		if ec.Container.AppArmorProfile != "" {
+			appArmorProfile = ec.Container.AppArmorProfile
+		} else if ec.Container.HostConfig.Privileged {
 			// `docker exec --privileged` does not currently disable AppArmor
 			// profiles. Privileged configuration of the container is inherited
 			appArmorProfile = unconfinedAppArmorProfile
@@ -51,5 +100,5 @@ func (daemon *Daemon) execSetPlatformOpt(c *container.Container, ec *exec.Config
 		p.ApparmorProfile = appArmorProfile
 	}
 	s := &specs.Spec{Process: p}
-	return WithRlimits(daemon, c)(context.Background(), nil, nil, s)
+	return WithRlimits(daemon, ec.Container)(ctx, nil, nil, s)
 }

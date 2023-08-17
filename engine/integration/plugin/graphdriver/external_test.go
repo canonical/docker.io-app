@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/integration/internal/requirement"
 	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/plugins"
 	"github.com/docker/docker/testutil/daemon"
 	"gotest.tools/v3/assert"
@@ -146,9 +147,9 @@ func setupPlugin(t *testing.T, ec map[string]*graphEventsCounter, ext string, mu
 
 	base, err := os.MkdirTemp("", name)
 	assert.NilError(t, err)
-	vfsProto, err := vfs.Init(base, []string{}, nil, nil)
+	vfsProto, err := vfs.Init(base, []string{}, idtools.IdentityMapping{})
 	assert.NilError(t, err, "error initializing graph driver")
-	driver := graphdriver.NewNaiveDiffDriver(vfsProto, nil, nil)
+	driver := graphdriver.NewNaiveDiffDriver(vfsProto, idtools.IdentityMapping{})
 
 	ec[ext] = &graphEventsCounter{}
 	mux.HandleFunc("/Plugin.Activate", func(w http.ResponseWriter, r *http.Request) {
@@ -212,13 +213,12 @@ func setupPlugin(t *testing.T, ec map[string]*graphEventsCounter, ext string, mu
 			return
 		}
 
-		// TODO @gupta-ak: Figure out what to do here.
 		dir, err := driver.Get(req.ID, req.MountLabel)
 		if err != nil {
 			respond(w, err)
 			return
 		}
-		respond(w, &graphDriverResponse{Dir: dir.Path()})
+		respond(w, &graphDriverResponse{Dir: dir})
 	})
 
 	mux.HandleFunc("/GraphDriver.Put", func(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +432,7 @@ func TestGraphdriverPluginV2(t *testing.T) {
 
 	// restart the daemon with the plugin set as the storage driver
 	d.Stop(t)
-	d.StartWithBusybox(t, "-s", plugin, "--storage-opt", "overlay2.override_kernel_check=1")
+	d.StartWithBusybox(t, "-s", plugin)
 
 	testGraphDriver(ctx, t, client, plugin, nil)
 }
@@ -450,8 +450,8 @@ func testGraphDriver(ctx context.Context, t *testing.T, c client.APIClient, driv
 
 	diffs, err := c.ContainerDiff(ctx, id)
 	assert.NilError(t, err)
-	assert.Check(t, is.Contains(diffs, containertypes.ContainerChangeResponseItem{
-		Kind: archive.ChangeAdd,
+	assert.Check(t, is.Contains(diffs, containertypes.FilesystemChange{
+		Kind: containertypes.ChangeAdd,
 		Path: "/hello",
 	}), "diffs: %v", diffs)
 

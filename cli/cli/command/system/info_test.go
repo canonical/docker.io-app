@@ -9,7 +9,7 @@ import (
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/registry"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -69,16 +69,16 @@ var sampleInfoNoSwarm = types.Info{
 	OSType:             "linux",
 	Architecture:       "x86_64",
 	IndexServerAddress: "https://index.docker.io/v1/",
-	RegistryConfig: &registry.ServiceConfig{
+	RegistryConfig: &registrytypes.ServiceConfig{
 		AllowNondistributableArtifactsCIDRs:     nil,
 		AllowNondistributableArtifactsHostnames: nil,
-		InsecureRegistryCIDRs: []*registry.NetIPNet{
+		InsecureRegistryCIDRs: []*registrytypes.NetIPNet{
 			{
 				IP:   net.ParseIP("127.0.0.0"),
 				Mask: net.IPv4Mask(255, 0, 0, 0),
 			},
 		},
-		IndexConfigs: map[string]*registry.IndexInfo{
+		IndexConfigs: map[string]*registrytypes.IndexInfo{
 			"docker.io": {
 				Name:     "docker.io",
 				Mirrors:  nil,
@@ -98,8 +98,6 @@ var sampleInfoNoSwarm = types.Info{
 	Labels:            []string{"provider=digitalocean"},
 	ExperimentalBuild: false,
 	ServerVersion:     "17.06.1-ce",
-	ClusterStore:      "",
-	ClusterAdvertise:  "",
 	Runtimes: map[string]types.Runtime{
 		"runc": {
 			Path: "docker-runc",
@@ -261,6 +259,11 @@ func TestPrettyPrintInfo(t *testing.T) {
 	sampleInfoBadSecurity := sampleInfoNoSwarm
 	sampleInfoBadSecurity.SecurityOptions = []string{"foo="}
 
+	sampleInfoLabelsNil := sampleInfoNoSwarm
+	sampleInfoLabelsNil.Labels = nil
+	sampleInfoLabelsEmpty := sampleInfoNoSwarm
+	sampleInfoLabelsEmpty.Labels = []string{}
+
 	for _, tc := range []struct {
 		doc        string
 		dockerInfo info
@@ -275,8 +278,12 @@ func TestPrettyPrintInfo(t *testing.T) {
 			dockerInfo: info{
 				Info: &sampleInfoNoSwarm,
 				ClientInfo: &clientInfo{
-					Context: "default",
-					Debug:   true,
+					clientVersion: clientVersion{
+						Platform: &platformInfo{Name: "Docker Engine - Community"},
+						Version:  "24.0.0",
+						Context:  "default",
+					},
+					Debug: true,
 				},
 			},
 			prettyGolden: "docker-info-no-swarm",
@@ -287,8 +294,8 @@ func TestPrettyPrintInfo(t *testing.T) {
 			dockerInfo: info{
 				Info: &sampleInfoNoSwarm,
 				ClientInfo: &clientInfo{
-					Context: "default",
-					Plugins: samplePluginsInfo,
+					clientVersion: clientVersion{Context: "default"},
+					Plugins:       samplePluginsInfo,
 				},
 			},
 			prettyGolden:   "docker-info-plugins",
@@ -296,13 +303,28 @@ func TestPrettyPrintInfo(t *testing.T) {
 			warningsGolden: "docker-info-plugins-warnings",
 		},
 		{
-
+			doc: "info with nil labels",
+			dockerInfo: info{
+				Info:       &sampleInfoLabelsNil,
+				ClientInfo: &clientInfo{clientVersion: clientVersion{Context: "default"}},
+			},
+			prettyGolden: "docker-info-with-labels-nil",
+		},
+		{
+			doc: "info with empty labels",
+			dockerInfo: info{
+				Info:       &sampleInfoLabelsEmpty,
+				ClientInfo: &clientInfo{clientVersion: clientVersion{Context: "default"}},
+			},
+			prettyGolden: "docker-info-with-labels-empty",
+		},
+		{
 			doc: "info with swarm",
 			dockerInfo: info{
 				Info: &infoWithSwarm,
 				ClientInfo: &clientInfo{
-					Context: "default",
-					Debug:   false,
+					clientVersion: clientVersion{Context: "default"},
+					Debug:         false,
 				},
 			},
 			prettyGolden: "docker-info-with-swarm",
@@ -313,8 +335,12 @@ func TestPrettyPrintInfo(t *testing.T) {
 			dockerInfo: info{
 				Info: &infoWithWarningsLinux,
 				ClientInfo: &clientInfo{
-					Context: "default",
-					Debug:   true,
+					clientVersion: clientVersion{
+						Platform: &platformInfo{Name: "Docker Engine - Community"},
+						Version:  "24.0.0",
+						Context:  "default",
+					},
+					Debug: true,
 				},
 			},
 			prettyGolden:   "docker-info-no-swarm",
@@ -326,8 +352,12 @@ func TestPrettyPrintInfo(t *testing.T) {
 			dockerInfo: info{
 				Info: &sampleInfoDaemonWarnings,
 				ClientInfo: &clientInfo{
-					Context: "default",
-					Debug:   true,
+					clientVersion: clientVersion{
+						Platform: &platformInfo{Name: "Docker Engine - Community"},
+						Version:  "24.0.0",
+						Context:  "default",
+					},
+					Debug: true,
 				},
 			},
 			prettyGolden:   "docker-info-no-swarm",
@@ -340,22 +370,25 @@ func TestPrettyPrintInfo(t *testing.T) {
 				ServerErrors: []string{"a server error occurred"},
 				ClientErrors: []string{"a client error occurred"},
 			},
-			prettyGolden:  "docker-info-errors",
-			jsonGolden:    "docker-info-errors",
-			expectedError: "errors pretty printing info",
+			prettyGolden:   "docker-info-errors",
+			jsonGolden:     "docker-info-errors",
+			warningsGolden: "docker-info-errors-stderr",
+			expectedError:  "errors pretty printing info",
 		},
 		{
 			doc: "bad security info",
 			dockerInfo: info{
 				Info:         &sampleInfoBadSecurity,
-				ServerErrors: []string{"an error happened"},
+				ServerErrors: []string{"a server error occurred"},
 				ClientInfo:   &clientInfo{Debug: false},
 			},
-			prettyGolden:  "docker-info-badsec",
-			jsonGolden:    "docker-info-badsec",
-			expectedError: "errors pretty printing info",
+			prettyGolden:   "docker-info-badsec",
+			jsonGolden:     "docker-info-badsec",
+			warningsGolden: "docker-info-badsec-stderr",
+			expectedError:  "errors pretty printing info",
 		},
 	} {
+		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{})
 			err := prettyPrintInfo(cli, tc.dockerInfo)
@@ -371,11 +404,42 @@ func TestPrettyPrintInfo(t *testing.T) {
 				assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
 			}
 
-			cli = test.NewFakeCli(&fakeClient{})
-			assert.NilError(t, formatInfo(cli, tc.dockerInfo, "{{json .}}"))
-			golden.Assert(t, cli.OutBuffer().String(), tc.jsonGolden+".json.golden")
-			assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
+			if tc.jsonGolden != "" {
+				cli = test.NewFakeCli(&fakeClient{})
+				assert.NilError(t, formatInfo(cli.Out(), tc.dockerInfo, "{{json .}}"))
+				golden.Assert(t, cli.OutBuffer().String(), tc.jsonGolden+".json.golden")
+				assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
+
+				cli = test.NewFakeCli(&fakeClient{})
+				assert.NilError(t, formatInfo(cli.Out(), tc.dockerInfo, "json"))
+				golden.Assert(t, cli.OutBuffer().String(), tc.jsonGolden+".json.golden")
+				assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
+			}
 		})
+	}
+}
+
+func BenchmarkPrettyPrintInfo(b *testing.B) {
+	infoWithSwarm := sampleInfoNoSwarm
+	infoWithSwarm.Swarm = sampleSwarmInfo
+
+	dockerInfo := info{
+		Info: &infoWithSwarm,
+		ClientInfo: &clientInfo{
+			clientVersion: clientVersion{
+				Platform: &platformInfo{Name: "Docker Engine - Community"},
+				Version:  "24.0.0",
+				Context:  "default",
+			},
+			Debug: true,
+		},
+	}
+	cli := test.NewFakeCli(&fakeClient{})
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = prettyPrintInfo(cli, dockerInfo)
+		cli.ResetOutputBuffers()
 	}
 }
 
@@ -402,13 +466,14 @@ func TestFormatInfo(t *testing.T) {
 			expectedError: `template: :1:2: executing "" at <.badString>: can't evaluate field badString in type system.info`,
 		},
 	} {
+		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{})
 			info := info{
 				Info:       &sampleInfoNoSwarm,
 				ClientInfo: &clientInfo{Debug: true},
 			}
-			err := formatInfo(cli, info, tc.template)
+			err := formatInfo(cli.Out(), info, tc.template)
 			if tc.expectedOut != "" {
 				assert.NilError(t, err)
 				assert.Equal(t, cli.OutBuffer().String(), tc.expectedOut)
@@ -417,6 +482,58 @@ func TestFormatInfo(t *testing.T) {
 			} else {
 				t.Fatal("test expected to neither pass nor fail")
 			}
+		})
+	}
+}
+
+func TestNeedsServerInfo(t *testing.T) {
+	tests := []struct {
+		doc      string
+		template string
+		expected bool
+	}{
+		{
+			doc:      "no template",
+			template: "",
+			expected: true,
+		},
+		{
+			doc:      "JSON",
+			template: "json",
+			expected: true,
+		},
+		{
+			doc:      "JSON (all fields)",
+			template: "{{json .}}",
+			expected: true,
+		},
+		{
+			doc:      "JSON (Server ID)",
+			template: "{{json .ID}}",
+			expected: true,
+		},
+		{
+			doc:      "ClientInfo",
+			template: "{{json .ClientInfo}}",
+			expected: false,
+		},
+		{
+			doc:      "JSON ClientInfo",
+			template: "{{json .ClientInfo}}",
+			expected: false,
+		},
+		{
+			doc:      "JSON (Active context)",
+			template: "{{json .ClientInfo.Context}}",
+			expected: false,
+		},
+	}
+
+	inf := info{ClientInfo: &clientInfo{}}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.doc, func(t *testing.T) {
+			assert.Equal(t, needsServerInfo(tc.template, inf), tc.expected)
 		})
 	}
 }

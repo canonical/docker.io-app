@@ -1,7 +1,6 @@
 package context
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -9,15 +8,12 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/context/kubernetes"
 	"github.com/docker/cli/cli/context/store"
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // ExportOptions are the options used for exporting a context
 type ExportOptions struct {
-	Kubeconfig  bool
 	ContextName string
 	Dest        string
 }
@@ -26,26 +22,22 @@ func newExportCommand(dockerCli command.Cli) *cobra.Command {
 	opts := &ExportOptions{}
 	cmd := &cobra.Command{
 		Use:   "export [OPTIONS] CONTEXT [FILE|-]",
-		Short: "Export a context to a tar or kubeconfig file",
+		Short: "Export a context to a tar archive FILE or a tar stream on STDOUT.",
 		Args:  cli.RequiresRangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.ContextName = args[0]
 			if len(args) == 2 {
 				opts.Dest = args[1]
 			} else {
-				opts.Dest = opts.ContextName
-				if opts.Kubeconfig {
-					opts.Dest += ".kubeconfig"
-				} else {
-					opts.Dest += ".dockercontext"
-				}
+				opts.Dest = opts.ContextName + ".dockercontext"
 			}
 			return RunExport(dockerCli, opts)
 		},
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVar(&opts.Kubeconfig, "kubeconfig", false, "Export as a kubeconfig file")
+	flags.Bool("kubeconfig", false, "Export as a kubeconfig file")
+	flags.MarkDeprecated("kubeconfig", "option will be ignored")
 	flags.SetAnnotation("kubeconfig", "kubernetes", nil)
 	flags.SetAnnotation("kubeconfig", "deprecated", nil)
 	return cmd
@@ -60,7 +52,7 @@ func writeTo(dockerCli command.Cli, reader io.Reader, dest string) error {
 		}
 		writer = dockerCli.Out()
 	} else {
-		f, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		f, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return err
 		}
@@ -82,31 +74,7 @@ func RunExport(dockerCli command.Cli, opts *ExportOptions) error {
 	if err := store.ValidateContextName(opts.ContextName); err != nil && opts.ContextName != command.DefaultContextName {
 		return err
 	}
-	ctxMeta, err := dockerCli.ContextStore().GetMetadata(opts.ContextName)
-	if err != nil {
-		return err
-	}
-	if !opts.Kubeconfig {
-		reader := store.Export(opts.ContextName, dockerCli.ContextStore())
-		defer reader.Close()
-		return writeTo(dockerCli, reader, opts.Dest)
-	}
-	kubernetesEndpointMeta := kubernetes.EndpointFromContext(ctxMeta)
-	if kubernetesEndpointMeta == nil {
-		return fmt.Errorf("context %q has no kubernetes endpoint", opts.ContextName)
-	}
-	kubernetesEndpoint, err := kubernetesEndpointMeta.WithTLSData(dockerCli.ContextStore(), opts.ContextName)
-	if err != nil {
-		return err
-	}
-	kubeConfig := kubernetesEndpoint.KubernetesConfig()
-	rawCfg, err := kubeConfig.RawConfig()
-	if err != nil {
-		return err
-	}
-	data, err := clientcmd.Write(rawCfg)
-	if err != nil {
-		return err
-	}
-	return writeTo(dockerCli, bytes.NewBuffer(data), opts.Dest)
+	reader := store.Export(opts.ContextName, dockerCli.ContextStore())
+	defer reader.Close()
+	return writeTo(dockerCli, reader, opts.Dest)
 }
