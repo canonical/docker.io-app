@@ -1,0 +1,20 @@
+Importing new upstream version
+==============================
+
+Steps to import a new upstream version:
+
+# From the root of the source package import the new version using gbp and uscan
+$ gbp import-orig --uscan --pristine-tar
+# Add a changelog entry for this new version
+# This needs to be done BEFORE rebuilding the manpages
+$ gbp dch && git add debian/changelog && git commit -m'Update changelog'
+# Update manpages for this new version
+$ ./debian/helpers/build-manpages.sh
+$ git add debian/manpages && git commit -m'd/manpages: update to version X.X.X'
+
+NOTE: After importing a new upstream version, do not forget to run
+`debian/helpers/build-manpages.sh` to update the manpages before building the
+package. If you don't, the build will fail.  The manpages are now generated
+before build time because the upstream decided to remove documentation-related
+dependencies from the `vendor` directory, and they need to be downloaded from
+the Internet during build time.
