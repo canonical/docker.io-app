@@ -1,6 +1,9 @@
 docker.io-app (24.0.5-0ubuntu1~20.04.1) focal; urgency=medium
 
   * Backport version from Mantic to Focal (LP: #2030500).
+    - d/t/basic-smoke: import GPG key from Debian stable. The
+      debian-archive-keyring package is out-dated after the release of Debian
+      12. Now, the key is downloaded from the ftp-master keyring directly.
 
  -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 21 Aug 2023 16:50:14 -0300
 
