@@ -1,6 +1,8 @@
 docker.io-app (24.0.5-0ubuntu1~22.04.1) jammy; urgency=medium
 
   * Backport version from Mantic to Jammy (LP: #2030500).
+    - d/control: do not suggest docker-buildx and docker-compose-v2. They are
+      not available in Jammy at the moment.
 
  -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 21 Aug 2023 16:50:14 -0300
 
