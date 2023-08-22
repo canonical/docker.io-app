@@ -1,6 +1,8 @@
 docker.io-app (24.0.5-0ubuntu1~23.04.1) lunar; urgency=medium
 
   * Backport version from Mantic to Lunar (LP: #2030500).
+    - d/control: do not suggests docker-buildx and docker-compose-v2. They are
+      not available in Lunar at the moment.
 
  -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 21 Aug 2023 16:50:14 -0300
 
