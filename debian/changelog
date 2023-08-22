@@ -4,6 +4,8 @@ docker.io-app (24.0.5-0ubuntu1~20.04.1) focal; urgency=medium
     - d/t/basic-smoke: import GPG key from Debian stable. The
       debian-archive-keyring package is out-dated after the release of Debian
       12. Now, the key is downloaded from the ftp-master keyring directly.
+    - d/control: do not suggest docker-buildx and docker-compose-v2. They are
+      not available in Focal at the moment.
 
  -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 21 Aug 2023 16:50:14 -0300
 
