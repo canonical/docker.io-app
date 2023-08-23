@@ -1,3 +1,9 @@
+docker.io-app (24.0.5-0ubuntu2) mantic; urgency=medium
+
+  * Build with default golang-go
+
+ -- Shengjing Zhu <shengjing.zhu@canonical.com>  Wed, 23 Aug 2023 15:18:18 +0800
+
 docker.io-app (24.0.5-0ubuntu1) mantic; urgency=medium
 
   * Update the way MUT are pre-processed and imported.
