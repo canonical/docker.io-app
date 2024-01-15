@@ -1,3 +1,10 @@
+docker.io-app (24.0.7-0ubuntu1) UNRELEASED; urgency=medium
+
+  * d/get-orig-source.sh: use .gz format instead of .xz
+  * New upstream version 24.0.7
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 15 Jan 2024 16:32:02 -0300
+
 docker.io-app (24.0.5-0ubuntu1) mantic; urgency=medium
 
   * Update the way MUT are pre-processed and imported.
