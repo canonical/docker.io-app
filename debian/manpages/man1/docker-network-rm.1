@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -17,28 +17,20 @@ Removes one or more networks by name or identifier. To remove a network,
 you must first disconnect any containers connected to it.
 To remove the network named 'my-network':
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker network rm my-network
 
-.fi
-.RE
+.EE
 
 .PP
-To delete multiple networks in a single \fB\fCdocker network rm\fR command, provide
+To delete multiple networks in a single \fBdocker network rm\fR command, provide
 multiple network names or ids. The following example deletes a network with id
-\fB\fC3695c422697f\fR and a network named \fB\fCmy-network\fR:
+\fB3695c422697f\fR and a network named \fBmy-network\fR:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker network rm 3695c422697f my-network
 
-.fi
-.RE
+.EE
 
 .PP
 When you specify multiple networks, the command attempts to delete each in turn.

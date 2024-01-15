@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -14,38 +14,34 @@ docker-login - Log in to a registry
 .SH DESCRIPTION
 .PP
 Log in to a Docker Registry located on the specified
-\fB\fCSERVER\fR\&.  You can specify a URL or a \fB\fChostname\fR for the \fB\fCSERVER\fR value. If you
-do not specify a \fB\fCSERVER\fR, the command uses Docker's public registry located at
-\fB\fChttps://registry-1.docker.io/\fR by default.  To get a username/password for Docker's public registry, create an account on Docker Hub.
+\fBSERVER\fR\&.  You can specify a URL or a \fBhostname\fR for the \fBSERVER\fR value. If you
+do not specify a \fBSERVER\fR, the command uses Docker's public registry located at
+\fBhttps://registry-1.docker.io/\fR by default.  To get a username/password for Docker's public registry, create an account on Docker Hub.
 
 .PP
-\fB\fCdocker login\fR requires user to use \fB\fCsudo\fR or be \fB\fCroot\fR, except when:
+\fBdocker login\fR requires user to use \fBsudo\fR or be \fBroot\fR, except when:
 
 .RS
 .IP "  1." 5
-connecting to  a remote daemon, such as a \fB\fCdocker-machine\fR provisioned \fB\fCdocker engine\fR\&.
+connecting to  a remote daemon, such as a \fBdocker-machine\fR provisioned \fBdocker engine\fR\&.
 .IP "  2." 5
-user is added to the \fB\fCdocker\fR group.  This will impact the security of your system; the \fB\fCdocker\fR group is \fB\fCroot\fR equivalent.  See Docker Daemon Attack Surface
-\[la]https://docs.docker.com/engine/security/#docker-daemon-attack-surface\[ra] for details.
+user is added to the \fBdocker\fR group.  This will impact the security of your system; the \fBdocker\fR group is \fBroot\fR equivalent.  See Docker Daemon Attack Surface
+\[la]https://docs.docker.com/engine/security/#docker\-daemon\-attack\-surface\[ra] for details.
 
 .RE
 
 .PP
 You can log into any public or private repository for which you have
 credentials.  When you log in, the command stores encoded credentials in
-\fB\fC$HOME/.docker/config.json\fR on Linux or \fB\fC%USERPROFILE%/.docker/config.json\fR on Windows.
+\fB$HOME/.docker/config.json\fR on Linux or \fB%USERPROFILE%/.docker/config.json\fR on Windows.
 
 
 .SH EXAMPLES
 .SH Login to a registry on your localhost
-.PP
-.RS
-
-.nf
+.EX
 # docker login localhost:8080
 
-.fi
-.RE
+.EE
 
 
 .SH See also

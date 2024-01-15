@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -13,23 +13,23 @@ docker-volume-ls - List volumes
 
 .SH DESCRIPTION
 .PP
-Lists all the volumes Docker manages. You can filter using the \fB\fC-f\fR or
-\fB\fC--filter\fR flag. The filtering format is a \fB\fCkey=value\fR pair. To specify
+Lists all the volumes Docker manages. You can filter using the \fB-f\fR or
+\fB--filter\fR flag. The filtering format is a \fBkey=value\fR pair. To specify
 more than one filter,  pass multiple flags (for example,
-\fB\fC--filter "foo=bar" --filter "bif=baz"\fR)
+\fB--filter "foo=bar" --filter "bif=baz"\fR)
 
 .PP
 The currently supported filters are:
 
 .RS
 .IP \(bu 2
-\fB\fCdangling\fR (boolean - \fB\fCtrue\fR or \fB\fCfalse\fR, \fB\fC1\fR or \fB\fC0\fR)
+\fBdangling\fR (boolean - \fBtrue\fR or \fBfalse\fR, \fB1\fR or \fB0\fR)
 .IP \(bu 2
-\fB\fCdriver\fR (a volume driver's name)
+\fBdriver\fR (a volume driver's name)
 .IP \(bu 2
-\fB\fClabel\fR (\fB\fClabel=<key>\fR or \fB\fClabel=<key>=<value>\fR)
+\fBlabel\fR (\fBlabel=<key>\fR or \fBlabel=<key>=<value>\fR)
 .IP \(bu 2
-\fB\fCname\fR (a volume's name)
+\fBname\fR (a volume's name)
 
 .RE
 

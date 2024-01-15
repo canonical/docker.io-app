@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -32,20 +32,17 @@ space used, and total metadata space.
 The data file is where the images are stored and the metadata file is where the
 meta data regarding those images are stored. When run for the first time Docker
 allocates a certain amount of data space and meta data space from the space
-available on the volume where \fB\fC/var/lib/docker\fR is mounted.
+available on the volume where \fB/var/lib/docker\fR is mounted.
 
 
 .SH EXAMPLES
 .SH Display Docker system information
 .PP
 The example below shows the output for a daemon running on Ubuntu Linux,
-using the \fB\fCoverlay2\fR storage driver. As can be seen in the output, additional
-information about the \fB\fCoverlay2\fR storage driver is shown:
+using the \fBoverlay2\fR storage driver. As can be seen in the output, additional
+information about the \fBoverlay2\fR storage driver is shown:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker info
 
 Client: Docker Engine - Community
@@ -109,21 +106,16 @@ Server:
   127.0.0.0/8
  Live Restore Enabled: false
 
-.fi
-.RE
+.EE
 
 .PP
 You can also specify the output format:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker info --format '{{json .}}'
 {"ID":"4cee4408-10d2-4e17-891c-a41736ac4536","Containers":14, ...}
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS
