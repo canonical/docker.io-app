@@ -1,4 +1,4 @@
-docker.io-app (24.0.7-0ubuntu1) UNRELEASED; urgency=medium
+docker.io-app (24.0.7-0ubuntu1) noble; urgency=medium
 
   * d/get-orig-source.sh: use .gz format instead of .xz
   * New upstream version 24.0.7
