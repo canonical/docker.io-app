@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -26,10 +26,7 @@ Stream to a file instead of STDOUT by using \fB-o\fP\&.
 Export the contents of the container called angry_bell to a tar file
 called angry_bell.tar:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker export angry_bell > angry_bell.tar
 $ docker export --output=angry_bell-latest.tar angry_bell
 $ ls -sh angry_bell.tar
@@ -37,8 +34,7 @@ $ ls -sh angry_bell.tar
 $ ls -sh angry_bell-latest.tar
 321M angry_bell-latest.tar
 
-.fi
-.RE
+.EE
 
 
 .SH See also

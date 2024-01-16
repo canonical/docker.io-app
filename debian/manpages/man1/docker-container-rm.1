@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -26,59 +26,43 @@ To remove a container using its ID, find either from a \fBdocker ps -a\fP
 command, or use the ID returned from the \fBdocker run\fP command, or retrieve
 it from a file used to store it using the \fBdocker run --cidfile\fP:
 
-.PP
-.RS
-
-.nf
+.EX
 docker container rm abebf7571666
 
-.fi
-.RE
+.EE
 
 .SH Removing a container using the container name
 .PP
 The name of the container can be found using the \fBdocker ps -a\fP
 command. The use that name as follows:
 
-.PP
-.RS
-
-.nf
+.EX
 docker container rm hopeful_morse
 
-.fi
-.RE
+.EE
 
 .SH Removing a container and all associated volumes
-.PP
-.RS
-
-.nf
+.EX
 $ docker container rm -v redis
 redis
 
-.fi
-.RE
+.EE
 
 .PP
 This command will remove the container and any volumes associated with it.
 Note that if a volume was specified with a name, it will not be removed.
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker create -v awesome:/foo -v /bar --name hello redis
 hello
 $ docker container rm -v hello
 
-.fi
-.RE
+.EE
 
 .PP
-In this example, the volume for \fB\fC/foo\fR will remain in tact, but the volume for
-\fB\fC/bar\fR will be removed. The same behavior holds for volumes inherited with
-\fB\fC--volumes-from\fR\&.
+In this example, the volume for \fB/foo\fR will remain in tact, but the volume for
+\fB/bar\fR will be removed. The same behavior holds for volumes inherited with
+\fB--volumes-from\fR\&.
 
 
 .SH OPTIONS

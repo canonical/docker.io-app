@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -17,19 +17,15 @@ Creates a new volume that containers can consume and store data in. If a name
 is not specified, Docker generates a random name. You create a volume and then
 configure the container to use it, for example:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker volume create hello
 hello
 $ docker run -d -v hello:/world busybox ls /world
 
-.fi
-.RE
+.EE
 
 .PP
-The mount is created inside the container's \fB\fC/src\fR directory. Docker does
+The mount is created inside the container's \fB/src\fR directory. Docker does
 not support relative paths for mount points inside the container.
 
 .PP
@@ -40,48 +36,36 @@ container writes and the other reads the data.
 .SH Driver specific options
 .PP
 Some volume drivers may take options to customize the volume creation. Use the
-\fB\fC-o\fR or \fB\fC--opt\fR flags to pass driver options:
+\fB-o\fR or \fB--opt\fR flags to pass driver options:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker volume create --driver fake --opt tardis=blue --opt timey=wimey
 
-.fi
-.RE
+.EE
 
 .PP
 These options are passed directly to the volume driver. Options for different
 volume drivers may do different things (or nothing at all).
 
 .PP
-The built-in \fB\fClocal\fR driver on Windows does not support any options.
+The built-in \fBlocal\fR driver on Windows does not support any options.
 
 .PP
-The built-in \fB\fClocal\fR driver on Linux accepts options similar to the linux
-\fB\fCmount\fR command:
+The built-in \fBlocal\fR driver on Linux accepts options similar to the linux
+\fBmount\fR command:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker volume create --driver local --opt type=tmpfs --opt device=tmpfs --opt o=size=100m,uid=1000
 
-.fi
-.RE
+.EE
 
 .PP
 Another example:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker volume create --driver local --opt type=btrfs --opt device=/dev/sda2
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

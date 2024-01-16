@@ -32,12 +32,11 @@ run:
 
 linters-settings:
   depguard:
-    list-type: blacklist
-    include-go-root: true
-    packages:
-      # The io/ioutil package has been deprecated.
-      # https://go.dev/doc/go1.16#ioutil
-      - io/ioutil
+    rules:
+      main:
+        deny:
+          - pkg: io/ioutil
+            desc: The io/ioutil package has been deprecated, see https://go.dev/doc/go1.16#ioutil
   gocyclo:
     min-complexity: 16
   govet:
@@ -117,7 +116,10 @@ issues:
     - text: "package-comments: should have a package comment"
       linters:
         - revive
-
+    # FIXME temporarily suppress these (see https://github.com/gotestyourself/gotest.tools/issues/272)
+    - text: "SA1019: (assert|cmp|is)\\.ErrorType is deprecated"
+      linters:
+        - staticcheck
     # Exclude some linters from running on tests files.
     - path: _test\.go
       linters:

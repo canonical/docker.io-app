@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -14,14 +14,14 @@ docker-plugin-ls - List plugins
 .SH DESCRIPTION
 .PP
 Lists all the plugins that are currently installed. You can install plugins
-using the \fB\fCdocker plugin install\fR command.
-You can also filter using the \fB\fC-f\fR or \fB\fC--filter\fR flag.
+using the \fBdocker plugin install\fR command.
+You can also filter using the \fB-f\fR or \fB--filter\fR flag.
 
 .SH Filters
 .PP
 Filter output based on these conditions:
    - enabled=(true|false) - plugins that are enabled or not
-   - capability= - filters plugins based on capabilities (currently \fB\fCvolumedriver\fR, \fB\fCnetworkdriver\fR, \fB\fCipamdriver\fR, or \fB\fCauthz\fR)
+   - capability= - filters plugins based on capabilities (currently \fBvolumedriver\fR, \fBnetworkdriver\fR, \fBipamdriver\fR, or \fBauthz\fR)
 
 .SH Format
 .PP
@@ -35,63 +35,43 @@ Format the output using the given Go template.
 
 .SH EXAMPLES
 .SH Display all plugins
-.PP
-.RS
-
-.nf
+.EX
 $ docker plugin ls
 ID                  NAME                                    DESCRIPTION                         ENABLED
 869080b57404        tiborvass/sample-volume-plugin:latest   A sample volume plugin for Docker   true
 141bf6c02ddd        vieux/sshfs:latest                      sshFS plugin for Docker             false
 
-.fi
-.RE
+.EE
 
 .SH Display plugins with their ID and names
-.PP
-.RS
-
-.nf
+.EX
 $ docker plugin ls --format "{{.ID}}: {{.Name}}"
 869080b57404: tiborvass/sample-volume-plugin:latest
 
-.fi
-.RE
+.EE
 
 .SH Display plugins in JSON format
-.PP
-.RS
-
-.nf
+.EX
 $ docker plugin ls --format json
 {"Description":"A sample volume plugin for Docker","Enabled":true,"ID":"2788a2da7e12","Name":"tiborvass/sample-volume-plugin:latest","PluginReference":"docker.io/tiborvass/sample-volume-plugin:latest"}
 
-.fi
-.RE
+.EE
 
 .SH Display enabled plugins
-.PP
-.RS
-
-.nf
+.EX
 $ docker plugin ls --filter enabled=true
 ID                  NAME                                    DESCRIPTION                         ENABLED
 869080b57404        tiborvass/sample-volume-plugin:latest   A sample volume plugin for Docker   true
 
-.fi
-.RE
+.EE
 
-.SH Display plugins with \fB\fCvolumedriver\fR capability
-.PP
-.RS
-
-.nf
+.SH Display plugins with \fBvolumedriver\fR capability
+.EX
 $ docker plugin ls --filter capability=volumedriver --format "table {{.ID}}\\t{{.Name}}"
 ID                  Name
 869080b57404        tiborvass/sample-volume-plugin:latest
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS
