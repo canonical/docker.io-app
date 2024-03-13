@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -13,109 +13,77 @@ docker-image-import - Import the contents from a tarball to create a filesystem 
 
 .SH DESCRIPTION
 .PP
-Create a new filesystem image from the contents of a tarball (\fB\fC\&.tar\fR,
-\fB\fC\&.tar.gz\fR, \fB\fC\&.tgz\fR, \fB\fC\&.bzip\fR, \fB\fC\&.tar.xz\fR, \fB\fC\&.txz\fR) into it, then optionally tag it.
+Create a new filesystem image from the contents of a tarball (\fB\&.tar\fR,
+\fB\&.tar.gz\fR, \fB\&.tgz\fR, \fB\&.bzip\fR, \fB\&.tar.xz\fR, \fB\&.txz\fR) into it, then optionally tag it.
 
 
 .SH EXAMPLES
 .SH Import from a remote location
-.PP
-.RS
-
-.nf
+.EX
 # docker image import http://example.com/exampleimage.tgz example/imagerepo
 
-.fi
-.RE
+.EE
 
 .SH Import from a local file
 .PP
 Import to docker via pipe and stdin:
 
-.PP
-.RS
-
-.nf
+.EX
 # cat exampleimage.tgz | docker image import - example/imagelocal
 
-.fi
-.RE
+.EE
 
 .PP
 Import with a commit message.
 
-.PP
-.RS
-
-.nf
+.EX
 # cat exampleimage.tgz | docker image import --message "New image imported from tarball" - exampleimagelocal:new
 
-.fi
-.RE
+.EE
 
 .PP
 Import to a Docker image from a local file.
 
-.PP
-.RS
-
-.nf
+.EX
 # docker image import /path/to/exampleimage.tgz 
 
-.fi
-.RE
+.EE
 
 .SH Import from a local file and tag
 .PP
 Import to docker via pipe and stdin:
 
-.PP
-.RS
-
-.nf
+.EX
 # cat exampleimageV2.tgz | docker image import - example/imagelocal:V-2.0
 
-.fi
-.RE
+.EE
 
 .SH Import from a local directory
-.PP
-.RS
-
-.nf
+.EX
 # tar -c . | docker image import - exampleimagedir
 
-.fi
-.RE
+.EE
 
 .SH Apply specified Dockerfile instructions while importing the image
 .PP
 This example sets the docker image ENV variable DEBUG to true by default.
 
-.PP
-.RS
-
-.nf
+.EX
 # tar -c . | docker image import -c="ENV DEBUG=true" - exampleimagedir
 
-.fi
-.RE
+.EE
 
 .SH When the daemon supports multiple operating systems
 .PP
 If the daemon supports multiple operating systems, and the image being imported
 does not match the default operating system, it may be necessary to add
-\fB\fC--platform\fR\&. This would be necessary when importing a Linux image into a Windows
+\fB--platform\fR\&. This would be necessary when importing a Linux image into a Windows
 daemon.
 
-.PP
-.RS
-
-.nf
+.EX
 # docker image import --platform=linux .\\linuximage.tar
 
-.fi
-.RE
+.EE
 
 
 .SH See also

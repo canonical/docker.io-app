@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -20,12 +20,12 @@ container was created. Three different types of change are tracked:
 allbox;
 l l 
 l l .
-\fB\fCSymbol\fR	\fB\fCDescription\fR
-\fB\fCA\fR	A file or directory was added
-\fB\fCD\fR	T{
+\fBSymbol\fP	\fBDescription\fP
+\fBA\fR	A file or directory was added
+\fBD\fR	T{
 A file or directory was deleted
 T}
-\fB\fCC\fR	T{
+\fBC\fR	T{
 A file or directory was changed
 T}
 .TE
@@ -37,12 +37,9 @@ You can use the full or shortened container ID or the container name set using
 
 .SH EXAMPLES
 .PP
-Inspect the changes to an \fB\fCnginx\fR container:
+Inspect the changes to an \fBnginx\fR container:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker diff 1fdfd1f54c1b
 
 C /dev
@@ -65,8 +62,7 @@ C /var/log/nginx
 A /var/log/nginx/access.log
 A /var/log/nginx/error.log
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS
