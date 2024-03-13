@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -20,15 +20,15 @@ simultaneously, screen sharing style, or quickly view the progress of your
 detached process.
 
 .PP
-To stop a container, use \fB\fCCTRL-c\fR\&. This key sequence sends \fBSIGKILL\fP to the
+To stop a container, use \fBCTRL-c\fR\&. This key sequence sends \fBSIGKILL\fP to the
 container. You can detach from the container (and leave it running) using a
-configurable key sequence. The default sequence is \fB\fCCTRL-p CTRL-q\fR\&. You
+configurable key sequence. The default sequence is \fBCTRL-p CTRL-q\fR\&. You
 configure the key sequence using the \fB--detach-keys\fP option or a configuration
 file. See \fBconfig-json(5)\fP for documentation on using a configuration file.
 
 .PP
 It is forbidden to redirect the standard input of a \fBdocker attach\fP command while
-attaching to a TTY-enabled container (i.e., launched with \fB\fC-i\fR and \fB\fC-t\fR).
+attaching to a TTY-enabled container (i.e., launched with \fB-i\fR and \fB-t\fR).
 
 
 .SH EXAMPLES
@@ -36,12 +36,9 @@ attaching to a TTY-enabled container (i.e., launched with \fB\fC-i\fR and \fB\fC
 .PP
 In this example the top command is run inside a container from an ubuntu image,
 in detached mode, then attaches to it, and then terminates the container
-with \fB\fCCTRL-c\fR:
+with \fBCTRL-c\fR:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker run -d --name topdemo ubuntu:20.04 /usr/bin/top -b
 $ docker attach topdemo
 top - 00:07:01 up  4:54,  0 users,  load average: 0.83, 0.91, 0.82
@@ -54,8 +51,7 @@ MiB Swap:  16384.0 total,  16384.0 free,      0.0 used.  12097.3 avail Mem
       1 root      20   0    5976   3256   2828 R   0.0   0.0   0:00.04 top
 ^C
 
-.fi
-.RE
+.EE
 
 .SH Override the detach sequence
 .PP

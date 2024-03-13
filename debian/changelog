@@ -1,3 +1,19 @@
+docker.io-app (24.0.7-0ubuntu2) noble; urgency=medium
+
+  * Build with Go 1.21 (LP: #2056154)
+    - d/control: b-d on golang-1.21-go instead of golang-1.20-go
+    - d/rules: add Go 1.21 to $PATH
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Tue, 12 Mar 2024 11:39:49 -0300
+
+docker.io-app (24.0.7-0ubuntu1) noble; urgency=medium
+
+  * d/get-orig-source.sh: use .gz format instead of .xz
+  * New upstream version 24.0.7
+  * d/manpages/*: update manpages for version 24.0.7
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 15 Jan 2024 16:40:29 -0300
+
 docker.io-app (24.0.5-0ubuntu1~22.04.1) jammy; urgency=medium
 
   * Backport version from Mantic to Jammy (LP: #2030500).

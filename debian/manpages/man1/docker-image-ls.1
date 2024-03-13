@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -68,14 +68,10 @@ Format the output using the given Go template.
 .PP
 To list the images in a local repository (not the registry) run:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls
 
-.fi
-.RE
+.EE
 
 .PP
 The list will contain the image repository name, a tag for the image, and an
@@ -83,50 +79,38 @@ image ID, when it was created and its virtual size. Columns: REPOSITORY, TAG,
 IMAGE ID, CREATED, and SIZE.
 
 .PP
-The \fB\fCdocker image ls\fR command takes an optional \fB\fC[REPOSITORY[:TAG]]\fR argument
+The \fBdocker image ls\fR command takes an optional \fB[REPOSITORY[:TAG]]\fR argument
 that restricts the list to images that match the argument. If you specify
-\fB\fCREPOSITORY\fR but no \fB\fCTAG\fR, the \fB\fCdocker image ls\fR command lists all images in the
+\fBREPOSITORY\fR but no \fBTAG\fR, the \fBdocker image ls\fR command lists all images in the
 given repository.
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls java
 
-.fi
-.RE
+.EE
 
 .PP
-The \fB\fC[REPOSITORY[:TAG]]\fR value must be an "exact match". This means that, for example,
-\fB\fCdocker image ls jav\fR does not match the image \fB\fCjava\fR\&.
+The \fB[REPOSITORY[:TAG]]\fR value must be an "exact match". This means that, for example,
+\fBdocker image ls jav\fR does not match the image \fBjava\fR\&.
 
 .PP
-If both \fB\fCREPOSITORY\fR and \fB\fCTAG\fR are provided, only images matching that
+If both \fBREPOSITORY\fR and \fBTAG\fR are provided, only images matching that
 repository and tag are listed.  To find all local images in the "java"
 repository with tag "8" you can use:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls java:8
 
-.fi
-.RE
+.EE
 
 .PP
 To get a verbose list of images which contains all the intermediate images
 used in builds use \fB-a\fP:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls -a
 
-.fi
-.RE
+.EE
 
 .PP
 Previously, the docker image ls command supported the --tree and --dot arguments,
@@ -137,19 +121,16 @@ still find it in the third-party dockviz tool: https://github.com/justone/dockvi
 .SH Listing images in a desired format
 .PP
 When using the --format option, the image command will either output the data
-exactly as the template declares or, when using the \fB\fCtable\fR directive, will
-include column headers as well. You can use special characters like \fB\fC\\t\fR for
-inserting tab spacing between columns. The \fB\fCjson\fR directive outputs objects
+exactly as the template declares or, when using the \fBtable\fR directive, will
+include column headers as well. You can use special characters like \fB\\t\fR for
+inserting tab spacing between columns. The \fBjson\fR directive outputs objects
 in JSON format.
 
 .PP
 The following example uses a template without headers and outputs the ID and
 Repository entries separated by a colon for all images:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls --format "{{.ID}}: {{.Repository}}"
 77af4d6b9913: <none>
 b6fa739cedf5: committ
@@ -161,16 +142,12 @@ b6fa739cedf5: committ
 746b819f315e: postgres
 746b819f315e: postgres
 
-.fi
-.RE
+.EE
 
 .PP
 To list all images with their repository and tag in a table format you can use:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls --format "table {{.ID}}\\t{{.Repository}}\\t{{.Tag}}"
 IMAGE ID            REPOSITORY                TAG
 77af4d6b9913        <none>                    <none>
@@ -183,8 +160,7 @@ b6fa739cedf5        committ                   latest
 746b819f315e        postgres                  9.3.5
 746b819f315e        postgres                  latest
 
-.fi
-.RE
+.EE
 
 .PP
 Valid template placeholders are listed above.
@@ -192,31 +168,23 @@ Valid template placeholders are listed above.
 .PP
 To list all images in JSON format you can use:
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls --format json
 {"Containers":"N/A","CreatedAt":"2021-01-18 11:29:06 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"fbcf509fa16f","Repository":"docker","SharedSize":"N/A","Size":"235MB","Tag":"stable-dind","UniqueSize":"N/A","VirtualSize":"235.5MB"}
 {"Containers":"N/A","CreatedAt":"2021-01-18 11:24:48 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"08656a69ab2b","Repository":"docker-cli-e2e","SharedSize":"N/A","Size":"1.21GB","Tag":"latest","UniqueSize":"N/A","VirtualSize":"1.207GB"}
 {"Containers":"N/A","CreatedAt":"2021-01-18 10:43:44 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"abca5c07c1ba","Repository":"docker-cli-dev","SharedSize":"N/A","Size":"608MB","Tag":"latest","UniqueSize":"N/A","VirtualSize":"607.8MB"}
 
-.fi
-.RE
+.EE
 
 .SH Listing only the shortened image IDs
 .PP
 Listing just the shortened image IDs. This can be useful for some automated
 tools.
 
-.PP
-.RS
-
-.nf
+.EX
 docker image ls -q
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

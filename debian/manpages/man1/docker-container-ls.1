@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -27,7 +27,7 @@ Filter output based on these conditions:
    - exited= an exit code of 
    - health=(starting|healthy|unhealthy|none)
    - id= a container's ID
-   - isolation=(\fB\fCdefault\fR|\fB\fCprocess\fR|\fB\fChyperv\fR) (Windows daemon only)
+   - isolation=(\fBdefault\fR|\fBprocess\fR|\fBhyperv\fR) (Windows daemon only)
    - is-task=(true|false)
    - label= or label==
    - name= a container's name
@@ -62,10 +62,7 @@ Valid placeholders for the Go template are listed below:
 
 .SH EXAMPLES
 .SH Display all containers, including non-running
-.PP
-.RS
-
-.nf
+.EX
 $ docker container ls -a
 CONTAINER ID        IMAGE                 COMMAND                CREATED             STATUS      PORTS    NAMES
 a87ecb4f327c        ubuntu:22.04          /bin/sh -c #(nop) MA   20 minutes ago      Exit 0               desperate_brattain
@@ -73,53 +70,37 @@ a87ecb4f327c        ubuntu:22.04          /bin/sh -c #(nop) MA   20 minutes ago 
 c1d3b0166030        acffc0358b9e          /bin/sh -c yum -y up   2 weeks ago         Exit 1               determined_torvalds
 41d50ecd2f57        ubuntu:22.04          /bin/sh -c #(nop) MA   2 weeks ago         Exit 0               drunk_pike
 
-.fi
-.RE
+.EE
 
 .SH Display only IDs of all containers, including non-running
-.PP
-.RS
-
-.nf
+.EX
 $ docker container ls -a -q
 a87ecb4f327c
 01946d9d34d8
 c1d3b0166030
 41d50ecd2f57
 
-.fi
-.RE
+.EE
 
-.SH Display only IDs of all containers that have the name \fB\fCdetermined_torvalds\fR
-.PP
-.RS
-
-.nf
+.SH Display only IDs of all containers that have the name \fBdetermined_torvalds\fR
+.EX
 $ docker container ls -a -q --filter=name=determined_torvalds
 c1d3b0166030
 
-.fi
-.RE
+.EE
 
 .SH Display containers with their commands
-.PP
-.RS
-
-.nf
+.EX
 $ docker container ls --format "{{.ID}}: {{.Command}}"
 a87ecb4f327c: /bin/sh -c #(nop) MA
 01946d9d34d8: /bin/sh -c #(nop) MA
 c1d3b0166030: /bin/sh -c yum -y up
 41d50ecd2f57: /bin/sh -c #(nop) MA
 
-.fi
-.RE
+.EE
 
 .SH Display containers with their labels in a table
-.PP
-.RS
-
-.nf
+.EX
 $ docker container ls --format "table {{.ID}}\\t{{.Labels}}"
 CONTAINER ID        LABELS
 a87ecb4f327c        com.docker.swarm.node=ubuntu,com.docker.swarm.storage=ssd
@@ -127,14 +108,10 @@ a87ecb4f327c        com.docker.swarm.node=ubuntu,com.docker.swarm.storage=ssd
 c1d3b0166030        com.docker.swarm.node=debian,com.docker.swarm.cpu=6
 41d50ecd2f57        com.docker.swarm.node=fedora,com.docker.swarm.cpu=3,com.docker.swarm.storage=ssd
 
-.fi
-.RE
+.EE
 
 .SH Display containers with their node label in a table
-.PP
-.RS
-
-.nf
+.EX
 $ docker container ls --format 'table {{.ID}}\\t{{(.Label "com.docker.swarm.node")}}'
 CONTAINER ID        NODE
 a87ecb4f327c        worker-1
@@ -142,67 +119,46 @@ a87ecb4f327c        worker-1
 c1d3b0166030        worker-1
 41d50ecd2f57        worker-2
 
-.fi
-.RE
+.EE
 
-.SH Display containers with \fB\fCremote-volume\fR mounted
-.PP
-.RS
-
-.nf
+.SH Display containers with \fBremote-volume\fR mounted
+.EX
 $ docker container ls --filter volume=remote-volume --format "table {{.ID}}\\t{{.Mounts}}"
 CONTAINER ID        MOUNTS
 9c3527ed70ce        remote-volume
 
-.fi
-.RE
+.EE
 
-.SH Display containers with a volume mounted in \fB\fC/data\fR
-.PP
-.RS
-
-.nf
+.SH Display containers with a volume mounted in \fB/data\fR
+.EX
 $ docker container ls --filter volume=/data --format "table {{.ID}}\\t{{.Mounts}}"
 CONTAINER ID        MOUNTS
 9c3527ed70ce        remote-volume
 
-.fi
-.RE
+.EE
 
 .SH Display containers that have published port of 80:
-.PP
-.RS
-
-.nf
+.EX
 $ docker ps --filter publish=80
 CONTAINER ID        IMAGE               COMMAND             CREATED              STATUS              PORTS                   NAMES
 fc7e477723b7        busybox             "top"               About a minute ago   Up About a minute   0.0.0.0:32768->80/tcp   admiring_roentgen
 
-.fi
-.RE
+.EE
 
-.SH Display containers that have exposed TCP port in the range of \fB\fC8000-8080\fR:
-.PP
-.RS
-
-.nf
+.SH Display containers that have exposed TCP port in the range of \fB8000-8080\fR:
+.EX
 $ docker ps --filter expose=8000-8080/tcp
 CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
 9833437217a5        busybox             "top"               21 seconds ago      Up 19 seconds       8080/tcp            dreamy_mccarthy
 
-.fi
-.RE
+.EE
 
 .SH Display containers in JSON format:
-.PP
-.RS
-
-.nf
+.EX
 $ docker ps --format json
 {"Command":"\\"/docker-entrypoint.…\\"","CreatedAt":"2021-03-10 00:15:05 +0100 CET","ID":"a762a2b37a1d","Image":"nginx","Labels":"maintainer=NGINX Docker Maintainers \\u003cdocker-maint@nginx.com\\u003e","LocalVolumes":"0","Mounts":"","Names":"boring_keldysh","Networks":"bridge","Ports":"80/tcp","RunningFor":"4 seconds ago","Size":"0B","State":"running","Status":"Up 3 seconds"}
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

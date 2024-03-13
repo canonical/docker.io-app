@@ -4,13 +4,13 @@ module github.com/docker/cli
 // There is no 'go.mod' file, as that would imply opting in for all the rules
 // around SemVer, which this repo cannot abide by as it uses CalVer.
 
-go 1.18
+go 1.19
 
 require (
 	github.com/containerd/containerd v1.6.21
 	github.com/creack/pty v1.1.18
 	github.com/docker/distribution v2.8.2+incompatible
-	github.com/docker/docker v24.0.5-0.20230718221249-d4a26c153000+incompatible // v24.0.5-dev
+	github.com/docker/docker v24.0.6+incompatible
 	github.com/docker/docker-credential-helpers v0.7.0
 	github.com/docker/go-connections v0.4.0
 	github.com/docker/go-units v0.5.0
@@ -22,7 +22,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.14
 	github.com/mitchellh/mapstructure v1.3.2
 	github.com/moby/buildkit v0.11.6
-	github.com/moby/patternmatcher v0.5.0
+	github.com/moby/patternmatcher v0.6.0
 	github.com/moby/swarmkit/v2 v2.0.0-20230531205928-01bb7a41396b
 	github.com/moby/sys/sequential v0.5.0
 	github.com/moby/sys/signal v0.7.0
@@ -37,12 +37,12 @@ require (
 	github.com/theupdateframework/notary v0.7.1-0.20210315103452-bf96a202a09a
 	github.com/tonistiigi/go-rosetta v0.0.0-20200727161949-f79598599c5d
 	github.com/xeipuuv/gojsonschema v1.2.0
-	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.8.0
-	golang.org/x/term v0.8.0
-	golang.org/x/text v0.9.0
+	golang.org/x/sync v0.3.0
+	golang.org/x/sys v0.13.0
+	golang.org/x/term v0.13.0
+	golang.org/x/text v0.13.0
 	gopkg.in/yaml.v2 v2.4.0
-	gotest.tools/v3 v3.4.0
+	gotest.tools/v3 v3.5.0
 )
 
 require (
@@ -57,7 +57,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.16.3 // indirect
+	github.com/klauspost/compress v1.17.2 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/miekg/pkcs11 v1.1.1 // indirect
 	github.com/moby/sys/symlink v0.2.0 // indirect
@@ -70,8 +70,8 @@ require (
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	go.etcd.io/etcd/raft/v3 v3.5.6 // indirect
-	golang.org/x/crypto v0.2.0 // indirect
-	golang.org/x/net v0.10.0 // indirect
+	golang.org/x/crypto v0.14.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/genproto v0.0.0-20220706185917-7780775163c4 // indirect
 	google.golang.org/grpc v1.50.1 // indirect

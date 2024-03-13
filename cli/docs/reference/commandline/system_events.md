@@ -9,12 +9,12 @@ Get real time events from the server
 
 ### Options
 
-| Name                                   | Type     | Default | Description                                   |
-|:---------------------------------------|:---------|:--------|:----------------------------------------------|
-| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided    |
-| [`--format`](#format)                  | `string` |         | Format the output using the given Go template |
-| `--since`                              | `string` |         | Show all events created since timestamp       |
-| `--until`                              | `string` |         | Stream events until this timestamp            |
+| Name                                   | Type     | Default | Description                                                                                                                                                                                                                                                        |
+|:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`-f`](#filter), [`--filter`](#filter) | `filter` |         | Filter output based on conditions provided                                                                                                                                                                                                                         |
+| [`--format`](#format)                  | `string` |         | Format output using a custom template:<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
+| `--since`                              | `string` |         | Show all events created since timestamp                                                                                                                                                                                                                            |
+| `--until`                              | `string` |         | Stream events until this timestamp                                                                                                                                                                                                                                 |
 
 
 <!---MARKER_GEN_END-->
@@ -308,7 +308,7 @@ $ docker system events --filter 'type=plugin'
 ### <a name="format"></a> Format the output (--format)
 
 If a format (`--format`) is specified, the given template will be executed
-instead of the default format. Go's [text/template](https://golang.org/pkg/text/template/)
+instead of the default format. Go's [text/template](https://pkg.go.dev/text/template)
 package describes all the details of the format.
 
 ```console

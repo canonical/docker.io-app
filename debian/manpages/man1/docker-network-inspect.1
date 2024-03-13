@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -13,33 +13,26 @@ docker-network-inspect - Display detailed information on one or more networks
 
 .SH DESCRIPTION
 .PP
-Returns information about one or more networks. By default, this command renders all results in a JSON object. For example, if you connect two containers to the default \fB\fCbridge\fR network:
+Returns information about one or more networks. By default, this command renders all results in a JSON object. For example, if you connect two containers to the default \fBbridge\fR network:
 
-.PP
-.RS
-
-.nf
+.EX
 $ sudo docker run -itd --name=container1 busybox
 f2870c98fd504370fb86e59f32cd0753b1ac9b69b7d80566ffc7192a82b3ed27
 
 $ sudo docker run -itd --name=container2 busybox
 bda12f8922785d1f160be70736f26c1e331ab8aaf8ed8d56728508f2e2fd4727
 
-.fi
-.RE
+.EE
 
 .PP
-The \fB\fCnetwork inspect\fR command shows the containers, by id, in its
+The \fBnetwork inspect\fR command shows the containers, by id, in its
 results. You can specify an alternate format to execute a given
 template for each result. Go's
 text/template
-\[la]http://golang.org/pkg/text/template/\[ra] package
+\[la]https://pkg.go.dev/text/template\[ra] package
 describes all the details of the format.
 
-.PP
-.RS
-
-.nf
+.EX
 $ sudo docker network inspect bridge
 [
     {
@@ -85,16 +78,12 @@ $ sudo docker network inspect bridge
     }
 ]
 
-.fi
-.RE
+.EE
 
 .PP
 Returns the information about the user-defined network:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker network create simple-network
 69568e6336d8c96bbf57869030919f7c69524f71183b44d80948bd3927c87f6a
 $ docker network inspect simple-network
@@ -118,22 +107,18 @@ $ docker network inspect simple-network
     }
 ]
 
-.fi
-.RE
+.EE
 
 .PP
-\fB\fCdocker network inspect --verbose\fR for swarm mode overlay networks shows service-specific
+\fBdocker network inspect --verbose\fR for swarm mode overlay networks shows service-specific
 details such as the service's VIP and port mappings. It also shows IPs of service tasks,
 and the IPs of the nodes where the tasks are running.
 
 .PP
-Following is an example output for an overlay network \fB\fCov1\fR that has one service \fB\fCs1\fR
-attached to. service \fB\fCs1\fR in this case has three replicas.
+Following is an example output for an overlay network \fBov1\fR that has one service \fBs1\fR
+attached to. service \fBs1\fR in this case has three replicas.
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker network inspect --verbose ov1
 [
     {
@@ -219,8 +204,7 @@ $ docker network inspect --verbose ov1
     }
 ]
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

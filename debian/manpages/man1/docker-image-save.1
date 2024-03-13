@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -25,10 +25,7 @@ Stream to a file instead of STDOUT by using \fB-o\fP\&.
 Save all fedora repository images to a fedora-all.tar and save the latest
 fedora image to a fedora-latest.tar:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker image save fedora > fedora-all.tar
 $ docker image save --output=fedora-latest.tar fedora:latest
 $ ls -sh fedora-all.tar
@@ -36,8 +33,7 @@ $ ls -sh fedora-all.tar
 $ ls -sh fedora-latest.tar
 367M fedora-latest.tar
 
-.fi
-.RE
+.EE
 
 
 .SH See also

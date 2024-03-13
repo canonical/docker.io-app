@@ -56,7 +56,7 @@ done
 
 # create final tarball
 pushd "${work_dir}"
-tar cJf "${filename}" "."
+tar czf "${filename}" "."
 
 # notify the developer about update of the manpages
 if [ $? -eq 0 ]; then

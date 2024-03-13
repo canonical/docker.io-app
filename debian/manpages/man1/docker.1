@@ -44,12 +44,12 @@ To see the man page for a command run \fBman docker \fP\&.
 unix://[/path/to/socket] to use.
   The socket(s) to bind to in daemon mode specified using one or more
   tcp://host:port/path, unix:///path/to/socket, fd://* or fd://socketfd.
-  If the tcp port is not specified, then it will default to either \fB\fC2375\fR when
-  \fB\fC--tls\fR is off, or \fB\fC2376\fR when \fB\fC--tls\fR is on, or \fB\fC--tlsverify\fR is specified.
+  If the tcp port is not specified, then it will default to either \fB2375\fR when
+  \fB--tls\fR is off, or \fB2376\fR when \fB--tls\fR is on, or \fB--tlsverify\fR is specified.
 
 .PP
 \fB-l\fP, \fB--log-level\fP="\fIdebug\fP|\fIinfo\fP|\fIwarn\fP|\fIerror\fP|\fIfatal\fP"
-  Set the logging level. Default is \fB\fCinfo\fR\&.
+  Set the logging level. Default is \fBinfo\fR\&.
 
 .PP
 \fB--tls\fP=\fItrue\fP|\fIfalse\fP
@@ -87,14 +87,10 @@ Use "docker help" or "docker --help" to get an overview of available commands.
 For specific client examples please see the man page for the specific Docker
 command. For example:
 
-.PP
-.RS
-
-.nf
+.EX
 man docker-run
 
-.fi
-.RE
+.EE
 
 
 .SH HISTORY

@@ -15,7 +15,7 @@ image. To build an image, create a file called \fBDockerfile\fP\&.
 
 .PP
 The \fBDockerfile\fP describes the steps taken to assemble the image. When the
-\fBDockerfile\fP has been created, call the \fB\fCdocker build\fR command, using the
+\fBDockerfile\fP has been created, call the \fBdocker build\fR command, using the
 path of directory that contains \fBDockerfile\fP as the argument.
 
 
@@ -45,17 +45,13 @@ docker build .
   The path to the source repository defines where to find the context of the
   build. The build is run by the Docker daemon, not the CLI. The whole
   context must be transferred to the daemon. The Docker CLI reports
-  \fB\fC"Sending build context to Docker daemon"\fR when the context is sent to the
+  \fB"Sending build context to Docker daemon"\fR when the context is sent to the
   daemon.
 
-.PP
-.RS
-
-.nf
+.EX
   docker build -t repository/tag .
 
-.fi
-.RE
+.EE
 
 .PP
 -- specifies a repository and tag at which to save the new image if the build
@@ -70,13 +66,13 @@ Docker re-uses intermediate images whenever possible. This significantly
 
 .SH FORMAT
 .PP
-\fB\fCFROM image\fR
+\fBFROM image\fR
 
 .PP
-\fB\fCFROM image:tag\fR
+\fBFROM image:tag\fR
 
 .PP
-\fB\fCFROM image@digest\fR
+\fBFROM image@digest\fR
 
 .PP
 -- The \fBFROM\fP instruction sets the base image for subsequent instructions. A
@@ -94,11 +90,11 @@ Docker re-uses intermediate images whenever possible. This significantly
 
 .PP
 -- If no tag is given to the \fBFROM\fP instruction, Docker applies the
-  \fB\fClatest\fR tag. If the used tag does not exist, an error is returned.
+  \fBlatest\fR tag. If the used tag does not exist, an error is returned.
 
 .PP
 -- If no digest is given to the \fBFROM\fP instruction, Docker applies the
-  \fB\fClatest\fR tag. If the used tag does not exist, an error is returned.
+  \fBlatest\fR tag. If the used tag does not exist, an error is returned.
 
 .PP
 \fBMAINTAINER\fP
@@ -109,18 +105,14 @@ Docker re-uses intermediate images whenever possible. This significantly
 \fBRUN\fP
   -- \fBRUN\fP has two forms:
 
-.PP
-.RS
-
-.nf
+.EX
   # the command is run in a shell - /bin/sh -c
   RUN <command>
 
   # Executable form
   RUN ["executable", "param1", "param2"]
 
-.fi
-.RE
+.EE
 
 .PP
 -- The \fBRUN\fP instruction executes any commands in a new layer on top of the current
@@ -132,7 +124,7 @@ Docker re-uses intermediate images whenever possible. This significantly
   concepts of Docker where commits are cheap and containers can be created from
   any point in the history of an image. This is similar to source control.  The
   exec form makes it possible to avoid shell string munging. The exec form makes
-  it possible to \fBRUN\fP commands using a base image that does not contain \fB\fC/bin/sh\fR\&.
+  it possible to \fBRUN\fP commands using a base image that does not contain \fB/bin/sh\fR\&.
 
 .PP
 Note that the exec form is parsed as a JSON array, which means that you must
@@ -142,10 +134,7 @@ Note that the exec form is parsed as a JSON array, which means that you must
 \fBCMD\fP
   -- \fBCMD\fP has three forms:
 
-.PP
-.RS
-
-.nf
+.EX
   # Executable form
   CMD ["executable", "param1", "param2"]`
 
@@ -155,8 +144,7 @@ Note that the exec form is parsed as a JSON array, which means that you must
   # the command is run in a shell - /bin/sh -c
   CMD command param1 param2
 
-.fi
-.RE
+.EE
 
 .PP
 -- There should be only one \fBCMD\fP in a Dockerfile. If more than one \fBCMD\fP is listed, only
@@ -166,21 +154,17 @@ Note that the exec form is parsed as a JSON array, which means that you must
   they omit the executable, an \fBENTRYPOINT\fP must be specified.
   When used in the shell or exec formats, the \fBCMD\fP instruction sets the command to
   be executed when running the image.
-  If you use the shell form of the \fBCMD\fP, the \fB\fC<command>\fR executes in \fB\fC/bin/sh -c\fR:
+  If you use the shell form of the \fBCMD\fP, the \fB<command>\fR executes in \fB/bin/sh -c\fR:
 
 .PP
 Note that the exec form is parsed as a JSON array, which means that you must
   use double-quotes (") around words not single-quotes (').
 
-.PP
-.RS
-
-.nf
+.EX
   FROM ubuntu
   CMD echo "This is a test." | wc -
 
-.fi
-.RE
+.EE
 
 .PP
 -- If you run \fBcommand\fP without a shell, then you must express the command as a
@@ -188,20 +172,16 @@ Note that the exec form is parsed as a JSON array, which means that you must
   preferred form of \fBCMD\fP\&. All additional parameters must be individually expressed
   as strings in the array:
 
-.PP
-.RS
-
-.nf
+.EX
   FROM ubuntu
   CMD ["/usr/bin/wc","--help"]
 
-.fi
-.RE
+.EE
 
 .PP
 -- To make the container run the same executable every time, use \fBENTRYPOINT\fP in
   combination with \fBCMD\fP\&.
-  If the user specifies arguments to \fB\fCdocker run\fR, the specified commands
+  If the user specifies arguments to \fBdocker run\fR, the specified commands
   override the default in \fBCMD\fP\&.
   Do not confuse \fBRUN\fP with \fBCMD\fP\&. \fBRUN\fP runs a command and commits the result.
   \fBCMD\fP executes nothing at build time, but specifies the intended command for
@@ -209,18 +189,14 @@ Note that the exec form is parsed as a JSON array, which means that you must
 
 .PP
 \fBLABEL\fP
-  -- \fB\fCLABEL <key>=<value> [<key>=<value> ...]\fRor
+  -- \fBLABEL <key>=<value> [<key>=<value> ...]\fRor
 
-.PP
-.RS
-
-.nf
+.EX
   LABEL <key>[ <value>]
   LABEL <key>[ <value>]
   ...
 
-.fi
-.RE
+.EE
 
 .PP
 The \fBLABEL\fP instruction adds metadata to an image. A \fBLABEL\fP is a
@@ -228,36 +204,32 @@ The \fBLABEL\fP instruction adds metadata to an image. A \fBLABEL\fP is a
   string. To include spaces within a \fBLABEL\fP value, use quotes and
   backslashes as you would in command-line parsing.
 
-.PP
-.RS
-
-.nf
+.EX
   LABEL com.example.vendor="ACME Incorporated"
   LABEL com.example.vendor "ACME Incorporated"
   LABEL com.example.vendor.is-beta ""
   LABEL com.example.vendor.is-beta=
   LABEL com.example.vendor.is-beta=""
 
-.fi
-.RE
+.EE
 
 .PP
 An image can have more than one label. To specify multiple labels, separate
   each key-value pair by a space.
 
 .PP
-Labels are additive including \fB\fCLABEL\fRs in \fB\fCFROM\fR images. As the system
-  encounters and then applies a new label, new \fB\fCkey\fRs override any previous
+Labels are additive including \fBLABEL\fRs in \fBFROM\fR images. As the system
+  encounters and then applies a new label, new \fBkey\fRs override any previous
   labels with identical keys.
 
 .PP
-To display an image's labels, use the \fB\fCdocker inspect\fR command.
+To display an image's labels, use the \fBdocker inspect\fR command.
 
 .PP
 \fBSTOPSIGNAL\fP
 
 .PP
--- \fB\fCSTOPSIGNAL <signal>\fR
+-- \fBSTOPSIGNAL <signal>\fR
   The \fBSTOPSIGNAL\fP instruction sets the system call signal that will be sent
   to the container to exit. This signal can be a signal name in the format
   \fBSIG\fP, for instance \fBSIGKILL\fP, or an unsigned number that matches a
@@ -270,7 +242,7 @@ The image's default stopsignal can be overridden per container, using the
 
 .PP
 \fBEXPOSE\fP
-  -- \fB\fCEXPOSE <port> [<port>...]\fR
+  -- \fBEXPOSE <port> [<port>...]\fR
   The \fBEXPOSE\fP instruction informs Docker that the container listens on the
   specified network ports at runtime. Docker uses this information to
   interconnect containers using links and to set up port redirection on the host
@@ -278,45 +250,41 @@ The image's default stopsignal can be overridden per container, using the
 
 .PP
 \fBENV\fP
-  -- \fB\fCENV <key> <value>\fR
+  -- \fBENV <key> <value>\fR
   The \fBENV\fP instruction sets the environment variable  to
-  the value \fB\fC<value>\fR\&. This value is passed to all future
+  the value \fB<value>\fR\&. This value is passed to all future
   \fBRUN\fP, \fBENTRYPOINT\fP, and \fBCMD\fP instructions. This is
-  functionally equivalent to prefixing the command with \fB\fC<key>=<value>\fR\&.  The
+  functionally equivalent to prefixing the command with \fB<key>=<value>\fR\&.  The
   environment variables that are set with \fBENV\fP persist when a container is run
-  from the resulting image. Use \fB\fCdocker inspect\fR to inspect these values, and
-  change them using \fB\fCdocker run --env <key>=<value>\fR\&.
+  from the resulting image. Use \fBdocker inspect\fR to inspect these values, and
+  change them using \fBdocker run --env <key>=<value>\fR\&.
 
 .PP
-Note that setting "\fB\fCENV DEBIAN_FRONTEND=noninteractive\fR" may cause
+Note that setting "\fBENV DEBIAN_FRONTEND=noninteractive\fR" may cause
   unintended consequences, because it will persist when the container is run
-  interactively, as with the following command: \fB\fCdocker run -t -i image bash\fR
+  interactively, as with the following command: \fBdocker run -t -i image bash\fR
 
 .PP
 \fBADD\fP
   -- \fBADD\fP has two forms:
 
-.PP
-.RS
-
-.nf
+.EX
   ADD <src> <dest>
 
   # Required for paths with whitespace
   ADD ["<src>",... "<dest>"]
 
-.fi
-.RE
+.EE
 
 .PP
 The \fBADD\fP instruction copies new files, directories
-  or remote file URLs to the filesystem of the container at path \fB\fC<dest>\fR\&.
-  Multiple \fB\fC<src>\fR resources may be specified but if they are files or directories
+  or remote file URLs to the filesystem of the container at path \fB<dest>\fR\&.
+  Multiple \fB<src>\fR resources may be specified but if they are files or directories
   then they must be relative to the source directory that is being built
-  (the context of the build). The \fB\fC<dest>\fR is the absolute path, or path relative
+  (the context of the build). The \fB<dest>\fR is the absolute path, or path relative
   to \fBWORKDIR\fP, into which the source is copied inside the target container.
-  If the \fB\fC<src>\fR argument is a local file in a recognized compression format
-  (tar, gzip, bzip2, etc) then it is unpacked at the specified \fB\fC<dest>\fR in the
+  If the \fB<src>\fR argument is a local file in a recognized compression format
+  (tar, gzip, bzip2, etc) then it is unpacked at the specified \fB<dest>\fR in the
   container's filesystem.  Note that only local compressed files will be unpacked,
   i.e., the URL download and archive unpacking features cannot be used together.
   All new directories are created with mode 0755 and with the uid and gid of \fB0\fP\&.
@@ -325,23 +293,19 @@ The \fBADD\fP instruction copies new files, directories
 \fBCOPY\fP
   -- \fBCOPY\fP has two forms:
 
-.PP
-.RS
-
-.nf
+.EX
   COPY <src> <dest>
 
   # Required for paths with whitespace
   COPY ["<src>",... "<dest>"]
 
-.fi
-.RE
+.EE
 
 .PP
-The \fBCOPY\fP instruction copies new files from \fB\fC<src>\fR and
-  adds them to the filesystem of the container at path \&. The \fB\fC<src>\fR must be
+The \fBCOPY\fP instruction copies new files from \fB<src>\fR and
+  adds them to the filesystem of the container at path \&. The \fB<src>\fR must be
   the path to a file or directory relative to the source directory that is
-  being built (the context of the build) or a remote file URL. The \fB\fC<dest>\fR is an
+  being built (the context of the build) or a remote file URL. The \fB<dest>\fR is an
   absolute path, or a path relative to \fBWORKDIR\fP, into which the source will
   be copied inside the target container. If you \fBCOPY\fP an archive file it will
   land in the container exactly as it appears in the build context without any
@@ -352,18 +316,14 @@ The \fBCOPY\fP instruction copies new files from \fB\fC<src>\fR and
 \fBENTRYPOINT\fP
   -- \fBENTRYPOINT\fP has two forms:
 
-.PP
-.RS
-
-.nf
+.EX
   # executable form
   ENTRYPOINT ["executable", "param1", "param2"]`
 
   # run command in a shell - /bin/sh -c
   ENTRYPOINT command param1 param2
 
-.fi
-.RE
+.EE
 
 .PP
 -- An \fBENTRYPOINT\fP helps you configure a
@@ -371,50 +331,42 @@ The \fBCOPY\fP instruction copies new files from \fB\fC<src>\fR and
   the whole container runs as if it was only that executable.  The \fBENTRYPOINT\fP
   instruction adds an entry command that is not overwritten when arguments are
   passed to docker run. This is different from the behavior of \fBCMD\fP\&. This allows
-  arguments to be passed to the entrypoint, for instance \fB\fCdocker run <image> -d\fR
+  arguments to be passed to the entrypoint, for instance \fBdocker run <image> -d\fR
   passes the -d argument to the \fBENTRYPOINT\fP\&.  Specify parameters either in the
   \fBENTRYPOINT\fP JSON array (as in the preferred exec form above), or by using a \fBCMD\fP
   statement.  Parameters in the \fBENTRYPOINT\fP are not overwritten by the docker run
   arguments.  Parameters specified via \fBCMD\fP are overwritten by docker run
   arguments.  Specify a plain string for the \fBENTRYPOINT\fP, and it will execute in
-  \fB\fC/bin/sh -c\fR, like a \fBCMD\fP instruction:
+  \fB/bin/sh -c\fR, like a \fBCMD\fP instruction:
 
-.PP
-.RS
-
-.nf
+.EX
   FROM ubuntu
   ENTRYPOINT wc -l -
 
-.fi
-.RE
+.EE
 
 .PP
 This means that the Dockerfile's image always takes stdin as input (that's
   what "-" means), and prints the number of lines (that's what "-l" means). To
   make this optional but default, use a \fBCMD\fP:
 
-.PP
-.RS
-
-.nf
+.EX
   FROM ubuntu
   CMD ["-l", "-"]
   ENTRYPOINT ["/usr/bin/wc"]
 
-.fi
-.RE
+.EE
 
 .PP
 \fBVOLUME\fP
-  -- \fB\fCVOLUME ["/data"]\fR
+  -- \fBVOLUME ["/data"]\fR
   The \fBVOLUME\fP instruction creates a mount point with the specified name and marks
   it as holding externally-mounted volumes from the native host or from other
   containers.
 
 .PP
 \fBUSER\fP
-  -- \fB\fCUSER daemon\fR
+  -- \fBUSER daemon\fR
   Sets the username or UID used for running subsequent commands.
 
 .PP
@@ -429,23 +381,19 @@ Until the \fBUSER\fP instruction is set, instructions will be run as root. The U
 
 .PP
 \fBWORKDIR\fP
-  -- \fB\fCWORKDIR /path/to/workdir\fR
+  -- \fBWORKDIR /path/to/workdir\fR
   The \fBWORKDIR\fP instruction sets the working directory for the \fBRUN\fP, \fBCMD\fP,
   \fBENTRYPOINT\fP, \fBCOPY\fP and \fBADD\fP Dockerfile commands that follow it. It can
   be used multiple times in a single Dockerfile. Relative paths are defined
   relative to the path of the previous \fBWORKDIR\fP instruction. For example:
 
-.PP
-.RS
-
-.nf
+.EX
   WORKDIR /a
   WORKDIR b
   WORKDIR c
   RUN pwd
 
-.fi
-.RE
+.EE
 
 .PP
 In the above example, the output of the \fBpwd\fP command is \fBa/b/c\fP\&.
@@ -455,90 +403,70 @@ In the above example, the output of the \fBpwd\fP command is \fBa/b/c\fP\&.
    -- ARG [=]
 
 .PP
-The \fB\fCARG\fR instruction defines a variable that users can pass at build-time to
-  the builder with the \fB\fCdocker build\fR command using the \fB\fC--build-arg
+The \fBARG\fR instruction defines a variable that users can pass at build-time to
+  the builder with the \fBdocker build\fR command using the \fB--build-arg
   <varname>=<value>\fR flag. If a user specifies a build argument that was not
   defined in the Dockerfile, the build outputs a warning.
 
-.PP
-.RS
-
-.nf
+.EX
   [Warning] One or more build-args [foo] were not consumed
 
-.fi
-.RE
+.EE
 
 .PP
-The Dockerfile author can define a single variable by specifying \fB\fCARG\fR once or many
-  variables by specifying \fB\fCARG\fR more than once. For example, a valid Dockerfile:
+The Dockerfile author can define a single variable by specifying \fBARG\fR once or many
+  variables by specifying \fBARG\fR more than once. For example, a valid Dockerfile:
 
-.PP
-.RS
-
-.nf
+.EX
   FROM busybox
   ARG user1
   ARG buildno
   ...
 
-.fi
-.RE
+.EE
 
 .PP
-A Dockerfile author may optionally specify a default value for an \fB\fCARG\fR instruction:
+A Dockerfile author may optionally specify a default value for an \fBARG\fR instruction:
 
-.PP
-.RS
-
-.nf
+.EX
   FROM busybox
   ARG user1=someuser
   ARG buildno=1
   ...
 
-.fi
-.RE
+.EE
 
 .PP
-If an \fB\fCARG\fR value has a default and if there is no value passed at build-time, the
+If an \fBARG\fR value has a default and if there is no value passed at build-time, the
   builder uses the default.
 
 .PP
-An \fB\fCARG\fR variable definition comes into effect from the line on which it is
-  defined in the \fB\fCDockerfile\fR not from the argument's use on the command-line or
+An \fBARG\fR variable definition comes into effect from the line on which it is
+  defined in the \fBDockerfile\fR not from the argument's use on the command-line or
   elsewhere.  For example, consider this Dockerfile:
 
-.PP
-.RS
-
-.nf
+.EX
   1 FROM busybox
   2 USER ${user:-some_user}
   3 ARG user
   4 USER $user
   ...
 
-.fi
-.RE
+.EE
 
 .PP
 A user builds this file by calling:
 
-.PP
-.RS
-
-.nf
+.EX
   $ docker build --build-arg user=what_user Dockerfile
 
-.fi
-.RE
+.EE
 
 .PP
-The \fB\fCUSER\fR at line 2 evaluates to \fB\fCsome_user\fR as the \fB\fCuser\fR variable is defined on the
-  subsequent line 3. The \fB\fCUSER\fR at line 4 evaluates to \fB\fCwhat_user\fR as \fB\fCuser\fR is
-  defined and the \fB\fCwhat_user\fR value was passed on the command line. Prior to its definition by an
-  \fB\fCARG\fR instruction, any use of a variable results in an empty string.
+The \fBUSER\fR at line 2 evaluates to \fBsome_user\fR as the \fBuser\fR variable is defined on the
+  subsequent line 3. The \fBUSER\fR at line 4 evaluates to \fBwhat_user\fR as \fBuser\fR is
+  defined and the \fBwhat_user\fR value was passed on the command line. Prior to its definition by an
+  \fBARG\fR instruction, any use of a variable results in an empty string.
 
 .PP
 .RS
@@ -546,130 +474,110 @@ The \fB\fCUSER\fR at line 2 evaluates to \fB\fCsome_user\fR as the \fB\fCuser\fR
 .PP
 \fBWarning:\fP It is not recommended to use build-time variables for
  passing secrets like github keys, user credentials etc. Build-time variable
- values are visible to any user of the image with the \fB\fCdocker history\fR command.
+ values are visible to any user of the image with the \fBdocker history\fR command.
 
 .RE
 
 .PP
-You can use an \fB\fCARG\fR or an \fB\fCENV\fR instruction to specify variables that are
-  available to the \fB\fCRUN\fR instruction. Environment variables defined using the
-  \fB\fCENV\fR instruction always override an \fB\fCARG\fR instruction of the same name. Consider
-  this Dockerfile with an \fB\fCENV\fR and \fB\fCARG\fR instruction.
+You can use an \fBARG\fR or an \fBENV\fR instruction to specify variables that are
+  available to the \fBRUN\fR instruction. Environment variables defined using the
+  \fBENV\fR instruction always override an \fBARG\fR instruction of the same name. Consider
+  this Dockerfile with an \fBENV\fR and \fBARG\fR instruction.
 
-.PP
-.RS
-
-.nf
+.EX
   1 FROM ubuntu
   2 ARG CONT_IMG_VER
   3 ENV CONT_IMG_VER=v1.0.0
   4 RUN echo $CONT_IMG_VER
 
-.fi
-.RE
+.EE
 
 .PP
 Then, assume this image is built with this command:
 
-.PP
-.RS
-
-.nf
+.EX
   $ docker build --build-arg CONT_IMG_VER=v2.0.1 Dockerfile
 
-.fi
-.RE
+.EE
 
 .PP
-In this case, the \fB\fCRUN\fR instruction uses \fB\fCv1.0.0\fR instead of the \fB\fCARG\fR setting
-  passed by the user:\fB\fCv2.0.1\fR This behavior is similar to a shell
+In this case, the \fBRUN\fR instruction uses \fBv1.0.0\fR instead of the \fBARG\fR setting
+  passed by the user:\fBv2.0.1\fR This behavior is similar to a shell
   script where a locally scoped variable overrides the variables passed as
   arguments or inherited from environment, from its point of definition.
 
 .PP
-Using the example above but a different \fB\fCENV\fR specification you can create more
-  useful interactions between \fB\fCARG\fR and \fB\fCENV\fR instructions:
+Using the example above but a different \fBENV\fR specification you can create more
+  useful interactions between \fBARG\fR and \fBENV\fR instructions:
 
-.PP
-.RS
-
-.nf
+.EX
   1 FROM ubuntu
   2 ARG CONT_IMG_VER
   3 ENV CONT_IMG_VER=${CONT_IMG_VER:-v1.0.0}
   4 RUN echo $CONT_IMG_VER
 
-.fi
-.RE
+.EE
 
 .PP
-Unlike an \fB\fCARG\fR instruction, \fB\fCENV\fR values are always persisted in the built
+Unlike an \fBARG\fR instruction, \fBENV\fR values are always persisted in the built
   image. Consider a docker build without the --build-arg flag:
 
-.PP
-.RS
-
-.nf
+.EX
   $ docker build Dockerfile
 
-.fi
-.RE
+.EE
 
 .PP
-Using this Dockerfile example, \fB\fCCONT_IMG_VER\fR is still persisted in the image but
-  its value would be \fB\fCv1.0.0\fR as it is the default set in line 3 by the \fB\fCENV\fR instruction.
+Using this Dockerfile example, \fBCONT_IMG_VER\fR is still persisted in the image but
+  its value would be \fBv1.0.0\fR as it is the default set in line 3 by the \fBENV\fR instruction.
 
 .PP
 The variable expansion technique in this example allows you to pass arguments
   from the command line and persist them in the final image by leveraging the
-  \fB\fCENV\fR instruction. Variable expansion is only supported for a limited set of
+  \fBENV\fR instruction. Variable expansion is only supported for a limited set of
   Dockerfile instructions.
-\[la]#environment-replacement\[ra]
+\[la]#environment\-replacement\[ra]
 
 .PP
-Docker has a set of predefined \fB\fCARG\fR variables that you can use without a
-  corresponding \fB\fCARG\fR instruction in the Dockerfile.
+Docker has a set of predefined \fBARG\fR variables that you can use without a
+  corresponding \fBARG\fR instruction in the Dockerfile.
 
 .RS
 .IP \(bu 2
-\fB\fCHTTP_PROXY\fR
+\fBHTTP_PROXY\fR
 .IP \(bu 2
-\fB\fChttp_proxy\fR
+\fBhttp_proxy\fR
 .IP \(bu 2
-\fB\fCHTTPS_PROXY\fR
+\fBHTTPS_PROXY\fR
 .IP \(bu 2
-\fB\fChttps_proxy\fR
+\fBhttps_proxy\fR
 .IP \(bu 2
-\fB\fCFTP_PROXY\fR
+\fBFTP_PROXY\fR
 .IP \(bu 2
-\fB\fCftp_proxy\fR
+\fBftp_proxy\fR
 .IP \(bu 2
-\fB\fCNO_PROXY\fR
+\fBNO_PROXY\fR
 .IP \(bu 2
-\fB\fCno_proxy\fR
+\fBno_proxy\fR
 .IP \(bu 2
-\fB\fCALL_PROXY\fR
+\fBALL_PROXY\fR
 .IP \(bu 2
-\fB\fCall_proxy\fR
+\fBall_proxy\fR
 
 .RE
 
 .PP
-To use these, pass them on the command line using \fB\fC--build-arg\fR flag, for
+To use these, pass them on the command line using \fB--build-arg\fR flag, for
   example:
 
-.PP
-.RS
-
-.nf
+.EX
   $ docker build --build-arg HTTPS_PROXY=https://my-proxy.example.com .
 
-.fi
-.RE
+.EE
 
 .PP
 \fBONBUILD\fP
-  -- \fB\fCONBUILD [INSTRUCTION]\fR
+  -- \fBONBUILD [INSTRUCTION]\fR
   The \fBONBUILD\fP instruction adds a trigger instruction to an image. The
   trigger is executed at a later time, when the image is used as the base for
   another build. Docker executes the trigger in the context of the downstream

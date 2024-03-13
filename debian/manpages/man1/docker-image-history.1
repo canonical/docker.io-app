@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -17,27 +17,20 @@ Show the history of when and how an image was created.
 
 
 .SH EXAMPLES
-.PP
-.RS
-
-.nf
+.EX
 $ docker history fedora
 IMAGE          CREATED          CREATED BY                                      SIZE                COMMENT
 105182bb5e8b   5 days ago       /bin/sh -c #(nop) ADD file:71356d2ad59aa3119d   372.7 MB
 73bd853d2ea5   13 days ago      /bin/sh -c #(nop) MAINTAINER Lokesh Mandvekar   0 B
 511136ea3c5a   10 months ago                                                    0 B                 Imported from -
 
-.fi
-.RE
+.EE
 
 .SH Display comments in the image history
 .PP
-The \fB\fCdocker commit\fR command has a \fB-m\fP flag for adding comments to the image. These comments will be displayed in the image history.
+The \fBdocker commit\fR command has a \fB-m\fP flag for adding comments to the image. These comments will be displayed in the image history.
 
-.PP
-.RS
-
-.nf
+.EX
 $ sudo docker history docker:scm
 IMAGE               CREATED             CREATED BY                                      SIZE                COMMENT
 2ac9d1098bf1        3 months ago        /bin/bash                                       241.4 MB            Added Apache to Fedora base image
@@ -45,12 +38,11 @@ IMAGE               CREATED             CREATED BY                              
 c69cab00d6ef        5 months ago        /bin/sh -c #(nop) MAINTAINER Lokesh Mandvekar   0 B                 
 511136ea3c5a        19 months ago                                                       0 B                 Imported from -
 
-.fi
-.RE
+.EE
 
 .SS Format the output
 .PP
-The formatting option (\fB\fC--format\fR) will pretty-prints history output
+The formatting option (\fB--format\fR) will pretty-prints history output
 using a Go template.
 
 .PP
@@ -60,34 +52,31 @@ Valid placeholders for the Go template are listed below:
 allbox;
 l l 
 l l .
-\fB\fCPlaceholder\fR	\fB\fCDescription\fR
-\fB\fC\&.ID\fR	Image ID
-\fB\fC\&.CreatedSince\fR	T{
-Elapsed time since the image was created if \fB\fC--human=true\fR, otherwise timestamp of when image was created
+\fBPlaceholder\fP	\fBDescription\fP
+\fB\&.ID\fR	Image ID
+\fB\&.CreatedSince\fR	T{
+Elapsed time since the image was created if \fB--human=true\fR, otherwise timestamp of when image was created
 T}
-\fB\fC\&.CreatedAt\fR	T{
+\fB\&.CreatedAt\fR	T{
 Timestamp of when image was created
 T}
-\fB\fC\&.CreatedBy\fR	T{
+\fB\&.CreatedBy\fR	T{
 Command that was used to create the image
 T}
-\fB\fC\&.Size\fR	Image disk size
-\fB\fC\&.Comment\fR	Comment for image
+\fB\&.Size\fR	Image disk size
+\fB\&.Comment\fR	Comment for image
 .TE
 
 .PP
-When using the \fB\fC--format\fR option, the \fB\fChistory\fR command will either
+When using the \fB--format\fR option, the \fBhistory\fR command will either
 output the data exactly as the template declares or, when using the
-\fB\fCtable\fR directive, will include column headers as well.
+\fBtable\fR directive, will include column headers as well.
 
 .PP
 The following example uses a template without headers and outputs the
-\fB\fCID\fR and \fB\fCCreatedSince\fR entries separated by a colon for all images:
+\fBID\fR and \fBCreatedSince\fR entries separated by a colon for all images:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker images --format "{{.ID}}: {{.CreatedSince}} ago"
 
 cc1b61406712: 2 weeks ago
@@ -99,8 +88,7 @@ cc1b61406712: 2 weeks ago
 <missing>: 3 weeks ago
 <missing>: 3 weeks ago
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

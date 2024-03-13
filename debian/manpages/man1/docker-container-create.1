@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -24,17 +24,17 @@ The initial status of the container created with \fBdocker create\fP is 'created
 
 .SS OPTIONS
 .PP
-The \fB\fCCONTAINER-DIR\fR must be an absolute path such as \fB\fC/src/docs\fR\&. The \fB\fCHOST-DIR\fR
-can be an absolute path or a \fB\fCname\fR value. A \fB\fCname\fR value must start with an
-alphanumeric character, followed by \fB\fCa-z0-9\fR, \fB\fC_\fR (underscore), \fB\fC\&.\fR (period) or
-\fB\fC-\fR (hyphen). An absolute path starts with a \fB\fC/\fR (forward slash).
+The \fBCONTAINER-DIR\fR must be an absolute path such as \fB/src/docs\fR\&. The \fBHOST-DIR\fR
+can be an absolute path or a \fBname\fR value. A \fBname\fR value must start with an
+alphanumeric character, followed by \fBa-z0-9\fR, \fB_\fR (underscore), \fB\&.\fR (period) or
+\fB-\fR (hyphen). An absolute path starts with a \fB/\fR (forward slash).
 
 .PP
-If you supply a \fB\fCHOST-DIR\fR that is an absolute path,  Docker bind-mounts to the
-path you specify. If you supply a \fB\fCname\fR, Docker creates a named volume by that
-\fB\fCname\fR\&. For example, you can specify either \fB\fC/foo\fR or \fB\fCfoo\fR for a \fB\fCHOST-DIR\fR
-value. If you supply the \fB\fC/foo\fR value, Docker creates a bind mount. If you
-supply the \fB\fCfoo\fR specification, Docker creates a named volume.
+If you supply a \fBHOST-DIR\fR that is an absolute path,  Docker bind-mounts to the
+path you specify. If you supply a \fBname\fR, Docker creates a named volume by that
+\fBname\fR\&. For example, you can specify either \fB/foo\fR or \fBfoo\fR for a \fBHOST-DIR\fR
+value. If you supply the \fB/foo\fR value, Docker creates a bind mount. If you
+supply the \fBfoo\fR specification, Docker creates a named volume.
 
 .PP
 You can specify multiple  \fB-v\fP options to mount one or more mounts to a
@@ -43,12 +43,12 @@ container. To use these same mounts in other containers, specify the
 
 .PP
 You can supply additional options for each bind mount following an additional
-colon.  A \fB\fC:ro\fR or \fB\fC:rw\fR suffix mounts a volume in read-only or read-write
+colon.  A \fB:ro\fR or \fB:rw\fR suffix mounts a volume in read-only or read-write
 mode, respectively. By default, volumes are mounted in read-write mode.
 .br
 You can also specify the consistency requirement for the mount, either
-\fB\fC:consistent\fR (the default), \fB\fC:cached\fR, or \fB\fC:delegated\fR\&.  Multiple options are
-separated by commas, e.g. \fB\fC:ro,cached\fR\&.
+\fB:consistent\fR (the default), \fB:cached\fR, or \fB:delegated\fR\&.  Multiple options are
+separated by commas, e.g. \fB:ro,cached\fR\&.
 
 .PP
 Labeling systems like SELinux require that proper labels are placed on volume
@@ -58,25 +58,25 @@ default, Docker does not change the labels set by the OS.
 
 .PP
 To change a label in the container context, you can add either of two suffixes
-\fB\fC:z\fR or \fB\fC:Z\fR to the volume mount. These suffixes tell Docker to relabel file
-objects on the shared volumes. The \fB\fCz\fR option tells Docker that two containers
+\fB:z\fR or \fB:Z\fR to the volume mount. These suffixes tell Docker to relabel file
+objects on the shared volumes. The \fBz\fR option tells Docker that two containers
 share the volume content. As a result, Docker labels the content with a shared
 content label. Shared volume labels allow all containers to read/write content.
-The \fB\fCZ\fR option tells Docker to label the content with a private unshared label.
+The \fBZ\fR option tells Docker to label the content with a private unshared label.
 Only the current container can use a private volume.
 
 .PP
-By default bind mounted volumes are \fB\fCprivate\fR\&. That means any mounts done
+By default bind mounted volumes are \fBprivate\fR\&. That means any mounts done
 inside container will not be visible on host and vice-a-versa. One can change
 this behavior by specifying a volume mount propagation property. Making a
-volume \fB\fCshared\fR mounts done under that volume inside container will be
-visible on host and vice-a-versa. Making a volume \fB\fCslave\fR enables only one
+volume \fBshared\fR mounts done under that volume inside container will be
+visible on host and vice-a-versa. Making a volume \fBslave\fR enables only one
 way mount propagation and that is mounts done on host under that volume
 will be visible inside container but not the other way around.
 
 .PP
-To control mount propagation property of volume one can use \fB\fC:[r]shared\fR,
-\fB\fC:[r]slave\fR or \fB\fC:[r]private\fR propagation flag. Propagation property can
+To control mount propagation property of volume one can use \fB:[r]shared\fR,
+\fB:[r]slave\fR or \fB:[r]private\fR propagation flag. Propagation property can
 be specified only for bind mounted volumes and not for internal volumes or
 named volumes. For mount propagation to work source mount point (mount point
 where source dir is mounted on) has to have right propagation properties. For
@@ -84,21 +84,21 @@ shared volumes, source mount point has to be shared. And for slave volumes,
 source mount has to be either shared or slave.
 
 .PP
-Use \fB\fCdf <source-dir>\fR to figure out the source mount and then use
-\fB\fCfindmnt -o TARGET,PROPAGATION <source-mount-dir>\fR to figure out propagation
-properties of source mount. If \fB\fCfindmnt\fR utility is not available, then one
-can look at mount entry for source mount point in \fB\fC/proc/self/mountinfo\fR\&. Look
-at \fB\fCoptional fields\fR and see if any propagation properties are specified.
-\fB\fCshared:X\fR means mount is \fB\fCshared\fR, \fB\fCmaster:X\fR means mount is \fB\fCslave\fR and if
-nothing is there that means mount is \fB\fCprivate\fR\&.
+Use \fBdf <source-dir>\fR to figure out the source mount and then use
+\fBfindmnt -o TARGET,PROPAGATION <source-mount-dir>\fR to figure out propagation
+properties of source mount. If \fBfindmnt\fR utility is not available, then one
+can look at mount entry for source mount point in \fB/proc/self/mountinfo\fR\&. Look
+at \fBoptional fields\fR and see if any propagation properties are specified.
+\fBshared:X\fR means mount is \fBshared\fR, \fBmaster:X\fR means mount is \fBslave\fR and if
+nothing is there that means mount is \fBprivate\fR\&.
 
 .PP
-To change propagation properties of a mount point use \fB\fCmount\fR command. For
-example, if one wants to bind mount source directory \fB\fC/foo\fR one can do
-\fB\fCmount --bind /foo /foo\fR and \fB\fCmount --make-private --make-shared /foo\fR\&. This
-will convert /foo into a \fB\fCshared\fR mount point. Alternatively one can directly
-change propagation properties of source mount. Say \fB\fC/\fR is source mount for
-\fB\fC/foo\fR, then use \fB\fCmount --make-shared /\fR to convert \fB\fC/\fR into a \fB\fCshared\fR mount.
+To change propagation properties of a mount point use \fBmount\fR command. For
+example, if one wants to bind mount source directory \fB/foo\fR one can do
+\fBmount --bind /foo /foo\fR and \fBmount --make-private --make-shared /foo\fR\&. This
+will convert /foo into a \fBshared\fR mount point. Alternatively one can directly
+change propagation properties of source mount. Say \fB/\fR is source mount for
+\fB/foo\fR, then use \fBmount --make-shared /\fR to convert \fB/\fR into a \fBshared\fR mount.
 
 .PP
 .RS
@@ -107,16 +107,16 @@ change propagation properties of source mount. Say \fB\fC/\fR is source mount fo
 \fBNote\fP:
 When using systemd to manage the Docker daemon's start and stop, in the systemd
 unit file there is an option to control mount propagation for the Docker daemon
-itself, called \fB\fCMountFlags\fR\&. The value of this setting may cause Docker to not
+itself, called \fBMountFlags\fR\&. The value of this setting may cause Docker to not
 see mount propagation changes made on the mount point. For example, if this value
-is \fB\fCslave\fR, you may not be able to use the \fB\fCshared\fR or \fB\fCrshared\fR propagation on
+is \fBslave\fR, you may not be able to use the \fBshared\fR or \fBrshared\fR propagation on
 a volume.
 
 .RE
 
 .PP
 To disable automatic copying of data from the container path to the volume, use
-the \fB\fCnocopy\fR flag. The \fB\fCnocopy\fR flag can be set on named volumes, and does not
+the \fBnocopy\fR flag. The \fBnocopy\fR flag can be set on named volumes, and does not
 apply to bind mounts..
 
 
@@ -523,10 +523,7 @@ apply to bind mounts..
 
 
 .SH EXAMPLE
-.PP
-.RS
-
-.nf
+.EX
 ### Specify isolation technology for container (--isolation)
 
 This option is useful in situations where you are running Docker containers on
@@ -556,11 +553,10 @@ following rule would be added:
 ```console
 $ docker create --device-cgroup-rule='c 42:* rmw' -name my-container my-image
 
-.fi
-.RE
+.EE
 
 .PP
-Then, a user could ask \fB\fCudev\fR to execute a script that would \fB\fCdocker exec my-container mknod newDevX c 42 <minor>\fR
+Then, a user could ask \fBudev\fR to execute a script that would \fBdocker exec my-container mknod newDevX c 42 <minor>\fR
 the required device when it is added.
 
 .PP

@@ -14,7 +14,7 @@ Build an image from a Dockerfile
 | [`--add-host`](#add-host)           | `list`        |           | Add a custom host-to-IP mapping (`host:ip`)                       |
 | [`--build-arg`](#build-arg)         | `list`        |           | Set build-time variables                                          |
 | [`--cache-from`](#cache-from)       | `stringSlice` |           | Images to consider as cache sources                               |
-| [`--cgroup-parent`](#cgroup-parent) | `string`      |           | Optional parent cgroup for the container                          |
+| [`--cgroup-parent`](#cgroup-parent) | `string`      |           | Set the parent cgroup for the `RUN` instructions during build     |
 | `--compress`                        |               |           | Compress the build context using gzip                             |
 | `--cpu-period`                      | `int64`       | `0`       | Limit the CPU CFS (Completely Fair Scheduler) period              |
 | `--cpu-quota`                       | `int64`       | `0`       | Limit the CPU CFS (Completely Fair Scheduler) quota               |
@@ -458,7 +458,17 @@ You can add other hosts into a container's `/etc/hosts` file by using one or
 more `--add-host` flags. This example adds a static address for a host named
 `docker`:
 
-    $ docker build --add-host=docker:10.180.0.1 .
+```console
+$ docker build --add-host docker:10.180.0.1 .
+```
+
+If you need your build to connect to services running on the host, you can use
+the special `host-gateway` value for `--add-host`. In the following example,
+build containers resolve `host.docker.internal` to the host's gateway IP.
+
+```console
+$ docker build --add-host host.docker.internal:host-gateway .
+```
 
 ### <a name="target"></a> Specifying target build stage (--target)
 

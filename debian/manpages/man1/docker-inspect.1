@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -25,10 +25,7 @@ is specified, the given template will be executed for each result.
 Get information about an image when image name conflicts with the container name,
 e.g. both image and container are named rhel7:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect --type=image rhel7
 [
 {
@@ -38,17 +35,13 @@ $ docker inspect --type=image rhel7
 }
 ]
 
-.fi
-.RE
+.EE
 
 .SH Getting information on a container
 .PP
 To get information on a container use its ID or instance name:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect d2cc496561d6
 [{
 "Id": "d2cc496561d6d520cbc0236b4ba88c362c446a7619992123f11c809cded25b47",
@@ -204,48 +197,36 @@ $ docker inspect d2cc496561d6
 }
 ]
 
-.fi
-.RE
+.EE
 
 .SH Getting the IP address of a container instance
 .PP
 To get the IP address of a container use:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' d2cc496561d6
 172.17.0.2
 
-.fi
-.RE
+.EE
 
 .SH Listing all port bindings
 .PP
 One can loop over arrays and maps in the results to produce simple text
 output:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect --format='{{range $p, $conf := .NetworkSettings.Ports}} \\
   {{$p}} -> {{(index $conf 0).HostPort}} {{end}}' d2cc496561d6
   80/tcp -> 80
 
-.fi
-.RE
+.EE
 
 .PP
 You can get more information about how to write a Go template from:
-https://golang.org/pkg/text/template/.
+https://pkg.go.dev/text/template.
 
 .SH Getting size information on a container
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect -s d2cc496561d6
 [
 {
@@ -256,18 +237,14 @@ $ docker inspect -s d2cc496561d6
 }
 ]
 
-.fi
-.RE
+.EE
 
 .SH Getting information on an image
 .PP
 Use an image's ID or name (e.g., repository/name[:tag]) to get information
 about the image:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker inspect ded7cd95e059
 [{
 "Id": "ded7cd95e059788f2586a51c275a4f151653779d6a7f4dad77c2bd34601d94e4",
@@ -342,8 +319,7 @@ $ docker inspect ded7cd95e059
 }
 }]
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS

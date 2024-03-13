@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Aug 2023" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -19,8 +19,8 @@ container filesystem, \fIexcluding\fP any data volumes. Refer to \fBdocker-tag(1
 for more information about valid image and tag names.
 
 .PP
-While the \fB\fCdocker commit\fR command is a convenient way of extending an
-existing image, you should prefer the use of a Dockerfile and \fB\fCdocker
+While the \fBdocker commit\fR command is a convenient way of extending an
+existing image, you should prefer the use of a Dockerfile and \fBdocker
 build\fR for generating images that you intend to share with other
 people.
 
@@ -30,17 +30,13 @@ people.
 .PP
 An existing Fedora based container has had Apache installed while running
 in interactive mode with the bash shell. Apache is also running. To
-create a new image run \fB\fCdocker ps\fR to find the container's ID and then run:
+create a new image run \fBdocker ps\fR to find the container's ID and then run:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker commit -m="Added Apache to Fedora base image" \\
   -a="A D Ministrator" 98bd7fc99854 fedora/fedora_httpd:20
 
-.fi
-.RE
+.EE
 
 .PP
 Note that only a-z0-9-_. are allowed when naming images from an
@@ -50,24 +46,20 @@ existing container.
 .PP
 If an existing container was created without the DEBUG environment
 variable set to "true", you can create a new image based on that
-container by first getting the container's ID with \fB\fCdocker ps\fR and
+container by first getting the container's ID with \fBdocker ps\fR and
 then running:
 
-.PP
-.RS
-
-.nf
+.EX
 $ docker container commit -c="ENV DEBUG=true" 98bd7fc99854 debug-image
 
-.fi
-.RE
+.EE
 
 
 .SH OPTIONS
 .PP
 \fB-a\fP, \fB--author\fP=""
 	Author (e.g., "John Hannibal Smith hannibal@a-team.com
-\[la]mailto:hannibal@a-team.com\[ra]")
+\[la]mailto:hannibal@a\-team.com\[ra]")
 
 .PP
 \fB-c\fP, \fB--change\fP=
