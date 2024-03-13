@@ -1,3 +1,9 @@
+docker.io-app (24.0.7-0ubuntu2~22.04.1) jammy; urgency=medium
+
+  * Backport version from Noble to Jammy (LP: #2040460).
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Wed, 13 Mar 2024 17:23:54 -0300
+
 docker.io-app (24.0.7-0ubuntu2) noble; urgency=medium
 
   * Build with Go 1.21 (LP: #2056154)
