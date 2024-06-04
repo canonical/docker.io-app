@@ -18,6 +18,9 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/daemon"
+	"github.com/docker/docker/internal/testutils/specialimage"
+	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/testutil"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -39,20 +42,13 @@ func dockerCmdWithError(args ...string) (string, int, error) {
 }
 
 // Deprecated: use cli.Docker or cli.DockerCmd
-func dockerCmd(c testing.TB, args ...string) (string, int) {
-	c.Helper()
-	result := cli.DockerCmd(c, args...)
-	return result.Combined(), result.ExitCode
-}
-
-// Deprecated: use cli.Docker or cli.DockerCmd
 func dockerCmdWithResult(args ...string) *icmd.Result {
 	return cli.Docker(cli.Args(args...))
 }
 
 func findContainerIP(c *testing.T, id string, network string) string {
 	c.Helper()
-	out, _ := dockerCmd(c, "inspect", fmt.Sprintf("--format='{{ .NetworkSettings.Networks.%s.IPAddress }}'", network), id)
+	out := cli.DockerCmd(c, "inspect", fmt.Sprintf("--format='{{ .NetworkSettings.Networks.%s.IPAddress }}'", network), id).Stdout()
 	return strings.Trim(out, " \r\n'")
 }
 
@@ -186,8 +182,8 @@ func buildImage(name string, cmdOperators ...cli.CmdOperator) *icmd.Result {
 func writeFile(dst, content string, c *testing.T) {
 	c.Helper()
 	// Create subdirectories if necessary
-	assert.Assert(c, os.MkdirAll(path.Dir(dst), 0700) == nil)
-	f, err := os.OpenFile(dst, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0700)
+	assert.Assert(c, os.MkdirAll(path.Dir(dst), 0o700) == nil)
+	f, err := os.OpenFile(dst, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o700)
 	assert.NilError(c, err)
 	defer f.Close()
 	// Write content (truncate if it exists)
@@ -215,9 +211,7 @@ func runCommandAndReadContainerFile(c *testing.T, filename string, command strin
 	result := icmd.RunCommand(command, args...)
 	result.Assert(c, icmd.Success)
 	contID := strings.TrimSpace(result.Combined())
-	if err := waitRun(contID); err != nil {
-		c.Fatalf("%v: %q", contID, err)
-	}
+	cli.WaitRun(c, contID)
 	return readContainerFile(c, contID, filename)
 }
 
@@ -249,7 +243,7 @@ func daemonTime(c *testing.T) time.Time {
 	assert.NilError(c, err)
 	defer apiClient.Close()
 
-	info, err := apiClient.Info(context.Background())
+	info, err := apiClient.Info(testutil.GetContext(c))
 	assert.NilError(c, err)
 
 	dt, err := time.Parse(time.RFC3339Nano, info.SystemTime)
@@ -302,16 +296,10 @@ func createTmpFile(c *testing.T, content string) string {
 
 	filename := f.Name()
 
-	err = os.WriteFile(filename, []byte(content), 0644)
+	err = os.WriteFile(filename, []byte(content), 0o644)
 	assert.NilError(c, err)
 
 	return filename
-}
-
-// waitRun will wait for the specified container to be running, maximum 5 seconds.
-// Deprecated: use cli.WaitFor
-func waitRun(contID string) error {
-	return daemon.WaitInspectWithArgs(dockerBinary, contID, "{{.State.Running}}", "true", 5*time.Second)
 }
 
 // waitInspect will wait for the specified container to have the specified string
@@ -327,7 +315,7 @@ func getInspectBody(c *testing.T, version, id string) []byte {
 	apiClient, err := client.NewClientWithOpts(client.FromEnv, client.WithVersion(version))
 	assert.NilError(c, err)
 	defer apiClient.Close()
-	_, body, err := apiClient.ContainerInspectWithRaw(context.Background(), id, false)
+	_, body, err := apiClient.ContainerInspectWithRaw(testutil.GetContext(c), id, false)
 	assert.NilError(c, err)
 	return body
 }
@@ -356,43 +344,69 @@ func minimalBaseImage() string {
 	return testEnv.PlatformDefaults.BaseImage
 }
 
-func getGoroutineNumber() (int, error) {
-	apiClient, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return 0, err
-	}
-	defer apiClient.Close()
-
-	info, err := apiClient.Info(context.Background())
+func getGoroutineNumber(ctx context.Context, apiClient client.APIClient) (int, error) {
+	info, err := apiClient.Info(ctx)
 	if err != nil {
 		return 0, err
 	}
 	return info.NGoroutines, nil
 }
 
-func waitForGoroutines(expected int) error {
-	t := time.After(30 * time.Second)
-	for {
-		select {
-		case <-t:
-			n, err := getGoroutineNumber()
-			if err != nil {
-				return err
-			}
-			if n > expected {
-				return fmt.Errorf("leaked goroutines: expected less than or equal to %d, got: %d", expected, n)
-			}
-		default:
-			n, err := getGoroutineNumber()
-			if err != nil {
-				return err
-			}
-			if n <= expected {
-				return nil
-			}
-			time.Sleep(200 * time.Millisecond)
+func waitForStableGourtineCount(ctx context.Context, t poll.TestingT, apiClient client.APIClient) int {
+	var out int
+	poll.WaitOn(t, stableGoroutineCount(ctx, apiClient, &out), poll.WithTimeout(30*time.Second))
+	return out
+}
+
+func stableGoroutineCount(ctx context.Context, apiClient client.APIClient, count *int) poll.Check {
+	var (
+		numStable int
+		nRoutines int
+	)
+
+	return func(t poll.LogT) poll.Result {
+		n, err := getGoroutineNumber(ctx, apiClient)
+		if err != nil {
+			return poll.Error(err)
 		}
+
+		last := nRoutines
+
+		if nRoutines == n {
+			numStable++
+		} else {
+			numStable = 0
+			nRoutines = n
+		}
+
+		if numStable > 3 {
+			*count = n
+			return poll.Success()
+		}
+		return poll.Continue("goroutine count is not stable: last %d, current %d, stable iters: %d", last, n, numStable)
 	}
+}
+
+func checkGoroutineCount(ctx context.Context, apiClient client.APIClient, expected int) poll.Check {
+	first := true
+	return func(t poll.LogT) poll.Result {
+		n, err := getGoroutineNumber(ctx, apiClient)
+		if err != nil {
+			return poll.Error(err)
+		}
+		if n > expected {
+			if first {
+				t.Log("Waiting for goroutines to stabilize")
+				first = false
+			}
+			return poll.Continue("exepcted %d goroutines, got %d", expected, n)
+		}
+		return poll.Success()
+	}
+}
+
+func waitForGoroutines(ctx context.Context, t poll.TestingT, apiClient client.APIClient, expected int) {
+	poll.WaitOn(t, checkGoroutineCount(ctx, apiClient, expected), poll.WithDelay(500*time.Millisecond), poll.WithTimeout(30*time.Second))
 }
 
 // getErrorMessage returns the error message from an error API response
@@ -403,8 +417,10 @@ func getErrorMessage(c *testing.T, body []byte) string {
 	return strings.TrimSpace(resp.Message)
 }
 
-type checkF func(*testing.T) (interface{}, string)
-type reducer func(...interface{}) interface{}
+type (
+	checkF  func(*testing.T) (interface{}, string)
+	reducer func(...interface{}) interface{}
+)
 
 func pollCheck(t *testing.T, f checkF, compare func(x interface{}) assert.BoolOrComparison) poll.Check {
 	return func(poll.LogT) poll.Result {
@@ -449,4 +465,45 @@ func sumAsIntegers(vals ...interface{}) interface{} {
 		s += v.(int)
 	}
 	return s
+}
+
+func loadSpecialImage(c *testing.T, imageFunc specialimage.SpecialImageFunc) string {
+	tmpDir := c.TempDir()
+
+	imgDir := filepath.Join(tmpDir, "image")
+	assert.NilError(c, os.Mkdir(imgDir, 0o755))
+
+	_, err := imageFunc(imgDir)
+	assert.NilError(c, err)
+
+	rc, err := archive.TarWithOptions(imgDir, &archive.TarOptions{})
+	assert.NilError(c, err)
+	defer rc.Close()
+
+	imgTar := filepath.Join(tmpDir, "image.tar")
+	tarFile, err := os.OpenFile(imgTar, os.O_CREATE|os.O_WRONLY, 0o644)
+	assert.NilError(c, err)
+
+	defer tarFile.Close()
+
+	_, err = io.Copy(tarFile, rc)
+	assert.NilError(c, err)
+
+	tarFile.Close()
+
+	out := cli.DockerCmd(c, "load", "-i", imgTar).Stdout()
+
+	for _, line := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(line)
+
+		if _, imageID, hasID := strings.Cut(line, "Loaded image ID: "); hasID {
+			return imageID
+		}
+		if _, imageRef, hasRef := strings.Cut(line, "Loaded image: "); hasRef {
+			return imageRef
+		}
+	}
+
+	c.Fatalf("failed to extract image ref from %q", out)
+	return ""
 }

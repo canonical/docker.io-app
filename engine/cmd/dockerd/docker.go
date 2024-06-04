@@ -6,22 +6,20 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/reexec"
 	"github.com/docker/docker/pkg/rootless"
 	"github.com/moby/buildkit/util/apicaps"
 	"github.com/moby/term"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
-var (
-	honorXDG bool
-)
+var honorXDG bool
 
 func newDaemonCommand() (*cobra.Command, error) {
+	// FIXME(thaJeztah): config.New also looks up default binary-path, but this code is also executed when running "--version".
 	cfg, err := config.New()
 	if err != nil {
 		return nil, err
@@ -84,22 +82,21 @@ func main() {
 	// Fixes https://github.com/docker/docker/issues/19728
 	signal.Ignore(syscall.SIGPIPE)
 
-	// initial log formatting; this setting is updated after the daemon configuration is loaded.
-	logrus.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat: jsonmessage.RFC3339NanoFixed,
-		FullTimestamp:   true,
-	})
-
 	// Set terminal emulation based on platform as required.
 	_, stdout, stderr := term.StdStreams()
-
-	initLogging(stdout, stderr)
-	configureGRPCLog()
-
 	onError := func(err error) {
 		fmt.Fprintf(stderr, "%s\n", err)
 		os.Exit(1)
 	}
+
+	// initial log formatting; this setting is updated after the daemon configuration is loaded.
+	err := log.SetFormat(log.TextFormat)
+	if err != nil {
+		onError(err)
+	}
+
+	initLogging(stdout, stderr)
+	configureGRPCLog()
 
 	cmd, err := newDaemonCommand()
 	if err != nil {

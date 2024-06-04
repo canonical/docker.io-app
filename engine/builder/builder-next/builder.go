@@ -124,6 +124,10 @@ func New(ctx context.Context, opt Opt) (*Builder, error) {
 	return b, nil
 }
 
+func (b *Builder) Close() error {
+	return b.controller.Close()
+}
+
 // RegisterGRPC registers controller to the grpc server.
 func (b *Builder) RegisterGRPC(s *grpc.Server) {
 	b.controller.Register(s)
@@ -224,7 +228,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 		return nil, errors.Errorf("multiple outputs not supported")
 	}
 
-	var rc = opt.Source
+	rc := opt.Source
 	if buildID := opt.Options.BuildID; buildID != "" {
 		b.mu.Lock()
 
@@ -385,9 +389,10 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 	}
 
 	req := &controlapi.SolveRequest{
-		Ref:           id,
-		Exporter:      exporterName,
-		ExporterAttrs: exporterAttrs,
+		Ref: id,
+		Exporters: []*controlapi.Exporter{
+			&controlapi.Exporter{Type: exporterName, Attrs: exporterAttrs},
+		},
 		Frontend:      "dockerfile.v0",
 		FrontendAttrs: frontendAttrs,
 		Session:       opt.Options.SessionID,
@@ -466,6 +471,7 @@ func (sp *streamProxy) SetTrailer(_ grpcmetadata.MD) {
 func (sp *streamProxy) Context() context.Context {
 	return sp.ctx
 }
+
 func (sp *streamProxy) RecvMsg(m interface{}) error {
 	return io.EOF
 }
@@ -478,6 +484,7 @@ type statusProxy struct {
 func (sp *statusProxy) Send(resp *controlapi.StatusResponse) error {
 	return sp.SendMsg(resp)
 }
+
 func (sp *statusProxy) SendMsg(m interface{}) error {
 	if sr, ok := m.(*controlapi.StatusResponse); ok {
 		sp.ch <- sr
@@ -493,6 +500,7 @@ type pruneProxy struct {
 func (sp *pruneProxy) Send(resp *controlapi.UsageRecord) error {
 	return sp.SendMsg(resp)
 }
+
 func (sp *pruneProxy) SendMsg(m interface{}) error {
 	if sr, ok := m.(*controlapi.UsageRecord); ok {
 		sp.ch <- sr

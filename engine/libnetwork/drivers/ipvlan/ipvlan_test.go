@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package ipvlan
 
@@ -16,8 +15,7 @@ type driverTester struct {
 	d *driver
 }
 
-func (dt *driverTester) RegisterDriver(name string, drv driverapi.Driver,
-	cap driverapi.Capability) error {
+func (dt *driverTester) RegisterDriver(name string, drv driverapi.Driver, cap driverapi.Capability) error {
 	if name != testNetworkType {
 		dt.t.Fatalf("Expected driver register name to be %q. Instead got %q",
 			testNetworkType, name)

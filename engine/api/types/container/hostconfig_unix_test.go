@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package container
 
@@ -156,7 +155,6 @@ func TestUTSMode(t *testing.T) {
 			assert.Check(t, is.Equal(mode.IsHost(), expected.host))
 			assert.Check(t, is.Equal(mode.Valid(), expected.valid))
 		})
-
 	}
 }
 
@@ -223,7 +221,7 @@ func TestRestartPolicy(t *testing.T) {
 		{Name: "on-failure", MaximumRetryCount: 0}: {none: false, always: false, onFailure: true},
 	}
 	for policy, expected := range policies {
-		t.Run("policy="+policy.Name, func(t *testing.T) {
+		t.Run("policy="+string(policy.Name), func(t *testing.T) {
 			assert.Check(t, is.Equal(policy.IsNone(), expected.none))
 			assert.Check(t, is.Equal(policy.IsAlways(), expected.always))
 			assert.Check(t, is.Equal(policy.IsOnFailure(), expected.onFailure))

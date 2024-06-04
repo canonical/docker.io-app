@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package daemon // import "github.com/docker/docker/daemon"
 
@@ -55,85 +54,6 @@ func TestAdjustSharedNamespaceContainerName(t *testing.T) {
 	}
 	if hostConfig.NetworkMode != containertypes.NetworkMode("container:"+fakeID) {
 		t.Errorf("Expected NetworkMode to be container:%s", fakeID)
-	}
-}
-
-// Unix test as uses settings which are not available on Windows
-func TestAdjustCPUShares(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "docker-daemon-unix-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
-	daemon := &Daemon{
-		repository: tmp,
-		root:       tmp,
-	}
-	muteLogs()
-
-	hostConfig := &containertypes.HostConfig{
-		Resources: containertypes.Resources{CPUShares: linuxMinCPUShares - 1},
-	}
-	daemon.adaptContainerSettings(hostConfig, true)
-	if hostConfig.CPUShares != linuxMinCPUShares {
-		t.Errorf("Expected CPUShares to be %d", linuxMinCPUShares)
-	}
-
-	hostConfig.CPUShares = linuxMaxCPUShares + 1
-	daemon.adaptContainerSettings(hostConfig, true)
-	if hostConfig.CPUShares != linuxMaxCPUShares {
-		t.Errorf("Expected CPUShares to be %d", linuxMaxCPUShares)
-	}
-
-	hostConfig.CPUShares = 0
-	daemon.adaptContainerSettings(hostConfig, true)
-	if hostConfig.CPUShares != 0 {
-		t.Error("Expected CPUShares to be unchanged")
-	}
-
-	hostConfig.CPUShares = 1024
-	daemon.adaptContainerSettings(hostConfig, true)
-	if hostConfig.CPUShares != 1024 {
-		t.Error("Expected CPUShares to be unchanged")
-	}
-}
-
-// Unix test as uses settings which are not available on Windows
-func TestAdjustCPUSharesNoAdjustment(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "docker-daemon-unix-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
-	daemon := &Daemon{
-		repository: tmp,
-		root:       tmp,
-	}
-
-	hostConfig := &containertypes.HostConfig{
-		Resources: containertypes.Resources{CPUShares: linuxMinCPUShares - 1},
-	}
-	daemon.adaptContainerSettings(hostConfig, false)
-	if hostConfig.CPUShares != linuxMinCPUShares-1 {
-		t.Errorf("Expected CPUShares to be %d", linuxMinCPUShares-1)
-	}
-
-	hostConfig.CPUShares = linuxMaxCPUShares + 1
-	daemon.adaptContainerSettings(hostConfig, false)
-	if hostConfig.CPUShares != linuxMaxCPUShares+1 {
-		t.Errorf("Expected CPUShares to be %d", linuxMaxCPUShares+1)
-	}
-
-	hostConfig.CPUShares = 0
-	daemon.adaptContainerSettings(hostConfig, false)
-	if hostConfig.CPUShares != 0 {
-		t.Error("Expected CPUShares to be unchanged")
-	}
-
-	hostConfig.CPUShares = 1024
-	daemon.adaptContainerSettings(hostConfig, false)
-	if hostConfig.CPUShares != 1024 {
-		t.Error("Expected CPUShares to be unchanged")
 	}
 }
 
@@ -244,16 +164,16 @@ func TestParseSecurityOpt(t *testing.T) {
 }
 
 func TestParseNNPSecurityOptions(t *testing.T) {
-	daemon := &Daemon{
-		configStore: &config.Config{NoNewPrivileges: true},
-	}
+	daemonCfg := &configStore{Config: config.Config{NoNewPrivileges: true}}
+	daemon := &Daemon{}
+	daemon.configStore.Store(daemonCfg)
 	opts := &container.SecurityOptions{}
 	cfg := &containertypes.HostConfig{}
 
 	// test NNP when "daemon:true" and "no-new-privileges=false""
 	cfg.SecurityOpt = []string{"no-new-privileges=false"}
 
-	if err := daemon.parseSecurityOpt(opts, cfg); err != nil {
+	if err := daemon.parseSecurityOpt(&daemonCfg.Config, opts, cfg); err != nil {
 		t.Fatalf("Unexpected daemon.parseSecurityOpt error: %v", err)
 	}
 	if opts.NoNewPrivileges {
@@ -261,10 +181,10 @@ func TestParseNNPSecurityOptions(t *testing.T) {
 	}
 
 	// test NNP when "daemon:false" and "no-new-privileges=true""
-	daemon.configStore.NoNewPrivileges = false
+	daemonCfg.NoNewPrivileges = false
 	cfg.SecurityOpt = []string{"no-new-privileges=true"}
 
-	if err := daemon.parseSecurityOpt(opts, cfg); err != nil {
+	if err := daemon.parseSecurityOpt(&daemonCfg.Config, opts, cfg); err != nil {
 		t.Fatalf("Unexpected daemon.parseSecurityOpt error: %v", err)
 	}
 	if !opts.NoNewPrivileges {

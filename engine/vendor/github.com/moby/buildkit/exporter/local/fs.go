@@ -3,11 +3,13 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/pkg/idtools"
@@ -15,6 +17,7 @@ import (
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/attestation"
+	"github.com/moby/buildkit/exporter/util/epoch"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver/result"
@@ -25,9 +28,45 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 )
 
+const (
+	keyAttestationPrefix = "attestation-prefix"
+	// keyPlatformSplit is an exporter option which can be used to split result
+	// in subfolders when multiple platform references are exported.
+	keyPlatformSplit = "platform-split"
+)
+
 type CreateFSOpts struct {
 	Epoch             *time.Time
 	AttestationPrefix string
+	PlatformSplit     bool
+}
+
+func (c *CreateFSOpts) Load(opt map[string]string) (map[string]string, error) {
+	rest := make(map[string]string)
+	c.PlatformSplit = true
+
+	var err error
+	c.Epoch, opt, err = epoch.ParseExporterAttrs(opt)
+	if err != nil {
+		return nil, err
+	}
+
+	for k, v := range opt {
+		switch k {
+		case keyAttestationPrefix:
+			c.AttestationPrefix = v
+		case keyPlatformSplit:
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return nil, errors.Wrapf(err, "non-bool value for %s: %s", keyPlatformSplit, v)
+			}
+			c.PlatformSplit = b
+		default:
+			rest[k] = v
+		}
+	}
+
+	return rest, nil
 }
 
 func CreateFS(ctx context.Context, sessionID string, k string, ref cache.ImmutableRef, attestations []exporter.Attestation, defaultTime time.Time, opt CreateFSOpts) (fsutil.FS, func() error, error) {
@@ -59,9 +98,14 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 		cleanup = lm.Unmount
 	}
 
-	walkOpt := &fsutil.WalkOpt{}
-	var idMapFunc func(p string, st *fstypes.Stat) fsutil.MapResult
+	outputFS, err := fsutil.NewFS(src)
+	if err != nil {
+		return nil, nil, err
+	}
 
+	// wrap the output filesystem, applying appropriate filters
+	filterOpt := &fsutil.FilterOpt{}
+	var idMapFunc func(p string, st *fstypes.Stat) fsutil.MapResult
 	if idmap != nil {
 		idMapFunc = func(p string, st *fstypes.Stat) fsutil.MapResult {
 			uid, gid, err := idmap.ToContainer(idtools.Identity{
@@ -76,19 +120,23 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 			return fsutil.MapResultKeep
 		}
 	}
-
-	walkOpt.Map = func(p string, st *fstypes.Stat) fsutil.MapResult {
+	filterOpt.Map = func(p string, st *fstypes.Stat) fsutil.MapResult {
 		res := fsutil.MapResultKeep
 		if idMapFunc != nil {
+			// apply host uid/gid
 			res = idMapFunc(p, st)
 		}
 		if opt.Epoch != nil {
+			// apply used-specified epoch time
 			st.ModTime = opt.Epoch.UnixNano()
 		}
 		return res
 	}
+	outputFS, err = fsutil.NewFilterFS(outputFS, filterOpt)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	outputFS := fsutil.NewFS(src, walkOpt)
 	attestations = attestation.Filter(attestations, nil, map[string][]byte{
 		result.AttestationInlineOnlyKey: []byte(strconv.FormatBool(true)),
 	})
@@ -98,11 +146,11 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 	}
 	if len(attestations) > 0 {
 		subjects := []intoto.Subject{}
-		err = outputFS.Walk(ctx, func(path string, info fs.FileInfo, err error) error {
+		err = outputFS.Walk(ctx, "", func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if !info.Mode().IsRegular() {
+			if !entry.Type().IsRegular() {
 				return nil
 			}
 			f, err := outputFS.Open(path)
@@ -138,6 +186,11 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 			}
 
 			name := opt.AttestationPrefix + path.Base(attestations[i].Path)
+			if !opt.PlatformSplit {
+				nameExt := path.Ext(name)
+				namBase := strings.TrimSuffix(name, nameExt)
+				name = fmt.Sprintf("%s.%s%s", namBase, strings.Replace(k, "/", "_", -1), nameExt)
+			}
 			if _, ok := names[name]; ok {
 				return nil, nil, errors.Errorf("duplicate attestation path name %s", name)
 			}

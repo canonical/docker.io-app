@@ -6,77 +6,97 @@ import (
 	"sync/atomic"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/content"
 	cerrdefs "github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/snapshots"
-	"github.com/docker/distribution/reference"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/container"
 	daemonevents "github.com/docker/docker/daemon/events"
-	"github.com/docker/docker/daemon/images"
+	dimages "github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/daemon/snapshotter"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/registry"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // ImageService implements daemon.ImageService
 type ImageService struct {
-	client          *containerd.Client
-	containers      container.Store
-	snapshotter     string
-	registryHosts   RegistryHostsProvider
-	registryService RegistryConfigProvider
-	eventsService   *daemonevents.Events
-	pruneRunning    atomic.Bool
-	refCountMounter snapshotter.Mounter
+	client              *containerd.Client
+	images              images.Store
+	content             content.Store
+	containers          container.Store
+	snapshotterServices map[string]snapshots.Snapshotter
+	snapshotter         string
+	registryHosts       docker.RegistryHosts
+	registryService     registryResolver
+	eventsService       *daemonevents.Events
+	pruneRunning        atomic.Bool
+	refCountMounter     snapshotter.Mounter
+	idMapping           idtools.IdentityMapping
 }
 
-type RegistryHostsProvider interface {
-	RegistryHosts() docker.RegistryHosts
-}
-
-type RegistryConfigProvider interface {
+type registryResolver interface {
 	IsInsecureRegistry(host string) bool
 	ResolveRepository(name reference.Named) (*registry.RepositoryInfo, error)
+	LookupPullEndpoints(hostname string) ([]registry.APIEndpoint, error)
+	LookupPushEndpoints(hostname string) ([]registry.APIEndpoint, error)
 }
 
 type ImageServiceConfig struct {
 	Client          *containerd.Client
 	Containers      container.Store
 	Snapshotter     string
-	HostsProvider   RegistryHostsProvider
-	Registry        RegistryConfigProvider
+	RegistryHosts   docker.RegistryHosts
+	Registry        registryResolver
 	EventsService   *daemonevents.Events
 	RefCountMounter snapshotter.Mounter
+	IDMapping       idtools.IdentityMapping
 }
 
 // NewService creates a new ImageService.
 func NewService(config ImageServiceConfig) *ImageService {
 	return &ImageService{
-		client:          config.Client,
+		client:  config.Client,
+		images:  config.Client.ImageService(),
+		content: config.Client.ContentStore(),
+		snapshotterServices: map[string]snapshots.Snapshotter{
+			config.Snapshotter: config.Client.SnapshotService(config.Snapshotter),
+		},
 		containers:      config.Containers,
 		snapshotter:     config.Snapshotter,
-		registryHosts:   config.HostsProvider,
+		registryHosts:   config.RegistryHosts,
 		registryService: config.Registry,
 		eventsService:   config.EventsService,
 		refCountMounter: config.RefCountMounter,
+		idMapping:       config.IDMapping,
 	}
 }
 
+func (i *ImageService) snapshotterService(snapshotter string) snapshots.Snapshotter {
+	s, ok := i.snapshotterServices[snapshotter]
+	if !ok {
+		s = i.client.SnapshotService(snapshotter)
+		i.snapshotterServices[snapshotter] = s
+	}
+
+	return s
+}
+
 // DistributionServices return services controlling daemon image storage.
-func (i *ImageService) DistributionServices() images.DistributionServices {
-	return images.DistributionServices{}
+func (i *ImageService) DistributionServices() dimages.DistributionServices {
+	return dimages.DistributionServices{}
 }
 
 // CountImages returns the number of images stored by ImageService
 // called from info.go
-func (i *ImageService) CountImages() int {
-	imgs, err := i.client.ListImages(context.TODO())
+func (i *ImageService) CountImages(ctx context.Context) int {
+	imgs, err := i.client.ListImages(ctx)
 	if err != nil {
 		return 0
 	}
@@ -146,12 +166,7 @@ func (i *ImageService) LayerDiskUsage(ctx context.Context) (int64, error) {
 //
 // called from reload.go
 func (i *ImageService) UpdateConfig(maxDownloads, maxUploads int) {
-	panic("not implemented")
-}
-
-// GetLayerFolders returns the layer folders from an image RootFS.
-func (i *ImageService) GetLayerFolders(img *image.Image, rwLayer layer.RWLayer) ([]string, error) {
-	return nil, errdefs.NotImplemented(errors.New("not implemented"))
+	log.G(context.TODO()).Warn("max downloads and uploads is not yet implemented with the containerd store")
 }
 
 // GetContainerLayerSize returns the real size & virtual size of the container.
@@ -173,27 +188,16 @@ func (i *ImageService) GetContainerLayerSize(ctx context.Context, containerID st
 	unpackedUsage, err := calculateSnapshotParentUsage(ctx, snapshotter, containerID)
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
-			logrus.WithField("ctr", containerID).Warn("parent of container snapshot no longer present")
+			log.G(ctx).WithField("ctr", containerID).Warn("parent of container snapshot no longer present")
 		} else {
-			logrus.WithError(err).WithField("ctr", containerID).Warn("unexpected error when calculating usage of the parent snapshots")
+			log.G(ctx).WithError(err).WithField("ctr", containerID).Warn("unexpected error when calculating usage of the parent snapshots")
 		}
 	}
-	logrus.WithFields(logrus.Fields{
+	log.G(ctx).WithFields(log.Fields{
 		"rwLayerUsage": rwLayerUsage.Size,
 		"unpacked":     unpackedUsage.Size,
 	}).Debug("GetContainerLayerSize")
 
 	// TODO(thaJeztah): include content-store size for the image (similar to "GET /images/json")
 	return rwLayerUsage.Size, rwLayerUsage.Size + unpackedUsage.Size, nil
-}
-
-// getContainerImageManifest safely dereferences ImageManifest.
-// ImageManifest can be nil for containers created with Docker Desktop with old
-// containerd image store integration enabled which didn't set this field.
-func getContainerImageManifest(ctr *container.Container) (ocispec.Descriptor, error) {
-	if ctr.ImageManifest == nil {
-		return ocispec.Descriptor{}, errdefs.InvalidParameter(errors.New("container is missing ImageManifest (probably created on old version), please recreate it"))
-	}
-
-	return *ctr.ImageManifest, nil
 }

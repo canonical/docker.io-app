@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/containerd/containerd/oci"
+	resourcestypes "github.com/moby/buildkit/executor/resources/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -34,4 +35,8 @@ func (h *hostNS) Set(s *specs.Spec) error {
 
 func (h *hostNS) Close() error {
 	return nil
+}
+
+func (h *hostNS) Sample() (*resourcestypes.NetworkSample, error) {
+	return nil, nil
 }

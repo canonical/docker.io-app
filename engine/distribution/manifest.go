@@ -5,22 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/containerd/containerd/content"
 	cerrdefs "github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/remotes"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/distribution/manifest/schema2"
-	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/registry"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // labelDistributionSource describes the source blob comes from.
@@ -117,7 +117,7 @@ func (m *manifestStore) getLocal(ctx context.Context, desc ocispec.Descriptor, r
 		// If we haven't, we need to check the remote repository to see if it has the content, otherwise we can end up returning
 		// a manifest that has never even existed in the remote before.
 		if !hasDistributionSource(info.Labels[distKey], distRepo) {
-			logrus.WithField("ref", ref).Debug("found manifest but no mataching source repo is listed, checking with remote")
+			log.G(ctx).WithField("ref", ref).Debug("found manifest but no mataching source repo is listed, checking with remote")
 			exists, err := m.remote.Exists(ctx, desc.Digest)
 			if err != nil {
 				return nil, errors.Wrap(err, "error checking if remote exists")
@@ -136,7 +136,7 @@ func (m *manifestStore) getLocal(ctx context.Context, desc ocispec.Descriptor, r
 	}
 	info.Labels[distKey] = appendDistributionSourceLabel(info.Labels[distKey], distRepo)
 	if _, err := m.local.Update(ctx, info, "labels."+distKey); err != nil {
-		logrus.WithError(err).WithField("ref", ref).Warn("Could not update content distribution source")
+		log.G(ctx).WithError(err).WithField("ref", ref).Warn("Could not update content distribution source")
 	}
 
 	r := io.NewSectionReader(ra, 0, ra.Size())
@@ -293,6 +293,11 @@ func detectManifestBlobMediaType(dt []byte) (string, error) {
 		}
 		return mfst.MediaType, nil
 	case schema1.MediaTypeManifest:
+		if os.Getenv("DOCKER_ENABLE_DEPRECATED_PULL_SCHEMA_1_IMAGE") == "" {
+			err := DeprecatedSchema1ImageError(nil)
+			log.G(context.TODO()).Warn(err.Error())
+			return "", err
+		}
 		if mfst.Manifests != nil || mfst.Layers != nil {
 			return "", fmt.Errorf(`media-type: %q should not have "manifests" or "layers"`, mfst.MediaType)
 		}
@@ -304,6 +309,11 @@ func detectManifestBlobMediaType(dt []byte) (string, error) {
 	}
 	switch {
 	case mfst.FSLayers != nil && mfst.Manifests == nil && mfst.Layers == nil && mfst.Config == nil:
+		if os.Getenv("DOCKER_ENABLE_DEPRECATED_PULL_SCHEMA_1_IMAGE") == "" {
+			err := DeprecatedSchema1ImageError(nil)
+			log.G(context.TODO()).Warn(err.Error())
+			return "", err
+		}
 		return schema1.MediaTypeManifest, nil
 	case mfst.Config != nil && mfst.Manifests == nil && mfst.FSLayers == nil,
 		mfst.Layers != nil && mfst.Manifests == nil && mfst.FSLayers == nil:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/internal/compatcontext"
 )
@@ -20,7 +21,7 @@ func (daemon *Daemon) ContainerRestart(ctx context.Context, name string, options
 	if err != nil {
 		return err
 	}
-	err = daemon.containerRestart(ctx, ctr, options)
+	err = daemon.containerRestart(ctx, daemon.config(), ctr, options)
 	if err != nil {
 		return fmt.Errorf("Cannot restart container %s: %v", name, err)
 	}
@@ -31,7 +32,7 @@ func (daemon *Daemon) ContainerRestart(ctx context.Context, name string, options
 // container. When stopping, wait for the given duration in seconds to
 // gracefully stop, before forcefully terminating the container. If
 // given a negative duration, wait forever for a graceful stop.
-func (daemon *Daemon) containerRestart(ctx context.Context, container *container.Container, options containertypes.StopOptions) error {
+func (daemon *Daemon) containerRestart(ctx context.Context, daemonCfg *configStore, container *container.Container, options containertypes.StopOptions) error {
 	// Restarting is expected to be an atomic operation, and cancelling
 	// the request should not cancel the stop -> start sequence.
 	ctx = compatcontext.WithoutCancel(ctx)
@@ -60,16 +61,15 @@ func (daemon *Daemon) containerRestart(ctx context.Context, container *container
 		container.Unlock()
 
 		err := daemon.containerStop(ctx, container, options)
-
 		if err != nil {
 			return err
 		}
 	}
 
-	if err := daemon.containerStart(ctx, container, "", "", true); err != nil {
+	if err := daemon.containerStart(ctx, daemonCfg, container, "", "", true); err != nil {
 		return err
 	}
 
-	daemon.LogContainerEvent(container, "restart")
+	daemon.LogContainerEvent(container, events.ActionRestart)
 	return nil
 }

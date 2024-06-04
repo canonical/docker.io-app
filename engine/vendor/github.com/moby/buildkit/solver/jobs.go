@@ -18,6 +18,7 @@ import (
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // ResolveOpFunc finds an Op implementation for a Vertex
@@ -141,6 +142,9 @@ func (s *state) getEdge(index Index) *edge {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.edges[index]; ok {
+		for e.owner != nil {
+			e = e.owner
+		}
 		return e
 	}
 
@@ -153,19 +157,29 @@ func (s *state) getEdge(index Index) *edge {
 	return e
 }
 
-func (s *state) setEdge(index Index, newEdge *edge) {
+func (s *state) setEdge(index Index, targetEdge *edge, targetState *state) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.edges[index]
 	if ok {
-		if e == newEdge {
+		for e.owner != nil {
+			e = e.owner
+		}
+		if e == targetEdge {
 			return
 		}
-		e.release()
+	} else {
+		e = newEdge(Edge{Index: index, Vertex: s.vtx}, s.op, s.index)
+		s.edges[index] = e
 	}
+	targetEdge.takeOwnership(e)
 
-	newEdge.incrementReferenceCount()
-	s.edges[index] = newEdge
+	if targetState != nil {
+		if _, ok := targetState.allPw[s.mpw]; !ok {
+			targetState.mpw.Add(s.mpw)
+			targetState.allPw[s.mpw] = struct{}{}
+		}
+	}
 }
 
 func (s *state) combinedCacheManager() CacheManager {
@@ -186,6 +200,9 @@ func (s *state) combinedCacheManager() CacheManager {
 
 func (s *state) Release() {
 	for _, e := range s.edges {
+		for e.owner != nil {
+			e = e.owner
+		}
 		e.release()
 	}
 	if s.op != nil {
@@ -239,7 +256,7 @@ type Job struct {
 	startedTime   time.Time
 	completedTime time.Time
 
-	progressCloser func()
+	progressCloser func(error)
 	SessionID      string
 	uniqueID       string // unique ID is used for provenance. We use a different field that client can't control
 }
@@ -264,7 +281,50 @@ func NewSolver(opts SolverOpt) *Solver {
 	return jl
 }
 
-func (jl *Solver) setEdge(e Edge, newEdge *edge) {
+// hasOwner returns true if the provided target edge (or any of it's sibling
+// edges) has the provided owner.
+func (jl *Solver) hasOwner(target Edge, owner Edge) bool {
+	jl.mu.RLock()
+	defer jl.mu.RUnlock()
+
+	st, ok := jl.actives[target.Vertex.Digest()]
+	if !ok {
+		return false
+	}
+
+	var owners []Edge
+	for _, e := range st.edges {
+		if e.owner != nil {
+			owners = append(owners, e.owner.edge)
+		}
+	}
+	for len(owners) > 0 {
+		var owners2 []Edge
+		for _, e := range owners {
+			st, ok = jl.actives[e.Vertex.Digest()]
+			if !ok {
+				continue
+			}
+
+			if st.vtx.Digest() == owner.Vertex.Digest() {
+				return true
+			}
+
+			for _, e := range st.edges {
+				if e.owner != nil {
+					owners2 = append(owners2, e.owner.edge)
+				}
+			}
+		}
+
+		// repeat recursively, this time with the linked owners owners
+		owners = owners2
+	}
+
+	return false
+}
+
+func (jl *Solver) setEdge(e Edge, targetEdge *edge) {
 	jl.mu.RLock()
 	defer jl.mu.RUnlock()
 
@@ -273,7 +333,10 @@ func (jl *Solver) setEdge(e Edge, newEdge *edge) {
 		return
 	}
 
-	st.setEdge(e.Index, newEdge)
+	// potentially passing nil targetSt is intentional and handled in st.setEdge
+	targetSt := jl.actives[targetEdge.edge.Vertex.Digest()]
+
+	st.setEdge(e.Index, targetEdge, targetSt)
 }
 
 func (jl *Solver) getState(e Edge) *state {
@@ -341,6 +404,13 @@ func (jl *Solver) loadUnlocked(v, parent Vertex, j *Job, cache map[Vertex]Vertex
 
 	// if same vertex is already loaded without cache just use that
 	st, ok := jl.actives[dgstWithoutCache]
+
+	if ok {
+		// When matching an existing active vertext by dgstWithoutCache, set v to the
+		// existing active vertex, as otherwise the original vertex will use an
+		// incorrect digest and can incorrectly delete it while it is still in use.
+		v = st.vtx
+	}
 
 	if !ok {
 		st, ok = jl.actives[dgst]
@@ -443,7 +513,7 @@ func (jl *Solver) NewJob(id string) (*Job, error) {
 	pr, ctx, progressCloser := progress.NewContext(context.Background())
 	pw, _, _ := progress.NewFromContext(ctx) // TODO: expose progress.Pipe()
 
-	_, span := trace.NewNoopTracerProvider().Tracer("").Start(ctx, "")
+	_, span := noop.NewTracerProvider().Tracer("").Start(ctx, "")
 	j := &Job{
 		list:           jl,
 		pr:             progress.NewMultiReader(pr),
@@ -462,8 +532,9 @@ func (jl *Solver) NewJob(id string) (*Job, error) {
 }
 
 func (jl *Solver) Get(id string) (*Job, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, _ = context.WithTimeoutCause(ctx, 6*time.Second, errors.WithStack(context.DeadlineExceeded))
+	defer cancel(errors.WithStack(context.Canceled))
 
 	go func() {
 		<-ctx.Done()
@@ -477,7 +548,7 @@ func (jl *Solver) Get(id string) (*Job, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Errorf("no such job %s", id)
+			return nil, errdefs.NewUnknownJobError(id)
 		default:
 		}
 		j, ok := jl.jobs[id]
@@ -533,6 +604,8 @@ func (wp *withProvenance) WalkProvenance(ctx context.Context, f func(ProvenanceP
 	if wp.j == nil {
 		return nil
 	}
+	wp.j.list.mu.RLock()
+	defer wp.j.list.mu.RUnlock()
 	m := map[digest.Digest]struct{}{}
 	return wp.j.walkProvenance(ctx, wp.e, f, m)
 }
@@ -561,7 +634,7 @@ func (j *Job) walkProvenance(ctx context.Context, e Edge, f func(ProvenanceProvi
 }
 
 func (j *Job) CloseProgress() {
-	j.progressCloser()
+	j.progressCloser(errors.WithStack(context.Canceled))
 	j.pw.Close()
 }
 
@@ -652,9 +725,11 @@ type execRes struct {
 }
 
 type sharedOp struct {
-	resolver ResolveOpFunc
-	st       *state
-	g        flightcontrol.Group
+	resolver  ResolveOpFunc
+	st        *state
+	gDigest   flightcontrol.Group[digest.Digest]
+	gCacheRes flightcontrol.Group[[]*CacheMap]
+	gExecRes  flightcontrol.Group[*execRes]
 
 	opOnce     sync.Once
 	op         Op
@@ -679,7 +754,18 @@ func (s *sharedOp) IgnoreCache() bool {
 }
 
 func (s *sharedOp) Cache() CacheManager {
-	return s.st.combinedCacheManager()
+	return &cacheWithCacheOpts{s.st.combinedCacheManager(), s.st}
+}
+
+type cacheWithCacheOpts struct {
+	CacheManager
+	st *state
+}
+
+func (c cacheWithCacheOpts) Records(ctx context.Context, ck *CacheKey) ([]*CacheRecord, error) {
+	// Allow Records accessing to cache opts through ctx. This enable to use remote provider
+	// during checking the cache existence.
+	return c.CacheManager.Records(withAncestorCacheOpts(ctx, c.st), ck)
 }
 
 func (s *sharedOp) LoadCache(ctx context.Context, rec *CacheRecord) (Result, error) {
@@ -705,7 +791,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 		err = errdefs.WrapVertex(err, s.st.origDigest)
 	}()
 	flightControlKey := fmt.Sprintf("slow-compute-%d", index)
-	key, err := s.g.Do(ctx, flightControlKey, func(ctx context.Context) (interface{}, error) {
+	key, err := s.gDigest.Do(ctx, flightControlKey, func(ctx context.Context) (digest.Digest, error) {
 		s.slowMu.Lock()
 		// TODO: add helpers for these stored values
 		if res, ok := s.slowCacheRes[index]; ok {
@@ -714,7 +800,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 		}
 		if err := s.slowCacheErr[index]; err != nil {
 			s.slowMu.Unlock()
-			return nil, err
+			return "", err
 		}
 		s.slowMu.Unlock()
 
@@ -722,7 +808,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 		if p != nil {
 			st := s.st.solver.getState(s.st.vtx.Inputs()[index])
 			if st == nil {
-				return nil, errors.Errorf("failed to get state for index %d on %v", index, s.st.vtx.Name())
+				return "", errors.Errorf("failed to get state for index %d on %v", index, s.st.vtx.Name())
 			}
 			ctx2 := progress.WithProgress(ctx, st.mpw)
 			if st.mspan.Span != nil {
@@ -749,7 +835,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 				if errdefs.IsCanceled(ctx, err) {
 					complete = false
 					releaseError(err)
-					err = errors.Wrap(ctx.Err(), err.Error())
+					err = errors.Wrap(context.Cause(ctx), err.Error())
 				}
 			default:
 			}
@@ -773,7 +859,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 		notifyCompleted(err, false)
 		return "", err
 	}
-	return key.(digest.Digest), nil
+	return key, nil
 }
 
 func (s *sharedOp) CacheMap(ctx context.Context, index int) (resp *cacheMapResp, err error) {
@@ -786,7 +872,7 @@ func (s *sharedOp) CacheMap(ctx context.Context, index int) (resp *cacheMapResp,
 		return nil, err
 	}
 	flightControlKey := fmt.Sprintf("cachemap-%d", index)
-	res, err := s.g.Do(ctx, flightControlKey, func(ctx context.Context) (ret interface{}, retErr error) {
+	res, err := s.gCacheRes.Do(ctx, flightControlKey, func(ctx context.Context) (ret []*CacheMap, retErr error) {
 		if s.cacheRes != nil && s.cacheDone || index < len(s.cacheRes) {
 			return s.cacheRes, nil
 		}
@@ -815,7 +901,7 @@ func (s *sharedOp) CacheMap(ctx context.Context, index int) (resp *cacheMapResp,
 				if errdefs.IsCanceled(ctx, err) {
 					complete = false
 					releaseError(err)
-					err = errors.Wrap(ctx.Err(), err.Error())
+					err = errors.Wrap(context.Cause(ctx), err.Error())
 				}
 			default:
 			}
@@ -842,11 +928,11 @@ func (s *sharedOp) CacheMap(ctx context.Context, index int) (resp *cacheMapResp,
 		return nil, err
 	}
 
-	if len(res.([]*CacheMap)) <= index {
+	if len(res) <= index {
 		return s.CacheMap(ctx, index)
 	}
 
-	return &cacheMapResp{CacheMap: res.([]*CacheMap)[index], complete: s.cacheDone}, nil
+	return &cacheMapResp{CacheMap: res[index], complete: s.cacheDone}, nil
 }
 
 func (s *sharedOp) Exec(ctx context.Context, inputs []Result) (outputs []Result, exporters []ExportableCacheKey, err error) {
@@ -859,7 +945,7 @@ func (s *sharedOp) Exec(ctx context.Context, inputs []Result) (outputs []Result,
 		return nil, nil, err
 	}
 	flightControlKey := "exec"
-	res, err := s.g.Do(ctx, flightControlKey, func(ctx context.Context) (ret interface{}, retErr error) {
+	res, err := s.gExecRes.Do(ctx, flightControlKey, func(ctx context.Context) (ret *execRes, retErr error) {
 		if s.execDone {
 			if s.execErr != nil {
 				return nil, s.execErr
@@ -894,7 +980,7 @@ func (s *sharedOp) Exec(ctx context.Context, inputs []Result) (outputs []Result,
 				if errdefs.IsCanceled(ctx, err) {
 					complete = false
 					releaseError(err)
-					err = errors.Wrap(ctx.Err(), err.Error())
+					err = errors.Wrap(context.Cause(ctx), err.Error())
 				}
 			default:
 			}
@@ -921,8 +1007,7 @@ func (s *sharedOp) Exec(ctx context.Context, inputs []Result) (outputs []Result,
 	if res == nil || err != nil {
 		return nil, nil, err
 	}
-	r := res.(*execRes)
-	return unwrapShared(r.execRes), r.execExporters, nil
+	return unwrapShared(res.execRes), res.execExporters, nil
 }
 
 func (s *sharedOp) getOp() (Op, error) {

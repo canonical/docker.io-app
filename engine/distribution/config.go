@@ -6,16 +6,16 @@ import (
 	"io"
 	"runtime"
 
+	"github.com/distribution/reference"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/schema2"
-	"github.com/docker/distribution/reference"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/pkg/system"
 	refstore "github.com/docker/docker/reference"
 	registrypkg "github.com/docker/docker/registry"
 	"github.com/opencontainers/go-digest"
@@ -38,7 +38,7 @@ type Config struct {
 	// and endpoint lookup.
 	RegistryService RegistryResolver
 	// ImageEventLogger notifies events for a given image
-	ImageEventLogger func(id, name, action string)
+	ImageEventLogger func(id, name string, action events.Action)
 	// MetadataStore is the storage backend for distribution-specific
 	// metadata.
 	MetadataStore metadata.Store
@@ -151,8 +151,8 @@ func platformFromConfig(c []byte) (*ocispec.Platform, error) {
 	if os == "" {
 		os = runtime.GOOS
 	}
-	if !system.IsOSSupported(os) {
-		return nil, errors.Wrapf(system.ErrNotSupportedOperatingSystem, "image operating system %q cannot be used on this platform", os)
+	if err := image.CheckOS(os); err != nil {
+		return nil, errors.Wrapf(err, "image operating system %q cannot be used on this platform", os)
 	}
 	return &ocispec.Platform{
 		OS:           os,

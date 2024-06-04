@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package copy // import "github.com/docker/docker/daemon/graphdriver/copy"
 
@@ -160,6 +159,7 @@ func DirCopy(srcDir, dstDir string, copyMode Mode, copyOpaqueXattrs bool) error 
 					return err2
 				}
 			} else if hardLinkDstPath, ok := copiedFiles[id]; ok {
+				isHardlink = true
 				if err2 := os.Link(hardLinkDstPath, dstPath); err2 != nil {
 					return err2
 				}

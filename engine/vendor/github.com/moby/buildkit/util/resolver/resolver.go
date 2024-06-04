@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,9 +18,11 @@ import (
 	"github.com/pkg/errors"
 )
 
-func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHost) ([]docker.RegistryHost, error) {
-	var hosts []docker.RegistryHost
+const (
+	defaultPath = "/v2"
+)
 
+func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHost) (*docker.RegistryHost, error) {
 	tc, err := loadTLSConfig(c)
 	if err != nil {
 		return nil, err
@@ -35,33 +38,31 @@ func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHos
 		}
 	}
 
-	if isHTTP {
-		h2 := h
-		h2.Scheme = "http"
-		hosts = append(hosts, h2)
-	}
+	httpsTransport := newDefaultTransport()
+	httpsTransport.TLSClientConfig = tc
+
 	if c.Insecure != nil && *c.Insecure {
 		h2 := h
-		transport := newDefaultTransport()
-		transport.TLSClientConfig = tc
+
+		var transport http.RoundTripper = httpsTransport
+		if isHTTP {
+			transport = &httpFallback{super: transport}
+		}
 		h2.Client = &http.Client{
 			Transport: tracing.NewTransport(transport),
 		}
 		tc.InsecureSkipVerify = true
-		hosts = append(hosts, h2)
+		return &h2, nil
+	} else if isHTTP {
+		h2 := h
+		h2.Scheme = "http"
+		return &h2, nil
 	}
 
-	if len(hosts) == 0 {
-		transport := newDefaultTransport()
-		transport.TLSClientConfig = tc
-
-		h.Client = &http.Client{
-			Transport: tracing.NewTransport(transport),
-		}
-		hosts = append(hosts, h)
+	h.Client = &http.Client{
+		Transport: tracing.NewTransport(httpsTransport),
 	}
-
-	return hosts, nil
+	return &h, nil
 }
 
 func loadTLSConfig(c config.RegistryConfig) (*tls.Config, error) {
@@ -125,21 +126,15 @@ func NewRegistryConfig(m map[string]config.RegistryConfig) docker.RegistryHosts 
 
 			var out []docker.RegistryHost
 
-			for _, mirror := range c.Mirrors {
-				h := docker.RegistryHost{
-					Scheme:       "https",
-					Client:       newDefaultClient(),
-					Host:         mirror,
-					Path:         "/v2",
-					Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
-				}
-
-				hosts, err := fillInsecureOpts(mirror, m[mirror], h)
+			for _, rawMirror := range c.Mirrors {
+				h := newMirrorRegistryHost(rawMirror)
+				mirrorHost := h.Host
+				host, err := fillInsecureOpts(mirrorHost, m[mirrorHost], h)
 				if err != nil {
 					return nil, err
 				}
 
-				out = append(out, hosts...)
+				out = append(out, *host)
 			}
 
 			if host == "docker.io" {
@@ -159,7 +154,8 @@ func NewRegistryConfig(m map[string]config.RegistryConfig) docker.RegistryHosts 
 				return nil, err
 			}
 
-			out = append(out, hosts...)
+			out = append(out, *hosts)
+
 			return out, nil
 		},
 		docker.ConfigureDefaultRegistries(
@@ -167,6 +163,20 @@ func NewRegistryConfig(m map[string]config.RegistryConfig) docker.RegistryHosts 
 			docker.WithPlainHTTP(docker.MatchLocalhost),
 		),
 	)
+}
+
+func newMirrorRegistryHost(mirror string) docker.RegistryHost {
+	mirrorHost, mirrorPath := extractMirrorHostAndPath(mirror)
+	path := path.Join(defaultPath, mirrorPath)
+	h := docker.RegistryHost{
+		Scheme:       "https",
+		Client:       newDefaultClient(),
+		Host:         mirrorHost,
+		Path:         path,
+		Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
+	}
+
+	return h
 }
 
 func newDefaultClient() *http.Client {
@@ -196,4 +206,30 @@ func newDefaultTransport() *http.Transport {
 		ExpectContinueTimeout: 5 * time.Second,
 		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
 	}
+}
+
+type httpFallback struct {
+	super http.RoundTripper
+	host  string
+}
+
+func (f *httpFallback) RoundTrip(r *http.Request) (*http.Response, error) {
+	// only fall back if the same host had previously fell back
+	if f.host != r.URL.Host {
+		resp, err := f.super.RoundTrip(r)
+		var tlsErr tls.RecordHeaderError
+		if errors.As(err, &tlsErr) && string(tlsErr.RecordHeader[:]) == "HTTP/" {
+			f.host = r.URL.Host
+		} else {
+			return resp, err
+		}
+	}
+
+	plainHTTPUrl := *r.URL
+	plainHTTPUrl.Scheme = "http"
+
+	plainHTTPRequest := *r
+	plainHTTPRequest.URL = &plainHTTPUrl
+
+	return f.super.RoundTrip(&plainHTTPRequest)
 }

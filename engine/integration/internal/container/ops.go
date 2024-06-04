@@ -1,11 +1,12 @@
 package container
 
 import (
+	"maps"
 	"strings"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -42,7 +43,21 @@ func WithCmd(cmds ...string) func(*TestContainerConfig) {
 // WithNetworkMode sets the network mode of the container
 func WithNetworkMode(mode string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
-		c.HostConfig.NetworkMode = containertypes.NetworkMode(mode)
+		c.HostConfig.NetworkMode = container.NetworkMode(mode)
+	}
+}
+
+// WithDNS sets external DNS servers for the container
+func WithDNS(dns []string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.DNS = append([]string(nil), dns...)
+	}
+}
+
+// WithSysctls sets sysctl options for the container
+func WithSysctls(sysctls map[string]string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.Sysctls = maps.Clone(sysctls)
 	}
 }
 
@@ -71,7 +86,7 @@ func WithWorkingDir(dir string) func(*TestContainerConfig) {
 }
 
 // WithMount adds an mount
-func WithMount(m mounttypes.Mount) func(*TestContainerConfig) {
+func WithMount(m mount.Mount) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.HostConfig.Mounts = append(c.HostConfig.Mounts, m)
 	}
@@ -94,6 +109,13 @@ func WithBind(src, target string) func(*TestContainerConfig) {
 	}
 }
 
+// WithBindRaw sets the bind mount of the container
+func WithBindRaw(s string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.Binds = append(c.HostConfig.Binds, s)
+	}
+}
+
 // WithTmpfs sets a target path in the container to a tmpfs, with optional options
 // (separated with a colon).
 func WithTmpfs(targetAndOpts string) func(config *TestContainerConfig) {
@@ -107,35 +129,58 @@ func WithTmpfs(targetAndOpts string) func(config *TestContainerConfig) {
 	}
 }
 
-// WithIPv4 sets the specified ip for the specified network of the container
-func WithIPv4(network, ip string) func(*TestContainerConfig) {
+func WithMacAddress(networkName, mac string) func(config *TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.NetworkingConfig.EndpointsConfig == nil {
-			c.NetworkingConfig.EndpointsConfig = map[string]*networktypes.EndpointSettings{}
+			c.NetworkingConfig.EndpointsConfig = map[string]*network.EndpointSettings{}
 		}
-		if v, ok := c.NetworkingConfig.EndpointsConfig[network]; !ok || v == nil {
-			c.NetworkingConfig.EndpointsConfig[network] = &networktypes.EndpointSettings{}
+		if v, ok := c.NetworkingConfig.EndpointsConfig[networkName]; !ok || v == nil {
+			c.NetworkingConfig.EndpointsConfig[networkName] = &network.EndpointSettings{}
 		}
-		if c.NetworkingConfig.EndpointsConfig[network].IPAMConfig == nil {
-			c.NetworkingConfig.EndpointsConfig[network].IPAMConfig = &networktypes.EndpointIPAMConfig{}
+		c.NetworkingConfig.EndpointsConfig[networkName].MacAddress = mac
+	}
+}
+
+// WithIPv4 sets the specified ip for the specified network of the container
+func WithIPv4(networkName, ip string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		if c.NetworkingConfig.EndpointsConfig == nil {
+			c.NetworkingConfig.EndpointsConfig = map[string]*network.EndpointSettings{}
 		}
-		c.NetworkingConfig.EndpointsConfig[network].IPAMConfig.IPv4Address = ip
+		if v, ok := c.NetworkingConfig.EndpointsConfig[networkName]; !ok || v == nil {
+			c.NetworkingConfig.EndpointsConfig[networkName] = &network.EndpointSettings{}
+		}
+		if c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig == nil {
+			c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig = &network.EndpointIPAMConfig{}
+		}
+		c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig.IPv4Address = ip
 	}
 }
 
 // WithIPv6 sets the specified ip6 for the specified network of the container
-func WithIPv6(network, ip string) func(*TestContainerConfig) {
+func WithIPv6(networkName, ip string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.NetworkingConfig.EndpointsConfig == nil {
-			c.NetworkingConfig.EndpointsConfig = map[string]*networktypes.EndpointSettings{}
+			c.NetworkingConfig.EndpointsConfig = map[string]*network.EndpointSettings{}
 		}
-		if v, ok := c.NetworkingConfig.EndpointsConfig[network]; !ok || v == nil {
-			c.NetworkingConfig.EndpointsConfig[network] = &networktypes.EndpointSettings{}
+		if v, ok := c.NetworkingConfig.EndpointsConfig[networkName]; !ok || v == nil {
+			c.NetworkingConfig.EndpointsConfig[networkName] = &network.EndpointSettings{}
 		}
-		if c.NetworkingConfig.EndpointsConfig[network].IPAMConfig == nil {
-			c.NetworkingConfig.EndpointsConfig[network].IPAMConfig = &networktypes.EndpointIPAMConfig{}
+		if c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig == nil {
+			c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig = &network.EndpointIPAMConfig{}
 		}
-		c.NetworkingConfig.EndpointsConfig[network].IPAMConfig.IPv6Address = ip
+		c.NetworkingConfig.EndpointsConfig[networkName].IPAMConfig.IPv6Address = ip
+	}
+}
+
+func WithEndpointSettings(nw string, config *network.EndpointSettings) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		if c.NetworkingConfig.EndpointsConfig == nil {
+			c.NetworkingConfig.EndpointsConfig = map[string]*network.EndpointSettings{}
+		}
+		if _, ok := c.NetworkingConfig.EndpointsConfig[nw]; !ok {
+			c.NetworkingConfig.EndpointsConfig[nw] = config
+		}
 	}
 }
 
@@ -155,14 +200,14 @@ func WithAutoRemove(c *TestContainerConfig) {
 func WithPidsLimit(limit *int64) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.HostConfig == nil {
-			c.HostConfig = &containertypes.HostConfig{}
+			c.HostConfig = &container.HostConfig{}
 		}
 		c.HostConfig.PidsLimit = limit
 	}
 }
 
 // WithRestartPolicy sets container's restart policy
-func WithRestartPolicy(policy string) func(c *TestContainerConfig) {
+func WithRestartPolicy(policy container.RestartPolicyMode) func(c *TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.HostConfig.RestartPolicy.Name = policy
 	}
@@ -175,11 +220,18 @@ func WithUser(user string) func(c *TestContainerConfig) {
 	}
 }
 
+// WithAdditionalGroups sets the additional groups for the container
+func WithAdditionalGroups(groups ...string) func(c *TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.GroupAdd = groups
+	}
+}
+
 // WithPrivileged sets privileged mode for the container
 func WithPrivileged(privileged bool) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.HostConfig == nil {
-			c.HostConfig = &containertypes.HostConfig{}
+			c.HostConfig = &container.HostConfig{}
 		}
 		c.HostConfig.Privileged = privileged
 	}
@@ -189,9 +241,9 @@ func WithPrivileged(privileged bool) func(*TestContainerConfig) {
 func WithCgroupnsMode(mode string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		if c.HostConfig == nil {
-			c.HostConfig = &containertypes.HostConfig{}
+			c.HostConfig = &container.HostConfig{}
 		}
-		c.HostConfig.CgroupnsMode = containertypes.CgroupnsMode(mode)
+		c.HostConfig.CgroupnsMode = container.CgroupnsMode(mode)
 	}
 }
 
@@ -213,12 +265,12 @@ func WithPlatform(p *ocispec.Platform) func(*TestContainerConfig) {
 // WithWindowsDevice specifies a Windows Device, ala `--device` on the CLI
 func WithWindowsDevice(device string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
-		c.HostConfig.Devices = append(c.HostConfig.Devices, containertypes.DeviceMapping{PathOnHost: device})
+		c.HostConfig.Devices = append(c.HostConfig.Devices, container.DeviceMapping{PathOnHost: device})
 	}
 }
 
 // WithIsolation specifies the isolation technology to apply to the container
-func WithIsolation(isolation containertypes.Isolation) func(*TestContainerConfig) {
+func WithIsolation(isolation container.Isolation) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.HostConfig.Isolation = isolation
 	}
@@ -235,6 +287,17 @@ func WithConsoleSize(width, height uint) func(*TestContainerConfig) {
 func WithRuntime(name string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.HostConfig.Runtime = name
+	}
+}
+
+// WithCDIDevices sets the CDI devices to use to start the container
+func WithCDIDevices(cdiDeviceNames ...string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		request := container.DeviceRequest{
+			Driver:    "cdi",
+			DeviceIDs: cdiDeviceNames,
+		}
+		c.HostConfig.DeviceRequests = append(c.HostConfig.DeviceRequests, request)
 	}
 }
 
@@ -256,14 +319,21 @@ func WithSecurityOpt(opt string) func(*TestContainerConfig) {
 	}
 }
 
+// WithPIDMode sets the PID-mode for the container.
+func WithPIDMode(mode container.PidMode) func(c *TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.HostConfig.PidMode = mode
+	}
+}
+
 func WithStopSignal(stopSignal string) func(c *TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.Config.StopSignal = stopSignal
 	}
 }
 
-func WithMacAddress(address string) func(c *TestContainerConfig) {
+func WithContainerWideMacAddress(address string) func(c *TestContainerConfig) {
 	return func(c *TestContainerConfig) {
-		c.Config.MacAddress = address
+		c.Config.MacAddress = address //nolint:staticcheck // ignore SA1019: field is deprecated, but still used on API < v1.44.
 	}
 }

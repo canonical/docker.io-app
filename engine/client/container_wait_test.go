@@ -9,11 +9,16 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/errdefs"
+	"github.com/pkg/errors"
+	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestContainerWaitError(t *testing.T) {
@@ -25,9 +30,24 @@ func TestContainerWaitError(t *testing.T) {
 	case result := <-resultC:
 		t.Fatalf("expected to not get a wait result, got %d", result.StatusCode)
 	case err := <-errC:
-		if !errdefs.IsSystem(err) {
-			t.Fatalf("expected a Server Error, got %[1]T: %[1]v", err)
-		}
+		assert.Check(t, is.ErrorType(err, errdefs.IsSystem))
+	}
+}
+
+// TestContainerWaitConnectionError verifies that connection errors occurring
+// during API-version negotiation are not shadowed by API-version errors.
+//
+// Regression test for https://github.com/docker/cli/issues/4890
+func TestContainerWaitConnectionError(t *testing.T) {
+	client, err := NewClientWithOpts(WithAPIVersionNegotiation(), WithHost("tcp://no-such-host.invalid"))
+	assert.NilError(t, err)
+
+	resultC, errC := client.ContainerWait(context.Background(), "nothing", "")
+	select {
+	case result := <-resultC:
+		t.Fatalf("expected to not get a wait result, got %d", result.StatusCode)
+	case err := <-errC:
+		assert.Check(t, is.ErrorType(err, IsErrConnectionFailed))
 	}
 }
 
@@ -114,6 +134,46 @@ func TestContainerWaitProxyInterruptLong(t *testing.T) {
 		}
 	case result := <-resultC:
 		t.Fatalf("Unexpected result: %v", result)
+	}
+}
+
+func TestContainerWaitErrorHandling(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		rdr  io.Reader
+		exp  error
+	}{
+		{name: "invalid json", rdr: strings.NewReader(`{]`), exp: errors.New("{]")},
+		{name: "context canceled", rdr: iotest.ErrReader(context.Canceled), exp: context.Canceled},
+		{name: "context deadline exceeded", rdr: iotest.ErrReader(context.DeadlineExceeded), exp: context.DeadlineExceeded},
+		{name: "connection reset", rdr: iotest.ErrReader(syscall.ECONNRESET), exp: syscall.ECONNRESET},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			client := &Client{
+				version: "1.30",
+				client: newMockClient(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(test.rdr),
+					}, nil
+				}),
+			}
+			resultC, errC := client.ContainerWait(ctx, "container_id", "")
+			select {
+			case err := <-errC:
+				if err.Error() != test.exp.Error() {
+					t.Fatalf("ContainerWait() errC = %v; want %v", err, test.exp)
+				}
+				return
+			case result := <-resultC:
+				t.Fatalf("expected to not get a wait result, got %d", result.StatusCode)
+				return
+			}
+			// Unexpected - we should not reach this line
+		})
 	}
 }
 

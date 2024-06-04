@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package container
 
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/cli/internal/test"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 )
@@ -24,18 +22,17 @@ func TestIgnoredSignals(t *testing.T) {
 			defer cancel()
 
 			var called bool
-			client := &fakeClient{containerKillFunc: func(ctx context.Context, container, signal string) error {
+			apiClient := &fakeClient{containerKillFunc: func(ctx context.Context, container, signal string) error {
 				called = true
 				return nil
 			}}
 
-			cli := test.NewFakeCli(client)
 			sigc := make(chan os.Signal)
 			defer close(sigc)
 
 			done := make(chan struct{})
 			go func() {
-				ForwardAllSignals(ctx, cli, t.Name(), sigc)
+				ForwardAllSignals(ctx, apiClient, t.Name(), sigc)
 				close(done)
 			}()
 
