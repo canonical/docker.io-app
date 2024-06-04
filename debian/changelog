@@ -1,4 +1,4 @@
-docker.io-app (26.1.3-0ubuntu1) UNRELEASED; urgency=medium
+docker.io-app (26.1.3-0ubuntu1) oracular; urgency=medium
 
   * New upstream release.
     - Allow runc to kill containers when confined to the runc profile in
