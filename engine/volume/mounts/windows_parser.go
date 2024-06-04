@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -191,6 +192,7 @@ func (p *windowsParser) ValidateVolumeName(name string) error {
 	}
 	return nil
 }
+
 func (p *windowsParser) ValidateMountConfig(mnt *mount.Mount) error {
 	return p.validateMountConfigReg(mnt, windowsValidators)
 }
@@ -199,8 +201,7 @@ type fileInfoProvider interface {
 	fileInfo(path string) (exist, isDir bool, err error)
 }
 
-type defaultFileInfoProvider struct {
-}
+type defaultFileInfoProvider struct{}
 
 func (defaultFileInfoProvider) fileInfo(path string) (exist, isDir bool, err error) {
 	fi, err := os.Stat(path)
@@ -258,7 +259,19 @@ func (p *windowsParser) validateMountConfigReg(mnt *mount.Mount, additionalValid
 			return &errMountConfig{mnt, errExtraField("BindOptions")}
 		}
 
-		if len(mnt.Source) == 0 && mnt.ReadOnly {
+		anonymousVolume := len(mnt.Source) == 0
+		if mnt.VolumeOptions != nil && mnt.VolumeOptions.Subpath != "" {
+			if anonymousVolume {
+				return errAnonymousVolumeWithSubpath
+			}
+
+			// Check if path is relative but without any back traversals
+			if !filepath.IsLocal(mnt.VolumeOptions.Subpath) {
+				return &errMountConfig{mnt, errInvalidSubpath}
+			}
+		}
+
+		if anonymousVolume && mnt.ReadOnly {
 			return &errMountConfig{mnt, fmt.Errorf("must not set ReadOnly mode when using anonymous volumes")}
 		}
 

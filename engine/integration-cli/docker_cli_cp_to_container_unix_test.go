@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package main
 
@@ -13,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/docker/docker/integration-cli/cli"
 	"gotest.tools/v3/assert"
 )
 
@@ -26,9 +26,9 @@ func (s *DockerCLICpSuite) TestCpToContainerWithPermissions(c *testing.T) {
 
 	containerName := "permtest"
 
-	_, exc := dockerCmd(c, "create", "--name", containerName, "busybox", "/bin/sh", "-c", "stat -c '%u %g %a' /permdirtest /permdirtest/permtest")
+	exc := cli.DockerCmd(c, "create", "--name", containerName, "busybox", "/bin/sh", "-c", "stat -c '%u %g %a' /permdirtest /permdirtest/permtest").ExitCode
 	assert.Equal(c, exc, 0)
-	defer dockerCmd(c, "rm", "-f", containerName)
+	defer cli.DockerCmd(c, "rm", "-f", containerName)
 
 	srcPath := cpPath(tmpDir, "permdirtest")
 	dstPath := containerCpPath(containerName, "/")

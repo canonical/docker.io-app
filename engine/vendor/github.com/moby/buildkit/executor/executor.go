@@ -6,7 +6,9 @@ import (
 	"net"
 	"syscall"
 
-	"github.com/moby/buildkit/snapshot"
+	"github.com/containerd/containerd/mount"
+	"github.com/docker/docker/pkg/idtools"
+	resourcestypes "github.com/moby/buildkit/executor/resources/types"
 	"github.com/moby/buildkit/solver/pb"
 )
 
@@ -27,8 +29,13 @@ type Meta struct {
 	RemoveMountStubsRecursive bool
 }
 
+type MountableRef interface {
+	Mount() ([]mount.Mount, func() error, error)
+	IdentityMapping() *idtools.IdentityMapping
+}
+
 type Mountable interface {
-	Mount(ctx context.Context, readonly bool) (snapshot.Mountable, error)
+	Mount(ctx context.Context, readonly bool) (MountableRef, error)
 }
 
 type Mount struct {
@@ -55,7 +62,7 @@ type Executor interface {
 	// Run will start a container for the given process with rootfs, mounts.
 	// `id` is an optional name for the container so it can be referenced later via Exec.
 	// `started` is an optional channel that will be closed when the container setup completes and has started running.
-	Run(ctx context.Context, id string, rootfs Mount, mounts []Mount, process ProcessInfo, started chan<- struct{}) error
+	Run(ctx context.Context, id string, rootfs Mount, mounts []Mount, process ProcessInfo, started chan<- struct{}) (resourcestypes.Recorder, error)
 	// Exec will start a process in container matching `id`. An error will be returned
 	// if the container failed to start (via Run) or has exited before Exec is called.
 	Exec(ctx context.Context, id string, process ProcessInfo) error

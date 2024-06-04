@@ -25,6 +25,10 @@ if ! command -v zgrep > /dev/null 2>&1; then
 	}
 fi
 
+useColor=true
+if [ "$NO_COLOR" = "1" ] || [ ! -t 1 ]; then
+	useColor=false
+fi
 kernelVersion="$(uname -r)"
 kernelMajor="${kernelVersion%%.*}"
 kernelMinor="${kernelVersion#$kernelMajor.}"
@@ -41,6 +45,10 @@ is_set_as_module() {
 }
 
 color() {
+	# if stdout is not a terminal, then don't do color codes.
+	if [ "$useColor" = "false" ]; then
+		return 0
+	fi
 	codes=
 	if [ "$1" = 'bold' ]; then
 		codes='1'
@@ -371,11 +379,6 @@ echo '- Storage Drivers:'
 echo "  - \"$(wrap_color 'btrfs' blue)\":"
 check_flags BTRFS_FS | sed 's/^/    /'
 check_flags BTRFS_FS_POSIX_ACL | sed 's/^/    /'
-[ "$EXITCODE" = 0 ] && STORAGE=0
-EXITCODE=0
-
-echo "  - \"$(wrap_color 'devicemapper' blue)\":"
-check_flags BLK_DEV_DM DM_THIN_PROVISIONING | sed 's/^/    /'
 [ "$EXITCODE" = 0 ] && STORAGE=0
 EXITCODE=0
 

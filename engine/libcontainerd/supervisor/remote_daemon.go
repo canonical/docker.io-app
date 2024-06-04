@@ -10,14 +10,18 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/containerd/services/server/config"
 	"github.com/containerd/containerd/sys"
+	"github.com/containerd/log"
 	"github.com/docker/docker/pkg/pidfile"
 	"github.com/docker/docker/pkg/process"
 	"github.com/docker/docker/pkg/system"
 	"github.com/pelletier/go-toml"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -39,7 +43,7 @@ type remote struct {
 
 	daemonPid int
 	pidFile   string
-	logger    *logrus.Entry
+	logger    *log.Entry
 
 	daemonWaitCh  chan struct{}
 	daemonStartCh chan error
@@ -76,7 +80,7 @@ func Start(ctx context.Context, rootDir, stateDir string, opts ...DaemonOpt) (Da
 		configFile:    filepath.Join(stateDir, configFile),
 		daemonPid:     -1,
 		pidFile:       filepath.Join(stateDir, pidFile),
-		logger:        logrus.WithField("module", "libcontainerd"),
+		logger:        log.G(ctx).WithField("module", "libcontainerd"),
 		daemonStartCh: make(chan error, 1),
 		daemonStopCh:  make(chan struct{}),
 	}
@@ -88,7 +92,7 @@ func Start(ctx context.Context, rootDir, stateDir string, opts ...DaemonOpt) (Da
 	}
 	r.setDefaults()
 
-	if err := system.MkdirAll(stateDir, 0700); err != nil {
+	if err := system.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
 
@@ -108,6 +112,7 @@ func Start(ctx context.Context, rootDir, stateDir string, opts ...DaemonOpt) (Da
 
 	return r, nil
 }
+
 func (r *remote) WaitTimeout(d time.Duration) error {
 	timeout := time.NewTimer(d)
 	defer timeout.Stop()
@@ -126,7 +131,7 @@ func (r *remote) Address() string {
 }
 
 func (r *remote) getContainerdConfig() (string, error) {
-	f, err := os.OpenFile(r.configFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(r.configFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to open containerd config file (%s)", r.configFile)
 	}
@@ -185,12 +190,13 @@ func (r *remote) startContainerd() error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		err := cmd.Start()
-		startedCh <- err
 		if err != nil {
+			startedCh <- err
 			return
 		}
-
 		r.daemonWaitCh = make(chan struct{})
+		startedCh <- nil
+
 		// Reap our child when needed
 		if err := cmd.Wait(); err != nil {
 			r.logger.WithError(err).Errorf("containerd did not exit successfully")
@@ -207,9 +213,8 @@ func (r *remote) startContainerd() error {
 		r.logger.WithError(err).Warn("failed to adjust OOM score")
 	}
 
-	err = pidfile.Write(r.pidFile, r.daemonPid)
-	if err != nil {
-		process.Kill(r.daemonPid)
+	if err := pidfile.Write(r.pidFile, r.daemonPid); err != nil {
+		_ = process.Kill(r.daemonPid)
 		return errors.Wrap(err, "libcontainerd: failed to save daemon pid to disk")
 	}
 
@@ -293,7 +298,17 @@ func (r *remote) monitorDaemon(ctx context.Context) {
 				continue
 			}
 
-			client, err = containerd.New(r.GRPC.Address, containerd.WithTimeout(60*time.Second))
+			client, err = containerd.New(
+				r.GRPC.Address,
+				containerd.WithTimeout(60*time.Second),
+				containerd.WithDialOpts([]grpc.DialOption{
+					grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),   //nolint:staticcheck // TODO(thaJeztah): ignore SA1019 for deprecated options: see https://github.com/moby/moby/issues/47437
+					grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()), //nolint:staticcheck // TODO(thaJeztah): ignore SA1019 for deprecated options: see https://github.com/moby/moby/issues/47437
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+					grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(defaults.DefaultMaxRecvMsgSize)),
+					grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(defaults.DefaultMaxSendMsgSize)),
+				}),
+			)
 			if err != nil {
 				r.logger.WithError(err).Error("failed connecting to containerd")
 				delay = 100 * time.Millisecond

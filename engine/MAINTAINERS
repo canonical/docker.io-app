@@ -24,15 +24,18 @@
 	# subsystem maintainers accountable. If ownership is unclear, they are the de facto owners.
 
 		people = [
+			"akerouanton",
 			"akihirosuda",
 			"anusha",
 			"coolljt0725",
 			"corhere",
 			"cpuguy83",
+			"crazy-max",
 			"estesp",
 			"johnstep",
 			"justincormack",
 			"kolyshkin",
+			"laurazard",
 			"mhbauer",
 			"neersighted",
 			"rumpl",
@@ -63,17 +66,16 @@
 	# - close an issue or pull request when it's inappropriate or off-topic
 
 		people = [
-		    "akerouanton",
 			"alexellis",
 			"andrewhsu",
 			"bsousaa",
-			"crazy-max",
+			"dmcgowan",
 			"fntlnz",
 			"gianarb",
-			"laurazard",
 			"olljanat",
 			"programmerq",
 			"ripcurld",
+			"robmry",
 			"sam-thibault",
 			"samwhited",
 			"thajeztah"
@@ -357,6 +359,11 @@
 	Email = "dnephin@gmail.com"
 	GitHub = "dnephin"
 
+	[people.dmcgowan]
+	Name = "Derek McGowan"
+	Email = "derek@mcgstyle.net"
+	GitHub = "dmcgowan"
+
 	[people.duglin]
 	Name = "Doug Davis"
 	Email = "dug@us.ibm.com"
@@ -459,7 +466,7 @@
 
 	[people.neersighted]
 	Name = "Bjorn Neergaard"
-	Email = "bneergaard@mirantis.com"
+	Email = "bjorn@neersighted.com"
 	GitHub = "neersighted"
 
 	[people.olljanat]
@@ -471,6 +478,11 @@
 	Name = "Jeff Anderson"
 	Email = "jeff@docker.com"
 	GitHub = "programmerq"
+
+	[people.robmry]
+	Name = "Rob Murray"
+	Email = "rob.murray@docker.com"
+	GitHub = "robmry"
 
 	[people.ripcurld]
 	Name = "Boaz Shuster"

@@ -1,9 +1,9 @@
 //go:build linux || freebsd
-// +build linux freebsd
 
 package libnetwork
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,11 +12,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/types"
 	"github.com/docker/docker/pkg/reexec"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -65,11 +65,11 @@ func setKey() error {
 		return err
 	}
 
-	return SetExternalKey(shortCtlrID, containerID, fmt.Sprintf("/proc/%d/ns/net", state.Pid), *execRoot)
+	return setExternalKey(shortCtlrID, containerID, fmt.Sprintf("/proc/%d/ns/net", state.Pid), *execRoot)
 }
 
-// SetExternalKey provides a convenient way to set an External key to a sandbox
-func SetExternalKey(shortCtlrID string, containerID string, key string, execRoot string) error {
+// setExternalKey provides a convenient way to set an External key to a sandbox
+func setExternalKey(shortCtlrID string, containerID string, key string, execRoot string) error {
 	uds := filepath.Join(execRoot, execSubdir, shortCtlrID+".sock")
 	c, err := net.Dial("unix", uds)
 	if err != nil {
@@ -105,7 +105,7 @@ func (c *Controller) startExternalKeyListener() error {
 		execRoot = v
 	}
 	udsBase := filepath.Join(execRoot, execSubdir)
-	if err := os.MkdirAll(udsBase, 0600); err != nil {
+	if err := os.MkdirAll(udsBase, 0o600); err != nil {
 		return err
 	}
 	shortCtlrID := stringid.TruncateID(c.id)
@@ -114,7 +114,7 @@ func (c *Controller) startExternalKeyListener() error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(uds, 0600); err != nil {
+	if err := os.Chmod(uds, 0o600); err != nil {
 		l.Close()
 		return err
 	}
@@ -131,10 +131,11 @@ func (c *Controller) acceptClientConnections(sock string, l net.Listener) {
 		conn, err := l.Accept()
 		if err != nil {
 			if _, err1 := os.Stat(sock); os.IsNotExist(err1) {
-				logrus.Debugf("Unix socket %s doesn't exist. cannot accept client connections", sock)
+				// This happens when the socket is closed by the daemon, eg. during shutdown.
+				log.G(context.TODO()).Debugf("Unix socket %s was closed. The external key listener will stop.", sock)
 				return
 			}
-			logrus.Errorf("Error accepting connection %v", err)
+			log.G(context.TODO()).Errorf("Error accepting connection %v", err)
 			continue
 		}
 		go func() {
@@ -148,7 +149,7 @@ func (c *Controller) acceptClientConnections(sock string, l net.Listener) {
 
 			_, err = conn.Write([]byte(ret))
 			if err != nil {
-				logrus.Errorf("Error returning to the client %v", err)
+				log.G(context.TODO()).Errorf("Error returning to the client %v", err)
 			}
 		}()
 	}
@@ -164,15 +165,11 @@ func (c *Controller) processExternalKey(conn net.Conn) error {
 	if err = json.Unmarshal(buf[0:nr], &s); err != nil {
 		return err
 	}
-
-	var sandbox *Sandbox
-	search := SandboxContainerWalker(&sandbox, s.ContainerID)
-	c.WalkSandboxes(search)
-	if sandbox == nil {
-		return types.BadRequestErrorf("no sandbox present for %s", s.ContainerID)
+	sb, err := c.GetSandbox(s.ContainerID)
+	if err != nil {
+		return types.InvalidParameterErrorf("failed to get sandbox for %s", s.ContainerID)
 	}
-
-	return sandbox.SetKey(s.Key)
+	return sb.SetKey(s.Key)
 }
 
 func (c *Controller) stopExternalKeyListener() {

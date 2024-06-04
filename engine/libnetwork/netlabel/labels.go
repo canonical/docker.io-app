@@ -44,8 +44,11 @@ const (
 	// ContainerIfacePrefix can be used to override the interface prefix used inside the container
 	ContainerIfacePrefix = Prefix + ".container_iface_prefix"
 
-	// HostIP is the Source-IP Address used to SNAT container traffic
-	HostIP = Prefix + ".host_ipv4"
+	// HostIPv4 is the Source-IPv4 Address used to SNAT IPv4 container traffic
+	HostIPv4 = Prefix + ".host_ipv4"
+
+	// HostIPv6 is the Source-IPv6 Address used to SNAT IPv6 container traffic
+	HostIPv6 = Prefix + ".host_ipv6"
 
 	// LocalKVClient constants represents the local kv store client
 	LocalKVClient = DriverPrivatePrefix + "localkv_client"

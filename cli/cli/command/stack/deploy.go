@@ -6,9 +6,7 @@ import (
 	"github.com/docker/cli/cli/command/stack/loader"
 	"github.com/docker/cli/cli/command/stack/options"
 	"github.com/docker/cli/cli/command/stack/swarm"
-	composetypes "github.com/docker/cli/cli/compose/types"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 func newDeployCommand(dockerCli command.Cli) *cobra.Command {
@@ -28,7 +26,7 @@ func newDeployCommand(dockerCli command.Cli) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return swarm.RunDeploy(dockerCli, opts, config)
+			return swarm.RunDeploy(cmd.Context(), dockerCli, cmd.Flags(), &opts, config)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			return completeNames(dockerCli)(cmd, args, toComplete)
@@ -44,12 +42,7 @@ func newDeployCommand(dockerCli command.Cli) *cobra.Command {
 	flags.StringVar(&opts.ResolveImage, "resolve-image", swarm.ResolveImageAlways,
 		`Query the registry to resolve image digest and supported platforms ("`+swarm.ResolveImageAlways+`", "`+swarm.ResolveImageChanged+`", "`+swarm.ResolveImageNever+`")`)
 	flags.SetAnnotation("resolve-image", "version", []string{"1.30"})
+	flags.BoolVarP(&opts.Detach, "detach", "d", true, "Exit immediately instead of waiting for the stack services to converge")
+	flags.BoolVarP(&opts.Quiet, "quiet", "q", false, "Suppress progress output")
 	return cmd
-}
-
-// RunDeploy performs a stack deploy against the specified swarm cluster.
-//
-// Deprecated: use [swarm.RunDeploy] instead.
-func RunDeploy(dockerCli command.Cli, _ *pflag.FlagSet, config *composetypes.Config, opts options.Deploy) error {
-	return swarm.RunDeploy(dockerCli, opts, config)
 }

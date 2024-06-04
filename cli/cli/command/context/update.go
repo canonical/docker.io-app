@@ -47,26 +47,16 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	}
 	flags := cmd.Flags()
 	flags.StringVar(&opts.Description, "description", "", "Description of the context")
-	flags.String(
-		"default-stack-orchestrator", "",
-		"Default orchestrator for stack operations to use with this context (swarm|kubernetes|all)",
-	)
-	flags.SetAnnotation("default-stack-orchestrator", "deprecated", nil)
-	flags.MarkDeprecated("default-stack-orchestrator", "option will be ignored")
 	flags.StringToStringVar(&opts.Docker, "docker", nil, "set the docker endpoint")
-	flags.StringToString("kubernetes", nil, "set the kubernetes endpoint")
-	flags.SetAnnotation("kubernetes", "kubernetes", nil)
-	flags.SetAnnotation("kubernetes", "deprecated", nil)
-	flags.MarkDeprecated("kubernetes", "option will be ignored")
 	return cmd
 }
 
 // RunUpdate updates a Docker context
-func RunUpdate(cli command.Cli, o *UpdateOptions) error {
+func RunUpdate(dockerCLI command.Cli, o *UpdateOptions) error {
 	if err := store.ValidateContextName(o.Name); err != nil {
 		return err
 	}
-	s := cli.ContextStore()
+	s := dockerCLI.ContextStore()
 	c, err := s.GetMetadata(o.Name)
 	if err != nil {
 		return err
@@ -84,7 +74,7 @@ func RunUpdate(cli command.Cli, o *UpdateOptions) error {
 	tlsDataToReset := make(map[string]*store.EndpointTLSData)
 
 	if o.Docker != nil {
-		dockerEP, dockerTLS, err := getDockerEndpointMetadataAndTLS(cli, o.Docker)
+		dockerEP, dockerTLS, err := getDockerEndpointMetadataAndTLS(s, o.Docker)
 		if err != nil {
 			return errors.Wrap(err, "unable to create docker endpoint config")
 		}
@@ -103,8 +93,8 @@ func RunUpdate(cli command.Cli, o *UpdateOptions) error {
 		}
 	}
 
-	fmt.Fprintln(cli.Out(), o.Name)
-	fmt.Fprintf(cli.Err(), "Successfully updated context %q\n", o.Name)
+	fmt.Fprintln(dockerCLI.Out(), o.Name)
+	fmt.Fprintf(dockerCLI.Err(), "Successfully updated context %q\n", o.Name)
 	return nil
 }
 

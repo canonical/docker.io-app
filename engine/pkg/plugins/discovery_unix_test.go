@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package plugins // import "github.com/docker/docker/pkg/plugins"
 
@@ -16,8 +15,11 @@ import (
 
 func TestLocalSocket(t *testing.T) {
 	// TODO Windows: Enable a similar version for Windows named pipes
-	tmpdir, unregister, r := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	r := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	cases := []string{
 		filepath.Join(tmpdir, "echo.sock"),
@@ -25,7 +27,7 @@ func TestLocalSocket(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		if err := os.MkdirAll(filepath.Dir(c), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(c), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
@@ -63,8 +65,11 @@ func TestLocalSocket(t *testing.T) {
 }
 
 func TestScan(t *testing.T) {
-	tmpdir, unregister, r := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	r := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	pluginNames, err := r.Scan()
 	if err != nil {
@@ -78,12 +83,12 @@ func TestScan(t *testing.T) {
 	addr := "unix://var/lib/docker/plugins/echo.sock"
 	name := "echo"
 
-	err = os.MkdirAll(filepath.Dir(path), 0755)
+	err = os.MkdirAll(filepath.Dir(path), 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = os.WriteFile(path, []byte(addr), 0644)
+	err = os.WriteFile(path, []byte(addr), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,14 +109,17 @@ func TestScan(t *testing.T) {
 }
 
 func TestScanNotPlugins(t *testing.T) {
-	tmpdir, unregister, localRegistry := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	localRegistry := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	// not that `Setup()` above sets the sockets path and spec path dirs, which
 	// `Scan()` uses to find plugins to the returned `tmpdir`
 
 	notPlugin := filepath.Join(tmpdir, "not-a-plugin")
-	if err := os.MkdirAll(notPlugin, 0700); err != nil {
+	if err := os.MkdirAll(notPlugin, 0o700); err != nil {
 		t.Fatal(err)
 	}
 

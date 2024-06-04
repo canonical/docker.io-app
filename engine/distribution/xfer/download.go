@@ -7,13 +7,13 @@ import (
 	"io"
 	"time"
 
+	"github.com/containerd/log"
 	"github.com/docker/distribution"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
-	"github.com/sirupsen/logrus"
 )
 
 const maxDownloadAttempts = 5
@@ -96,7 +96,6 @@ type DownloadDescriptor interface {
 // registered layer. This method is called if a cast to DigestRegisterer is
 // successful.
 type DigestRegisterer interface {
-
 	// TODO existing implementations in distribution and builder-next swallow errors
 	// when registering the diffID. Consider changing the Registered signature
 	// to return the error.
@@ -135,7 +134,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 				l, err := ldm.layerStore.Get(getRootFS.ChainID())
 				if err == nil {
 					// Layer already exists.
-					logrus.Debugf("Layer already exists: %s", descriptor.ID())
+					log.G(ctx).Debugf("Layer already exists: %s", descriptor.ID())
 					progress.Update(progressOutput, descriptor.ID(), "Already exists")
 					if topLayer != nil {
 						layer.ReleaseAndLog(ldm.layerStore, topLayer)
@@ -288,12 +287,12 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				}
 
 				if _, isDNR := err.(DoNotRetry); isDNR || attempt >= ldm.maxDownloadAttempts {
-					logrus.Errorf("Download failed after %d attempts: %v", attempt, err)
+					log.G(context.TODO()).Errorf("Download failed after %d attempts: %v", attempt, err)
 					d.err = err
 					return
 				}
 
-				logrus.Infof("Download failed, retrying (%d/%d): %v", attempt, ldm.maxDownloadAttempts, err)
+				log.G(context.TODO()).Infof("Download failed, retrying (%d/%d): %v", attempt, ldm.maxDownloadAttempts, err)
 				delay := attempt * 5
 				ticker := time.NewTicker(ldm.waitDuration)
 				attempt++

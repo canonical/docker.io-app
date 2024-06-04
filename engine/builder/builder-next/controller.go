@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	ctd "github.com/containerd/containerd"
 	"github.com/containerd/containerd/content/local"
 	ctdmetadata "github.com/containerd/containerd/metadata"
+	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/snapshots"
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/builder/builder-next/adapters/containerimage"
@@ -38,17 +41,19 @@ import (
 	"github.com/moby/buildkit/frontend/gateway"
 	"github.com/moby/buildkit/frontend/gateway/forwarder"
 	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
+	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/bboltcachestorage"
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/entitlements"
-	"github.com/moby/buildkit/util/leaseutil"
 	"github.com/moby/buildkit/util/network/netproviders"
+	"github.com/moby/buildkit/util/tracing/detect"
 	"github.com/moby/buildkit/worker"
 	"github.com/moby/buildkit/worker/containerd"
 	"github.com/moby/buildkit/worker/label"
 	"github.com/pkg/errors"
 	"go.etcd.io/bbolt"
 	bolt "go.etcd.io/bbolt"
+	"go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/apicaps"
@@ -59,6 +64,14 @@ func newController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control
 		return newSnapshotterController(ctx, rt, opt)
 	}
 	return newGraphDriverController(ctx, rt, opt)
+}
+
+func getTraceExporter(ctx context.Context) trace.SpanExporter {
+	span, _, err := detect.Exporter()
+	if err != nil {
+		log.G(ctx).WithError(err).Error("Failed to detect trace exporter for buildkit controller")
+	}
+	return span
 }
 
 func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
@@ -79,12 +92,21 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	nc := netproviders.Opt{
 		Mode: "host",
 	}
+
+	// HACK! Windows doesn't have 'host' mode networking.
+	if runtime.GOOS == "windows" {
+		nc = netproviders.Opt{
+			Mode: "auto",
+		}
+	}
+
 	dns := getDNSConfig(opt.DNSConfig)
 
 	wo, err := containerd.NewWorkerOpt(opt.Root, opt.ContainerdAddress, opt.Snapshotter, opt.ContainerdNamespace,
 		opt.Rootless, map[string]string{
 			label.Snapshotter: opt.Snapshotter,
-		}, dns, nc, opt.ApparmorProfile, false, nil, "", ctd.WithTimeout(60*time.Second))
+		}, dns, nc, opt.ApparmorProfile, false, nil, "", nil, ctd.WithTimeout(60*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +114,11 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	policy, err := getGCPolicy(opt.BuilderConfig, opt.Root)
 	if err != nil {
 		return nil, err
+	}
+
+	// make sure platforms are normalized moby/buildkit#4391
+	for i, p := range wo.Platforms {
+		wo.Platforms[i] = platforms.Normalize(p)
 	}
 
 	wo.GCPolicy = policy
@@ -116,15 +143,16 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 	frontends := map[string]frontend.Frontend{
-		"dockerfile.v0": forwarder.NewGatewayForwarder(wc, dockerfile.Build),
-		"gateway.v0":    gateway.NewGatewayFrontend(wc),
+		"dockerfile.v0": forwarder.NewGatewayForwarder(wc.Infos(), dockerfile.Build),
+		"gateway.v0":    gateway.NewGatewayFrontend(wc.Infos()),
 	}
 
 	return control.NewController(control.Opt{
 		SessionManager:   opt.SessionManager,
 		WorkerController: wc,
 		Frontends:        frontends,
-		CacheKeyStorage:  cacheStorage,
+		CacheManager:     solver.NewCacheManager(ctx, "local", cacheStorage, worker.NewCacheResultStorage(wc)),
+		CacheStore:       cacheStorage,
 		ResolveCacheImporterFuncs: map[string]remotecache.ResolveCacheImporterFunc{
 			"gha":      gha.ResolveCacheImporterFunc(),
 			"local":    localremotecache.ResolveCacheImporterFunc(opt.SessionManager),
@@ -136,11 +164,12 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 			"local":    localremotecache.ResolveCacheExporterFunc(opt.SessionManager),
 			"registry": registryremotecache.ResolveCacheExporterFunc(opt.SessionManager, opt.RegistryHosts),
 		},
-		Entitlements:  getEntitlements(opt.BuilderConfig),
-		HistoryDB:     historyDB,
-		HistoryConfig: historyConf,
-		LeaseManager:  wo.LeaseManager,
-		ContentStore:  wo.ContentStore,
+		Entitlements:   getEntitlements(opt.BuilderConfig),
+		HistoryDB:      historyDB,
+		HistoryConfig:  historyConf,
+		LeaseManager:   wo.LeaseManager,
+		ContentStore:   wo.ContentStore,
+		TraceCollector: getTraceExporter(ctx),
 	})
 }
 
@@ -162,7 +191,7 @@ func openHistoryDB(root string, cfg *config.BuilderHistoryConfig) (*bolt.DB, *bk
 }
 
 func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
-	if err := os.MkdirAll(opt.Root, 0711); err != nil {
+	if err := os.MkdirAll(opt.Root, 0o711); err != nil {
 		return nil, err
 	}
 
@@ -190,28 +219,26 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, errors.Errorf("could not access graphdriver")
 	}
 
-	store, err := local.NewStore(filepath.Join(root, "content"))
+	innerStore, err := local.NewStore(filepath.Join(root, "content"))
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := bolt.Open(filepath.Join(root, "containerdmeta.db"), 0644, nil)
+	db, err := bolt.Open(filepath.Join(root, "containerdmeta.db"), 0o644, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	mdb := ctdmetadata.NewDB(db, store, map[string]snapshots.Snapshotter{})
+	mdb := ctdmetadata.NewDB(db, innerStore, map[string]snapshots.Snapshotter{})
 
-	store = containerdsnapshot.NewContentStore(mdb.ContentStore(), "buildkit")
-
-	lm := leaseutil.WithNamespace(ctdmetadata.NewLeaseManager(mdb), "buildkit")
+	store := containerdsnapshot.NewContentStore(mdb.ContentStore(), "buildkit")
 
 	snapshotter, lm, err := snapshot.NewSnapshotter(snapshot.Opt{
 		GraphDriver:     driver,
 		LayerStore:      dist.LayerStore,
 		Root:            root,
 		IdentityMapping: opt.IdentityMapping,
-	}, lm)
+	}, ctdmetadata.NewLeaseManager(mdb), "buildkit")
 	if err != nil {
 		return nil, err
 	}
@@ -276,9 +303,11 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	}
 
 	exp, err := mobyexporter.New(mobyexporter.Opt{
-		ImageStore:  dist.ImageStore,
-		Differ:      differ,
-		ImageTagger: opt.ImageTagger,
+		ImageStore:   dist.ImageStore,
+		ContentStore: store,
+		Differ:       differ,
+		ImageTagger:  opt.ImageTagger,
+		LeaseManager: lm,
 	})
 	if err != nil {
 		return nil, err
@@ -338,15 +367,16 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	wc.Add(w)
 
 	frontends := map[string]frontend.Frontend{
-		"dockerfile.v0": forwarder.NewGatewayForwarder(wc, dockerfile.Build),
-		"gateway.v0":    gateway.NewGatewayFrontend(wc),
+		"dockerfile.v0": forwarder.NewGatewayForwarder(wc.Infos(), dockerfile.Build),
+		"gateway.v0":    gateway.NewGatewayFrontend(wc.Infos()),
 	}
 
 	return control.NewController(control.Opt{
 		SessionManager:   opt.SessionManager,
 		WorkerController: wc,
 		Frontends:        frontends,
-		CacheKeyStorage:  cacheStorage,
+		CacheManager:     solver.NewCacheManager(ctx, "local", cacheStorage, worker.NewCacheResultStorage(wc)),
+		CacheStore:       cacheStorage,
 		ResolveCacheImporterFuncs: map[string]remotecache.ResolveCacheImporterFunc{
 			"registry": localinlinecache.ResolveCacheImporterFunc(opt.SessionManager, opt.RegistryHosts, store, dist.ReferenceStore, dist.ImageStore),
 			"local":    localremotecache.ResolveCacheImporterFunc(opt.SessionManager),
@@ -354,11 +384,12 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		ResolveCacheExporterFuncs: map[string]remotecache.ResolveCacheExporterFunc{
 			"inline": inlineremotecache.ResolveCacheExporterFunc(),
 		},
-		Entitlements:  getEntitlements(opt.BuilderConfig),
-		LeaseManager:  lm,
-		ContentStore:  store,
-		HistoryDB:     historyDB,
-		HistoryConfig: historyConf,
+		Entitlements:   getEntitlements(opt.BuilderConfig),
+		LeaseManager:   lm,
+		ContentStore:   store,
+		HistoryDB:      historyDB,
+		HistoryConfig:  historyConf,
+		TraceCollector: getTraceExporter(ctx),
 	})
 }
 

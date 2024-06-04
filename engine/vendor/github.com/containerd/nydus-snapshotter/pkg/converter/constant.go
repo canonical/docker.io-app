@@ -17,9 +17,11 @@ const (
 	LayerAnnotationNydusBlob          = "containerd.io/snapshot/nydus-blob"
 	LayerAnnotationNydusBlobDigest    = "containerd.io/snapshot/nydus-blob-digest"
 	LayerAnnotationNydusBlobSize      = "containerd.io/snapshot/nydus-blob-size"
-	LayerAnnotationNydusBlobIDs       = "containerd.io/snapshot/nydus-blob-ids"
 	LayerAnnotationNydusBootstrap     = "containerd.io/snapshot/nydus-bootstrap"
 	LayerAnnotationNydusSourceChainID = "containerd.io/snapshot/nydus-source-chainid"
+	LayerAnnotationNydusEncryptedBlob = "containerd.io/snapshot/nydus-encrypted-blob"
+	LayerAnnotationNydusSourceDigest  = "containerd.io/snapshot/nydus-source-digest"
+	LayerAnnotationNydusTargetDigest  = "containerd.io/snapshot/nydus-target-digest"
 
 	LayerAnnotationNydusReferenceBlobIDs = "containerd.io/snapshot/nydus-reference-blob-ids"
 

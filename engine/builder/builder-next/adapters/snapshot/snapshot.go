@@ -16,16 +16,20 @@ import (
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/snapshot"
+	"github.com/moby/buildkit/util/leaseutil"
+	"github.com/moby/locker"
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	bolt "go.etcd.io/bbolt"
 )
 
-var keyParent = []byte("parent")
-var keyCommitted = []byte("committed")
-var keyIsCommitted = []byte("iscommitted")
-var keyChainID = []byte("chainid")
-var keySize = []byte("size")
+var (
+	keyParent      = []byte("parent")
+	keyCommitted   = []byte("committed")
+	keyIsCommitted = []byte("iscommitted")
+	keyChainID     = []byte("chainid")
+	keySize        = []byte("size")
+)
 
 // Opt defines options for creating the snapshotter
 type Opt struct {
@@ -42,22 +46,23 @@ type graphIDRegistrar interface {
 }
 
 type checksumCalculator interface {
-	ChecksumForGraphID(id, parent, oldTarDataPath, newTarDataPath string) (diffID layer.DiffID, size int64, err error)
+	ChecksumForGraphID(id, parent, newTarDataPath string) (diffID layer.DiffID, size int64, err error)
 }
 
 type snapshotter struct {
 	opt Opt
 
-	refs map[string]layer.Layer
-	db   *bolt.DB
-	mu   sync.Mutex
-	reg  graphIDRegistrar
+	refs              map[string]layer.Layer
+	db                *bolt.DB
+	mu                sync.Mutex
+	reg               graphIDRegistrar
+	layerCreateLocker *locker.Locker
 }
 
 // NewSnapshotter creates a new snapshotter
-func NewSnapshotter(opt Opt, prevLM leases.Manager) (snapshot.Snapshotter, leases.Manager, error) {
+func NewSnapshotter(opt Opt, prevLM leases.Manager, ns string) (snapshot.Snapshotter, *leaseutil.Manager, error) {
 	dbPath := filepath.Join(opt.Root, "snapshots.db")
-	db, err := bolt.Open(dbPath, 0600, nil)
+	db, err := bolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to open database file %s", dbPath)
 	}
@@ -68,13 +73,15 @@ func NewSnapshotter(opt Opt, prevLM leases.Manager) (snapshot.Snapshotter, lease
 	}
 
 	s := &snapshotter{
-		opt:  opt,
-		db:   db,
-		refs: map[string]layer.Layer{},
-		reg:  reg,
+		opt:               opt,
+		db:                db,
+		refs:              map[string]layer.Layer{},
+		reg:               reg,
+		layerCreateLocker: locker.New(),
 	}
 
-	lm := newLeaseManager(s, prevLM)
+	slm := newLeaseManager(s, prevLM)
+	lm := leaseutil.WithNamespace(slm, ns)
 
 	ll, err := lm.List(context.TODO())
 	if err != nil {
@@ -87,7 +94,7 @@ func NewSnapshotter(opt Opt, prevLM leases.Manager) (snapshot.Snapshotter, lease
 		}
 		for _, r := range rr {
 			if r.Type == "snapshots/default" {
-				lm.addRef(l.ID, r.ID)
+				slm.addRef(l.ID, r.ID)
 			}
 		}
 	}

@@ -1,5 +1,4 @@
 //go:build linux && cgo && !static_build && journald
-// +build linux,cgo,!static_build,journald
 
 package sdjournal // import "github.com/docker/docker/daemon/logger/journald/internal/sdjournal"
 
@@ -11,6 +10,7 @@ package sdjournal // import "github.com/docker/docker/daemon/logger/journald/int
 // 	return sd_journal_add_match(j, _GoStringPtr(s), _GoStringLen(s));
 // }
 import "C"
+
 import (
 	"fmt"
 	"runtime"

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/pkg/ioutils"
@@ -83,6 +83,7 @@ type Daemon struct {
 	args                       []string
 	extraEnv                   []string
 	containerdSocket           string
+	usernsRemap                string
 	rootlessUser               *user.User
 	rootlessXDGRuntimeDir      string
 
@@ -94,7 +95,7 @@ type Daemon struct {
 	DataPathPort    uint32
 	OOMScoreAdjust  int
 	// cached information
-	CachedInfo types.Info
+	CachedInfo system.Info
 }
 
 // NewDaemon returns a Daemon instance to be used for testing.
@@ -103,7 +104,7 @@ type Daemon struct {
 func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 	storageDriver := os.Getenv("DOCKER_GRAPHDRIVER")
 
-	if err := os.MkdirAll(SockRoot, 0700); err != nil {
+	if err := os.MkdirAll(SockRoot, 0o700); err != nil {
 		return nil, errors.Wrapf(err, "failed to create daemon socket root %q", SockRoot)
 	}
 
@@ -114,7 +115,7 @@ func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 		return nil, err
 	}
 	daemonRoot := filepath.Join(daemonFolder, "root")
-	if err := os.MkdirAll(daemonRoot, 0755); err != nil {
+	if err := os.MkdirAll(daemonRoot, 0o755); err != nil {
 		return nil, errors.Wrapf(err, "failed to create daemon root %q", daemonRoot)
 	}
 
@@ -144,7 +145,7 @@ func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 	}
 
 	if d.rootlessUser != nil {
-		if err := os.Chmod(SockRoot, 0777); err != nil {
+		if err := os.Chmod(SockRoot, 0o777); err != nil {
 			return nil, err
 		}
 		uid, err := strconv.Atoi(d.rootlessUser.Uid)
@@ -161,20 +162,22 @@ func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 		if err := os.Chown(d.Root, uid, gid); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(d.execRoot), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(d.execRoot), 0o700); err != nil {
 			return nil, err
 		}
 		if err := os.Chown(filepath.Dir(d.execRoot), uid, gid); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(d.execRoot, 0700); err != nil {
+		if err := os.MkdirAll(d.execRoot, 0o700); err != nil {
 			return nil, err
 		}
 		if err := os.Chown(d.execRoot, uid, gid); err != nil {
 			return nil, err
 		}
-		d.rootlessXDGRuntimeDir = filepath.Join(d.Folder, "xdgrun")
-		if err := os.MkdirAll(d.rootlessXDGRuntimeDir, 0700); err != nil {
+		// $XDG_RUNTIME_DIR mustn't be too long, as ${XDG_RUNTIME_DIR/dockerd-rootless
+		// contains Unix sockets
+		d.rootlessXDGRuntimeDir = filepath.Join(os.TempDir(), "xdgrun-"+id)
+		if err := os.MkdirAll(d.rootlessXDGRuntimeDir, 0o700); err != nil {
 			return nil, err
 		}
 		if err := os.Chown(d.rootlessXDGRuntimeDir, uid, gid); err != nil {
@@ -335,6 +338,17 @@ func ScanLogsMatchString(contains string) func(string) bool {
 	}
 }
 
+// ScanLogsMatchCount returns a function that can be used to scan the daemon logs until the passed in matcher function matches `count` times
+func ScanLogsMatchCount(f func(string) bool, count int) func(string) bool {
+	matched := 0
+	return func(line string) bool {
+		if f(line) {
+			matched++
+		}
+		return matched == count
+	}
+}
+
 // ScanLogsMatchAll returns a function that can be used to scan the daemon logs until *all* the passed in strings are matched
 func ScanLogsMatchAll(contains ...string) func(string) bool {
 	matched := make(map[string]bool)
@@ -408,7 +422,7 @@ func (d *Daemon) Start(t testing.TB, args ...string) {
 // StartWithError starts the daemon and return once it is ready to receive requests.
 // It returns an error in case it couldn't start.
 func (d *Daemon) StartWithError(args ...string) error {
-	logFile, err := os.OpenFile(filepath.Join(d.Folder, "docker.log"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	logFile, err := os.OpenFile(filepath.Join(d.Folder, "docker.log"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return errors.Wrapf(err, "[%s] failed to create logfile", d.id)
 	}
@@ -457,6 +471,10 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 		d.args = append(d.args, "--containerd", d.containerdSocket)
 	}
 
+	if d.usernsRemap != "" {
+		d.args = append(d.args, "--userns-remap", d.usernsRemap)
+	}
+
 	if d.defaultCgroupNamespaceMode != "" {
 		d.args = append(d.args, "--default-cgroupns-mode", d.defaultCgroupNamespaceMode)
 	}
@@ -496,6 +514,7 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 	cmd := exec.Command(dockerdBinary, d.args...)
 	cmd.Env = append(os.Environ(), "DOCKER_SERVICE_PREFER_OFFLINE_IMAGE=1")
 	cmd.Env = append(cmd.Env, d.extraEnv...)
+	cmd.Env = append(cmd.Env, "OTEL_SERVICE_NAME=dockerd-"+d.id)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	d.logFile = out
@@ -581,10 +600,10 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 
 // StartWithBusybox will first start the daemon with Daemon.Start()
 // then save the busybox image from the main daemon and load it into this Daemon instance.
-func (d *Daemon) StartWithBusybox(t testing.TB, arg ...string) {
+func (d *Daemon) StartWithBusybox(ctx context.Context, t testing.TB, arg ...string) {
 	t.Helper()
 	d.Start(t, arg...)
-	d.LoadBusybox(t)
+	d.LoadBusybox(ctx, t)
 }
 
 // Kill will send a SIGKILL to the daemon
@@ -764,7 +783,7 @@ func (d *Daemon) ReloadConfig() error {
 	errCh := make(chan error, 1)
 	started := make(chan struct{})
 	go func() {
-		_, body, err := request.Get("/events", request.Host(d.Sock()))
+		_, body, err := request.Get(context.TODO(), "/events", request.Host(d.Sock()))
 		close(started)
 		if err != nil {
 			errCh <- err
@@ -781,7 +800,7 @@ func (d *Daemon) ReloadConfig() error {
 			if e.Type != events.DaemonEventType {
 				continue
 			}
-			if e.Action != "reload" {
+			if e.Action != events.ActionReload {
 				continue
 			}
 			close(errCh) // notify that we are done
@@ -805,13 +824,12 @@ func (d *Daemon) ReloadConfig() error {
 }
 
 // LoadBusybox image into the daemon
-func (d *Daemon) LoadBusybox(t testing.TB) {
+func (d *Daemon) LoadBusybox(ctx context.Context, t testing.TB) {
 	t.Helper()
 	clientHost, err := client.NewClientWithOpts(client.FromEnv)
 	assert.NilError(t, err, "[%s] failed to create client", d.id)
 	defer clientHost.Close()
 
-	ctx := context.Background()
 	reader, err := clientHost.ImageSave(ctx, []string{"busybox:latest"})
 	assert.NilError(t, err, "[%s] failed to download busybox", d.id)
 	defer reader.Close()
@@ -917,7 +935,7 @@ func (d *Daemon) queryRootDir() (string, error) {
 }
 
 // Info returns the info struct for this daemon
-func (d *Daemon) Info(t testing.TB) types.Info {
+func (d *Daemon) Info(t testing.TB) system.Info {
 	t.Helper()
 	c := d.NewClientT(t)
 	info, err := c.Info(context.Background())
@@ -940,7 +958,7 @@ func (d *Daemon) TamperWithContainerConfig(t testing.TB, containerID string, tam
 	tamper(&c)
 	configBytes, err = json.Marshal(&c)
 	assert.NilError(t, err)
-	assert.NilError(t, os.WriteFile(configPath, configBytes, 0600))
+	assert.NilError(t, os.WriteFile(configPath, configBytes, 0o600))
 }
 
 // cleanupRaftDir removes swarmkit wal files if present

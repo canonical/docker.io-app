@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -15,7 +16,6 @@ import (
 	swarmtypes "github.com/docker/docker/api/types/swarm"
 	"github.com/fvbommel/sortorder"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 func newServicesCommand(dockerCli command.Cli) *cobra.Command {
@@ -30,7 +30,7 @@ func newServicesCommand(dockerCli command.Cli) *cobra.Command {
 			if err := validateStackName(opts.Namespace); err != nil {
 				return err
 			}
-			return RunServices(dockerCli, opts)
+			return RunServices(cmd.Context(), dockerCli, opts)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			return completeNames(dockerCli)(cmd, args, toComplete)
@@ -44,19 +44,12 @@ func newServicesCommand(dockerCli command.Cli) *cobra.Command {
 }
 
 // RunServices performs a stack services against the specified swarm cluster
-func RunServices(dockerCli command.Cli, opts options.Services) error {
-	services, err := swarm.GetServices(dockerCli, opts)
+func RunServices(ctx context.Context, dockerCli command.Cli, opts options.Services) error {
+	services, err := swarm.GetServices(ctx, dockerCli, opts)
 	if err != nil {
 		return err
 	}
 	return formatWrite(dockerCli, services, opts)
-}
-
-// GetServices returns the services for the specified swarm cluster.
-//
-// Deprecated: use [swarm.GetServices] instead.
-func GetServices(dockerCli command.Cli, _ *pflag.FlagSet, opts options.Services) ([]swarmtypes.Service, error) {
-	return swarm.GetServices(dockerCli, opts)
 }
 
 func formatWrite(dockerCli command.Cli, services []swarmtypes.Service, opts options.Services) error {

@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 // TODO Windows: Some of these tests may be salvageable and portable to Windows.
 
@@ -473,7 +472,7 @@ func TestCopyCaseD(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -524,7 +523,7 @@ func TestCopyCaseDFSym(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -694,7 +693,7 @@ func TestCopyCaseG(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -740,7 +739,7 @@ func TestCopyCaseGFSym(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -906,7 +905,7 @@ func TestCopyCaseJ(t *testing.T) {
 	var err error
 
 	// first to create an empty dir
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -923,7 +922,7 @@ func TestCopyCaseJ(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -957,7 +956,7 @@ func TestCopyCaseJFSym(t *testing.T) {
 	var err error
 
 	// first to create an empty dir
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 
@@ -974,7 +973,7 @@ func TestCopyCaseJFSym(t *testing.T) {
 		t.Fatalf("unable to remove dstDir: %s", err)
 	}
 
-	if err = os.MkdirAll(dstDir, os.FileMode(0755)); err != nil {
+	if err = os.MkdirAll(dstDir, os.FileMode(0o755)); err != nil {
 		t.Fatalf("unable to make dstDir: %s", err)
 	}
 

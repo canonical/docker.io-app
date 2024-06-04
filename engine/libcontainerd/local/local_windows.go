@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
 	cerrdefs "github.com/containerd/containerd/errdefs"
+	"github.com/containerd/log"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd/queue"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
@@ -26,7 +27,6 @@ import (
 	"github.com/docker/docker/pkg/system"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/windows"
 )
 
@@ -79,7 +79,7 @@ const defaultOwner = "docker"
 type client struct {
 	stateDir string
 	backend  libcontainerdtypes.Backend
-	logger   *logrus.Entry
+	logger   *log.Entry
 	eventQ   queue.Queue
 }
 
@@ -88,7 +88,7 @@ func NewClient(ctx context.Context, cli *containerd.Client, stateDir, ns string,
 	c := &client{
 		stateDir: stateDir,
 		backend:  b,
-		logger:   logrus.WithField("module", "libcontainerd").WithField("namespace", ns),
+		logger:   log.G(ctx).WithField("module", "libcontainerd").WithField("namespace", ns),
 	}
 
 	return c, nil
@@ -161,13 +161,13 @@ func (c *client) NewContainer(_ context.Context, id string, spec *specs.Spec, sh
 			ei := libcontainerdtypes.EventInfo{
 				ContainerID: id,
 			}
-			c.logger.WithFields(logrus.Fields{
+			c.logger.WithFields(log.Fields{
 				"container": id,
 				"event":     libcontainerdtypes.EventCreate,
 			}).Info("sending event")
 			err := c.backend.ProcessEvent(id, libcontainerdtypes.EventCreate, ei)
 			if err != nil {
-				c.logger.WithError(err).WithFields(logrus.Fields{
+				c.logger.WithError(err).WithFields(log.Fields{
 					"container": id,
 					"event":     libcontainerdtypes.EventCreate,
 				}).Error("failed to process event")
@@ -355,7 +355,6 @@ func (c *client) createWindows(id string, spec *specs.Spec, runtimeOptions inter
 
 	logger.Debug("createWindows() completed successfully")
 	return ctr, nil
-
 }
 
 func (c *client) extractResourcesFromSpec(spec *specs.Spec, configuration *hcsshim.ContainerConfig) {
@@ -388,7 +387,7 @@ func (c *client) extractResourcesFromSpec(spec *specs.Spec, configuration *hcssh
 	}
 }
 
-func (ctr *container) Start(_ context.Context, _ string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (_ libcontainerdtypes.Task, retErr error) {
+func (ctr *container) NewTask(_ context.Context, _ string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (_ libcontainerdtypes.Task, retErr error) {
 	ctr.mu.Lock()
 	defer ctr.mu.Unlock()
 
@@ -497,14 +496,14 @@ func (ctr *container) Start(_ context.Context, _ string, withStdin bool, attachS
 			ProcessID:   t.id,
 			Pid:         uint32(pid),
 		}
-		ctr.client.logger.WithFields(logrus.Fields{
+		ctr.client.logger.WithFields(log.Fields{
 			"container":  ctr.id,
 			"event":      libcontainerdtypes.EventStart,
 			"event-info": ei,
 		}).Info("sending event")
 		err := ctr.client.backend.ProcessEvent(ei.ContainerID, libcontainerdtypes.EventStart, ei)
 		if err != nil {
-			ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container":  ei.ContainerID,
 				"event":      libcontainerdtypes.EventStart,
 				"event-info": ei,
@@ -513,6 +512,11 @@ func (ctr *container) Start(_ context.Context, _ string, withStdin bool, attachS
 	})
 	logger.Debug("start() completed")
 	return t, nil
+}
+
+func (*task) Start(context.Context) error {
+	// No-op on Windows.
+	return nil
 }
 
 func (ctr *container) Task(context.Context) (libcontainerdtypes.Task, error) {
@@ -561,7 +565,7 @@ func (t *task) Exec(ctx context.Context, processID string, spec *specs.Process, 
 	if err != nil {
 		return nil, err
 	}
-	logger := t.ctr.client.logger.WithFields(logrus.Fields{
+	logger := t.ctr.client.logger.WithFields(log.Fields{
 		"container": t.ctr.id,
 		"exec":      processID,
 	})
@@ -653,14 +657,14 @@ func (t *task) Exec(ctx context.Context, processID string, spec *specs.Process, 
 			ProcessID:   p.id,
 			Pid:         uint32(pid),
 		}
-		t.ctr.client.logger.WithFields(logrus.Fields{
+		t.ctr.client.logger.WithFields(log.Fields{
 			"container":  t.ctr.id,
 			"event":      libcontainerdtypes.EventExecAdded,
 			"event-info": ei,
 		}).Info("sending event")
 		err := t.ctr.client.backend.ProcessEvent(t.ctr.id, libcontainerdtypes.EventExecAdded, ei)
 		if err != nil {
-			t.ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			t.ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container":  t.ctr.id,
 				"event":      libcontainerdtypes.EventExecAdded,
 				"event-info": ei,
@@ -668,7 +672,7 @@ func (t *task) Exec(ctx context.Context, processID string, spec *specs.Process, 
 		}
 		err = t.ctr.client.backend.ProcessEvent(t.ctr.id, libcontainerdtypes.EventExecStarted, ei)
 		if err != nil {
-			t.ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			t.ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container":  t.ctr.id,
 				"event":      libcontainerdtypes.EventExecStarted,
 				"event-info": ei,
@@ -708,7 +712,7 @@ func (t *task) Kill(_ context.Context, signal syscall.Signal) error {
 		return err
 	}
 
-	logger := t.ctr.client.logger.WithFields(logrus.Fields{
+	logger := t.ctr.client.logger.WithFields(log.Fields{
 		"container": t.ctr.id,
 		"process":   t.id,
 		"pid":       t.Pid(),
@@ -747,7 +751,7 @@ func (p *process) Resize(_ context.Context, width, height uint32) error {
 		return errors.WithStack(errdefs.NotFound(errors.New("process not found")))
 	}
 
-	p.ctr.client.logger.WithFields(logrus.Fields{
+	p.ctr.client.logger.WithFields(log.Fields{
 		"container": p.ctr.id,
 		"process":   p.id,
 		"height":    height,
@@ -794,12 +798,12 @@ func (t *task) Pause(_ context.Context) error {
 			ContainerID: t.ctr.id,
 			ProcessID:   t.id,
 		})
-		t.ctr.client.logger.WithFields(logrus.Fields{
+		t.ctr.client.logger.WithFields(log.Fields{
 			"container": t.ctr.id,
 			"event":     libcontainerdtypes.EventPaused,
 		}).Info("sending event")
 		if err != nil {
-			t.ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			t.ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container": t.ctr.id,
 				"event":     libcontainerdtypes.EventPaused,
 			}).Error("failed to process event")
@@ -835,12 +839,12 @@ func (t *task) Resume(ctx context.Context) error {
 			ContainerID: t.ctr.id,
 			ProcessID:   t.id,
 		})
-		t.ctr.client.logger.WithFields(logrus.Fields{
+		t.ctr.client.logger.WithFields(log.Fields{
 			"container": t.ctr.id,
 			"event":     libcontainerdtypes.EventResumed,
 		}).Info("sending event")
 		if err != nil {
-			t.ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			t.ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container": t.ctr.id,
 				"event":     libcontainerdtypes.EventResumed,
 			}).Error("failed to process event")
@@ -1108,7 +1112,7 @@ func (ctr *container) terminateContainer() error {
 }
 
 func (p *process) reap() {
-	logger := p.ctr.client.logger.WithFields(logrus.Fields{
+	logger := p.ctr.client.logger.WithFields(log.Fields{
 		"container": p.ctr.id,
 		"process":   p.id,
 	})
@@ -1165,14 +1169,14 @@ func (p *process) reap() {
 			ExitedAt:    exitedAt,
 			Error:       eventErr,
 		}
-		p.ctr.client.logger.WithFields(logrus.Fields{
+		p.ctr.client.logger.WithFields(log.Fields{
 			"container":  p.ctr.id,
 			"event":      libcontainerdtypes.EventExit,
 			"event-info": ei,
 		}).Info("sending event")
 		err := p.ctr.client.backend.ProcessEvent(p.ctr.id, libcontainerdtypes.EventExit, ei)
 		if err != nil {
-			p.ctr.client.logger.WithError(err).WithFields(logrus.Fields{
+			p.ctr.client.logger.WithError(err).WithFields(log.Fields{
 				"container":  p.ctr.id,
 				"event":      libcontainerdtypes.EventExit,
 				"event-info": ei,
@@ -1199,7 +1203,7 @@ func (ctr *container) Delete(context.Context) error {
 	}
 
 	var (
-		logger = ctr.client.logger.WithFields(logrus.Fields{
+		logger = ctr.client.logger.WithFields(log.Fields{
 			"container": ctr.id,
 		})
 		thisErr error

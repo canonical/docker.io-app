@@ -11,6 +11,7 @@ import (
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/libnetwork"
+	nwconfig "github.com/docker/docker/libnetwork/config"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -24,16 +25,15 @@ func setupFakeDaemon(t *testing.T, c *container.Container) *Daemon {
 	root := t.TempDir()
 
 	rootfs := filepath.Join(root, "rootfs")
-	err := os.MkdirAll(rootfs, 0755)
+	err := os.MkdirAll(rootfs, 0o755)
 	assert.NilError(t, err)
 
-	netController, err := libnetwork.New()
+	netController, err := libnetwork.New(nwconfig.OptionDataDir(t.TempDir()))
 	assert.NilError(t, err)
 
 	d := &Daemon{
 		// some empty structs to avoid getting a panic
 		// caused by a null pointer dereference
-		configStore:   &config.Config{},
 		linkIndex:     newLinkIndex(),
 		netController: netController,
 		imageService:  &fakeImageService{},
@@ -93,7 +93,7 @@ func TestTmpfsDevShmNoDupMount(t *testing.T) {
 	}
 	d := setupFakeDaemon(t, c)
 
-	_, err := d.createSpec(context.TODO(), c)
+	_, err := d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.Check(t, err)
 }
 
@@ -111,7 +111,7 @@ func TestIpcPrivateVsReadonly(t *testing.T) {
 	}
 	d := setupFakeDaemon(t, c)
 
-	s, err := d.createSpec(context.TODO(), c)
+	s, err := d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.Check(t, err)
 
 	// Find the /dev/shm mount in ms, check it does not have ro
@@ -140,7 +140,7 @@ func TestSysctlOverride(t *testing.T) {
 	d := setupFakeDaemon(t, c)
 
 	// Ensure that the implicit sysctl is set correctly.
-	s, err := d.createSpec(context.TODO(), c)
+	s, err := d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, s.Hostname, "foobar")
 	assert.Equal(t, s.Linux.Sysctl["kernel.domainname"], c.Config.Domainname)
@@ -156,15 +156,14 @@ func TestSysctlOverride(t *testing.T) {
 	assert.Assert(t, c.HostConfig.Sysctls["kernel.domainname"] != c.Config.Domainname)
 	c.HostConfig.Sysctls["net.ipv4.ip_unprivileged_port_start"] = "1024"
 
-	s, err = d.createSpec(context.TODO(), c)
+	s, err = d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, s.Hostname, "foobar")
 	assert.Equal(t, s.Linux.Sysctl["kernel.domainname"], c.HostConfig.Sysctls["kernel.domainname"])
 	assert.Equal(t, s.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"], c.HostConfig.Sysctls["net.ipv4.ip_unprivileged_port_start"])
 
 	// Ensure the ping_group_range is not set on a daemon with user-namespaces enabled
-	d.configStore.RemappedRoot = "dummy:dummy"
-	s, err = d.createSpec(context.TODO(), c)
+	s, err = d.createSpec(context.TODO(), &configStore{Config: config.Config{RemappedRoot: "dummy:dummy"}}, c, nil)
 	assert.NilError(t, err)
 	_, ok := s.Linux.Sysctl["net.ipv4.ping_group_range"]
 	assert.Assert(t, !ok)
@@ -172,7 +171,7 @@ func TestSysctlOverride(t *testing.T) {
 	// Ensure the ping_group_range is set on a container in "host" userns mode
 	// on a daemon with user-namespaces enabled
 	c.HostConfig.UsernsMode = "host"
-	s, err = d.createSpec(context.TODO(), c)
+	s, err = d.createSpec(context.TODO(), &configStore{Config: config.Config{RemappedRoot: "dummy:dummy"}}, c, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, s.Linux.Sysctl["net.ipv4.ping_group_range"], "0 2147483647")
 }
@@ -191,7 +190,7 @@ func TestSysctlOverrideHost(t *testing.T) {
 	d := setupFakeDaemon(t, c)
 
 	// Ensure that the implicit sysctl is not set
-	s, err := d.createSpec(context.TODO(), c)
+	s, err := d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, s.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"], "")
 	assert.Equal(t, s.Linux.Sysctl["net.ipv4.ping_group_range"], "")
@@ -199,7 +198,7 @@ func TestSysctlOverrideHost(t *testing.T) {
 	// Set an explicit sysctl.
 	c.HostConfig.Sysctls["net.ipv4.ip_unprivileged_port_start"] = "1024"
 
-	s, err = d.createSpec(context.TODO(), c)
+	s, err = d.createSpec(context.TODO(), &configStore{}, c, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, s.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"], c.HostConfig.Sysctls["net.ipv4.ip_unprivileged_port_start"])
 }
@@ -227,7 +226,7 @@ func TestDefaultResources(t *testing.T) {
 	}
 	d := setupFakeDaemon(t, c)
 
-	s, err := d.createSpec(context.Background(), c)
+	s, err := d.createSpec(context.Background(), &configStore{}, c, nil)
 	assert.NilError(t, err)
 	checkResourcesAreUnset(t, s.Linux.Resources)
 }

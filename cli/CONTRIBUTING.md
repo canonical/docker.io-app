@@ -1,9 +1,5 @@
 # Contributing to Docker
 
-Want to hack on Docker? Awesome!  We have a contributor's guide that explains
-[setting up a Docker development environment and the contribution
-process](https://docs.docker.com/opensource/project/who-written-for/). 
-
 This page contains information about reporting issues as well as some tips and
 guidelines useful to experienced open source contributors. Finally, make sure
 you read our [community guidelines](#docker-community-guidelines) before you
@@ -88,7 +84,7 @@ use for simple changes](https://docs.docker.com/opensource/workflow/make-a-contr
   <tr>
     <td>Community Slack</td>
     <td>
-      The Docker Community has a dedicated Slack chat to discuss features and issues.  You can sign-up <a href="https://dockr.ly/slack" target="_blank">with this link</a>.
+      The Docker Community has a dedicated Slack chat to discuss features and issues.  You can sign-up <a href="https://dockr.ly/comm-slack" target="_blank">with this link</a>.
     </td>
   </tr>
   <tr>

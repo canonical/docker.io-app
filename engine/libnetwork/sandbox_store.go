@@ -1,12 +1,15 @@
 package libnetwork
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/datastore"
 	"github.com/docker/docker/libnetwork/osl"
-	"github.com/sirupsen/logrus"
+	"github.com/docker/docker/libnetwork/scope"
 )
 
 const (
@@ -119,10 +122,6 @@ func (sbs *sbState) CopyTo(o datastore.KVObject) error {
 	return nil
 }
 
-func (sbs *sbState) DataScope() string {
-	return datastore.LocalScope
-}
-
 func (sb *Sandbox) storeUpdate() error {
 	sbs := &sbState{
 		c:          sb.controller,
@@ -141,12 +140,10 @@ retry:
 			continue
 		}
 
-		eps := epState{
+		sbs.Eps = append(sbs.Eps, epState{
 			Nid: ep.getNetwork().ID(),
 			Eid: ep.ID(),
-		}
-
-		sbs.Eps = append(sbs.Eps, eps)
+		})
 	}
 
 	err := sb.controller.updateToStore(sbs)
@@ -162,38 +159,36 @@ retry:
 }
 
 func (sb *Sandbox) storeDelete() error {
-	sbs := &sbState{
+	cs := sb.controller.getStore()
+	if cs == nil {
+		return fmt.Errorf("datastore is not initialized")
+	}
+
+	return cs.DeleteObject(&sbState{
 		c:        sb.controller,
 		ID:       sb.id,
 		Cid:      sb.containerID,
-		dbIndex:  sb.dbIndex,
 		dbExists: sb.dbExists,
-	}
-
-	return sb.controller.deleteFromStore(sbs)
+	})
 }
 
-func (c *Controller) sandboxCleanup(activeSandboxes map[string]interface{}) {
+func (c *Controller) sandboxCleanup(activeSandboxes map[string]interface{}) error {
 	store := c.getStore()
 	if store == nil {
-		logrus.Error("Could not find local scope store while trying to cleanup sandboxes")
-		return
+		return fmt.Errorf("could not find local scope store")
 	}
 
-	kvol, err := store.List(datastore.Key(sandboxPrefix), &sbState{c: c})
-	if err != nil && err != datastore.ErrKeyNotFound {
-		logrus.Errorf("failed to get sandboxes for scope %s: %v", store.Scope(), err)
-		return
+	sandboxStates, err := store.List(&sbState{c: c})
+	if err != nil {
+		if err == datastore.ErrKeyNotFound {
+			// It's normal for no sandboxes to be found. Just bail out.
+			return nil
+		}
+		return fmt.Errorf("failed to get sandboxes: %v", err)
 	}
 
-	// It's normal for no sandboxes to be found. Just bail out.
-	if err == datastore.ErrKeyNotFound {
-		return
-	}
-
-	for _, kvo := range kvol {
-		sbs := kvo.(*sbState)
-
+	for _, s := range sandboxStates {
+		sbs := s.(*sbState)
 		sb := &Sandbox{
 			id:                 sbs.ID,
 			controller:         sbs.c,
@@ -215,12 +210,13 @@ func (c *Controller) sandboxCleanup(activeSandboxes map[string]interface{}) {
 			isRestore = true
 			opts := val.([]SandboxOption)
 			sb.processOptions(opts...)
-			sb.restorePath()
+			sb.restoreHostsPath()
+			sb.restoreResolvConfPath()
 			create = !sb.config.useDefaultSandBox
 		}
 		sb.osSbox, err = osl.NewSandbox(sb.Key(), create, isRestore)
 		if err != nil {
-			logrus.Errorf("failed to create osl sandbox while trying to restore sandbox %.7s%s: %v", sb.ID(), msg, err)
+			log.G(context.TODO()).Errorf("failed to create osl sandbox while trying to restore sandbox %.7s%s: %v", sb.ID(), msg, err)
 			continue
 		}
 
@@ -232,27 +228,39 @@ func (c *Controller) sandboxCleanup(activeSandboxes map[string]interface{}) {
 			n, err := c.getNetworkFromStore(eps.Nid)
 			var ep *Endpoint
 			if err != nil {
-				logrus.Errorf("getNetworkFromStore for nid %s failed while trying to build sandbox for cleanup: %v", eps.Nid, err)
-				n = &network{id: eps.Nid, ctrlr: c, drvOnce: &sync.Once{}, persist: true}
-				ep = &Endpoint{id: eps.Eid, network: n, sandboxID: sbs.ID}
+				log.G(context.TODO()).Errorf("getNetworkFromStore for nid %s failed while trying to build sandbox for cleanup: %v", eps.Nid, err)
+				ep = &Endpoint{
+					id: eps.Eid,
+					network: &Network{
+						id:      eps.Nid,
+						ctrlr:   c,
+						drvOnce: &sync.Once{},
+						persist: true,
+					},
+					sandboxID: sbs.ID,
+				}
 			} else {
 				ep, err = n.getEndpointFromStore(eps.Eid)
 				if err != nil {
-					logrus.Errorf("getEndpointFromStore for eid %s failed while trying to build sandbox for cleanup: %v", eps.Eid, err)
-					ep = &Endpoint{id: eps.Eid, network: n, sandboxID: sbs.ID}
+					log.G(context.TODO()).Errorf("getEndpointFromStore for eid %s failed while trying to build sandbox for cleanup: %v", eps.Eid, err)
+					ep = &Endpoint{
+						id:        eps.Eid,
+						network:   n,
+						sandboxID: sbs.ID,
+					}
 				}
 			}
 			if _, ok := activeSandboxes[sb.ID()]; ok && err != nil {
-				logrus.Errorf("failed to restore endpoint %s in %s for container %s due to %v", eps.Eid, eps.Nid, sb.ContainerID(), err)
+				log.G(context.TODO()).Errorf("failed to restore endpoint %s in %s for container %s due to %v", eps.Eid, eps.Nid, sb.ContainerID(), err)
 				continue
 			}
 			sb.addEndpoint(ep)
 		}
 
 		if _, ok := activeSandboxes[sb.ID()]; !ok {
-			logrus.Infof("Removing stale sandbox %s (%s)", sb.id, sb.containerID)
+			log.G(context.TODO()).Infof("Removing stale sandbox %s (%s)", sb.id, sb.containerID)
 			if err := sb.delete(true); err != nil {
-				logrus.Errorf("Failed to delete sandbox %s while trying to cleanup: %v", sb.id, err)
+				log.G(context.TODO()).Errorf("Failed to delete sandbox %s while trying to cleanup: %v", sb.id, err)
 			}
 			continue
 		}
@@ -260,20 +268,25 @@ func (c *Controller) sandboxCleanup(activeSandboxes map[string]interface{}) {
 		// reconstruct osl sandbox field
 		if !sb.config.useDefaultSandBox {
 			if err := sb.restoreOslSandbox(); err != nil {
-				logrus.Errorf("failed to populate fields for osl sandbox %s: %v", sb.ID(), err)
+				log.G(context.TODO()).Errorf("failed to populate fields for osl sandbox %s: %v", sb.ID(), err)
 				continue
 			}
 		} else {
-			c.sboxOnce.Do(func() {
+			// FIXME(thaJeztah): osSbox (and thus defOsSbox) is always nil on non-Linux: move this code to Linux-only files.
+			c.defOsSboxOnce.Do(func() {
 				c.defOsSbox = sb.osSbox
 			})
 		}
 
 		for _, ep := range sb.endpoints {
-			// Watch for service records
 			if !c.isAgent() {
-				c.watchSvcRecord(ep)
+				n := ep.getNetwork()
+				if !c.isSwarmNode() || n.Scope() != scope.Swarm || !n.driverIsMultihost() {
+					n.updateSvcRecord(ep, true)
+				}
 			}
 		}
 	}
+
+	return nil
 }

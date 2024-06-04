@@ -7,6 +7,7 @@ import (
 	spb "github.com/moby/buildkit/sourcepolicy/pb"
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -60,8 +61,8 @@ func (e *Engine) selectorCache(src *spb.Selector) *selectorCache {
 // This function may error out even if the op was mutated, in which case `true` will be returned along with the error.
 //
 // An error is returned when the source is denied by the policy.
-func (e *Engine) Evaluate(ctx context.Context, op *pb.Op) (bool, error) {
-	if len(e.pol) == 0 {
+func (e *Engine) Evaluate(ctx context.Context, op *pb.SourceOp) (bool, error) {
+	if len(e.pol) == 0 || op == nil {
 		return false, nil
 	}
 
@@ -73,15 +74,13 @@ func (e *Engine) Evaluate(ctx context.Context, op *pb.Op) (bool, error) {
 			return mutated, errors.Wrapf(ErrTooManyOps, "too many mutations on a single source")
 		}
 
-		srcOp := op.GetSource()
-		if srcOp == nil {
-			return false, nil
-		}
 		if i == 0 {
-			ctx = bklog.WithLogger(ctx, bklog.G(ctx).WithField("orig", *srcOp).WithField("updated", op.GetSource()))
+			ctx = bklog.WithLogger(ctx, bklog.G(ctx).WithField("orig", *op))
+		} else {
+			ctx = bklog.WithLogger(ctx, bklog.G(ctx).WithField("updated", *op))
 		}
 
-		mut, err := e.evaluatePolicies(ctx, srcOp)
+		mut, err := e.evaluatePolicies(ctx, op)
 		if mut {
 			mutated = true
 		}
@@ -112,12 +111,20 @@ func (e *Engine) evaluatePolicies(ctx context.Context, srcOp *pb.SourceOp) (bool
 //
 // For Allow/Deny rules, the last matching rule wins.
 // E.g. `ALLOW foo; DENY foo` will deny `foo`, `DENY foo; ALLOW foo` will allow `foo`.
-func (e *Engine) evaluatePolicy(ctx context.Context, pol *spb.Policy, srcOp *pb.SourceOp) (bool, error) {
+func (e *Engine) evaluatePolicy(ctx context.Context, pol *spb.Policy, srcOp *pb.SourceOp) (retMut bool, retErr error) {
 	ident := srcOp.GetIdentifier()
 
-	ctx = bklog.WithLogger(ctx, bklog.G(ctx).WithFields(map[string]interface{}{
-		"ref": ident,
-	}))
+	ctx = bklog.WithLogger(ctx, bklog.G(ctx).WithField("ref", ident))
+	defer func() {
+		if retMut || retErr != nil {
+			bklog.G(ctx).WithFields(
+				logrus.Fields{
+					"mutated":       retMut,
+					"updated":       srcOp.GetIdentifier(),
+					logrus.ErrorKey: retErr,
+				}).Debug("Evaluated source policy")
+		}
+	}()
 
 	var deny bool
 	for _, rule := range pol.Rules {

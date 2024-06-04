@@ -11,9 +11,7 @@ import (
 
 	archiveexporter "github.com/containerd/containerd/images/archive"
 	"github.com/containerd/containerd/leases"
-	"github.com/containerd/containerd/remotes"
-	"github.com/docker/distribution/reference"
-	intoto "github.com/in-toto/in-toto-golang/in_toto"
+	"github.com/distribution/reference"
 	"github.com/moby/buildkit/cache"
 	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/exporter"
@@ -29,6 +27,7 @@ import (
 	"github.com/moby/buildkit/util/progress"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 )
 
@@ -59,20 +58,20 @@ func New(opt Opt) (exporter.Exporter, error) {
 	return im, nil
 }
 
-func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exporter.ExporterInstance, error) {
+func (e *imageExporter) Resolve(ctx context.Context, id int, opt map[string]string) (exporter.ExporterInstance, error) {
 	i := &imageExporterInstance{
 		imageExporter: e,
+		id:            id,
 		tar:           true,
 		opts: containerimage.ImageCommitOpts{
 			RefCfg: cacheconfig.RefConfig{
 				Compression: compression.New(compression.Default),
 			},
-			BuildInfo: true,
-			OCITypes:  e.opt.Variant == VariantOCI,
+			OCITypes: e.opt.Variant == VariantOCI,
 		},
 	}
 
-	opt, err := i.opts.Load(opt)
+	opt, err := i.opts.Load(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +100,15 @@ func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exp
 
 type imageExporterInstance struct {
 	*imageExporter
+	id int
+
 	opts containerimage.ImageCommitOpts
 	tar  bool
 	meta map[string][]byte
+}
+
+func (e *imageExporterInstance) ID() int {
+	return e.id
 }
 
 func (e *imageExporterInstance) Name() string {
@@ -114,11 +119,12 @@ func (e *imageExporterInstance) Config() *exporter.Config {
 	return exporter.NewConfigWithCompression(e.opts.RefCfg.Compression)
 }
 
-func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source, sessionID string) (_ map[string]string, descref exporter.DescriptorReference, err error) {
+func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source, inlineCache exptypes.InlineCache, sessionID string) (_ map[string]string, descref exporter.DescriptorReference, err error) {
 	if e.opt.Variant == VariantDocker && len(src.Refs) > 0 {
 		return nil, nil, errors.Errorf("docker exporter does not currently support exporting manifest lists")
 	}
 
+	src = src.Clone()
 	if src.Metadata == nil {
 		src.Metadata = make(map[string][]byte)
 	}
@@ -143,7 +149,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 		}
 	}()
 
-	desc, err := e.opt.ImageWriter.Commit(ctx, src, sessionID, &opts)
+	desc, err := e.opt.ImageWriter.Commit(ctx, src, sessionID, inlineCache, &opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -200,52 +206,49 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 		return nil, nil, errors.Errorf("invalid variant %q", e.opt.Variant)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	timeoutCtx, cancel := context.WithCancelCause(ctx)
+	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 5*time.Second, errors.WithStack(context.DeadlineExceeded))
+	defer cancel(errors.WithStack(context.Canceled))
 
 	caller, err := e.opt.SessionManager.Get(timeoutCtx, sessionID, false)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	mprovider := contentutil.NewMultiProvider(e.opt.ImageWriter.ContentStore())
+	var refs []cache.ImmutableRef
 	if src.Ref != nil {
-		remotes, err := src.Ref.GetRemotes(ctx, false, e.opts.RefCfg, false, session.NewGroup(sessionID))
-		if err != nil {
-			return nil, nil, err
-		}
-		remote := remotes[0]
-		// unlazy before tar export as the tar writer does not handle
-		// layer blobs in parallel (whereas unlazy does)
-		if unlazier, ok := remote.Provider.(cache.Unlazier); ok {
-			if err := unlazier.Unlazy(ctx); err != nil {
-				return nil, nil, err
-			}
-		}
-		for _, desc := range remote.Descriptors {
-			mprovider.Add(desc.Digest, remote.Provider)
-		}
+		refs = append(refs, src.Ref)
 	}
-	if len(src.Refs) > 0 {
-		for _, r := range src.Refs {
-			remotes, err := r.GetRemotes(ctx, false, e.opts.RefCfg, false, session.NewGroup(sessionID))
+	for _, ref := range src.Refs {
+		refs = append(refs, ref)
+	}
+	eg, egCtx := errgroup.WithContext(ctx)
+	mprovider := contentutil.NewMultiProvider(e.opt.ImageWriter.ContentStore())
+	for _, ref := range refs {
+		ref := ref
+		eg.Go(func() error {
+			remotes, err := ref.GetRemotes(egCtx, false, e.opts.RefCfg, false, session.NewGroup(sessionID))
 			if err != nil {
-				return nil, nil, err
+				return err
 			}
 			remote := remotes[0]
 			if unlazier, ok := remote.Provider.(cache.Unlazier); ok {
-				if err := unlazier.Unlazy(ctx); err != nil {
-					return nil, nil, err
+				if err := unlazier.Unlazy(egCtx); err != nil {
+					return err
 				}
 			}
 			for _, desc := range remote.Descriptors {
 				mprovider.Add(desc.Digest, remote.Provider)
 			}
-		}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, nil, err
 	}
 
 	if e.tar {
-		w, err := filesync.CopyFileWriter(ctx, resp, caller)
+		w, err := filesync.CopyFileWriter(ctx, resp, e.id, caller)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -267,7 +270,6 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 		}
 		report(nil)
 	} else {
-		ctx = remotes.WithMediaTypeKeyPrefix(ctx, intoto.PayloadType, "intoto")
 		store := sessioncontent.NewCallerStore(caller, "export")
 		if err != nil {
 			return nil, nil, err

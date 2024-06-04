@@ -1,6 +1,7 @@
 package registry // import "github.com/docker/docker/registry"
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,8 +10,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types/registry"
-	"github.com/sirupsen/logrus"
 	"gotest.tools/v3/assert"
 )
 
@@ -60,7 +61,7 @@ func init() {
 
 func handlerAccessLog(handler http.Handler) http.Handler {
 	logHandler := func(w http.ResponseWriter, r *http.Request) {
-		logrus.Debugf(`%s "%s %s"`, r.RemoteAddr, r.Method, r.URL)
+		log.G(context.TODO()).Debugf(`%s "%s %s"`, r.RemoteAddr, r.Method, r.URL)
 		handler.ServeHTTP(w, r)
 	}
 	return http.HandlerFunc(logHandler)
@@ -75,35 +76,30 @@ func makeHTTPSURL(req string) string {
 }
 
 func makeIndex(req string) *registry.IndexInfo {
-	index := &registry.IndexInfo{
+	return &registry.IndexInfo{
 		Name: makeURL(req),
 	}
-	return index
 }
 
 func makeHTTPSIndex(req string) *registry.IndexInfo {
-	index := &registry.IndexInfo{
+	return &registry.IndexInfo{
 		Name: makeHTTPSURL(req),
 	}
-	return index
 }
 
 func makePublicIndex() *registry.IndexInfo {
-	index := &registry.IndexInfo{
+	return &registry.IndexInfo{
 		Name:     IndexServer,
 		Secure:   true,
 		Official: true,
 	}
-	return index
 }
 
 func makeServiceConfig(mirrors []string, insecureRegistries []string) (*serviceConfig, error) {
-	options := ServiceOptions{
+	return newServiceConfig(ServiceOptions{
 		Mirrors:            mirrors,
 		InsecureRegistries: insecureRegistries,
-	}
-
-	return newServiceConfig(options)
+	})
 }
 
 func writeHeaders(w http.ResponseWriter) {
@@ -113,8 +109,6 @@ func writeHeaders(w http.ResponseWriter) {
 	h.Add("Content-Type", "application/json")
 	h.Add("Pragma", "no-cache")
 	h.Add("Cache-Control", "no-cache")
-	h.Add("X-Docker-Registry-Version", "0.0.0")
-	h.Add("X-Docker-Registry-Config", "mock")
 }
 
 func writeResponse(w http.ResponseWriter, message interface{}, code int) {
@@ -155,5 +149,5 @@ func TestPing(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert.Equal(t, res.StatusCode, http.StatusOK, "")
-	assert.Equal(t, res.Header.Get("X-Docker-Registry-Config"), "mock", "This is not a Mocked Registry")
+	assert.Equal(t, res.Header.Get("Server"), "docker-tests/mock")
 }

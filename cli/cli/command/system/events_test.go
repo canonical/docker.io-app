@@ -16,10 +16,10 @@ import (
 )
 
 func TestEventsFormat(t *testing.T) {
-	var evts []events.Message
-	for i, action := range []string{"create", "start", "attach", "die"} {
+	var evts []events.Message //nolint:prealloc
+	for i, action := range []events.Action{events.ActionCreate, events.ActionStart, events.ActionAttach, events.ActionDie} {
 		evts = append(evts, events.Message{
-			Status: action,
+			Status: string(action),
 			ID:     "abc123",
 			From:   "ubuntu:latest",
 			Type:   events.ContainerEventType,

@@ -7,16 +7,17 @@ import (
 
 	"github.com/docker/docker/libnetwork/resolvconf"
 	"github.com/docker/docker/pkg/idtools"
+	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/flightcontrol"
 	"github.com/pkg/errors"
 )
 
-var g flightcontrol.Group
+var g flightcontrol.Group[struct{}]
 var notFirstRun bool
 var lastNotEmpty bool
 
 // overridden by tests
-var resolvconfGet = resolvconf.Get
+var resolvconfPath = resolvconf.Path
 
 type DNSConfig struct {
 	Nameservers   []string
@@ -24,9 +25,13 @@ type DNSConfig struct {
 	SearchDomains []string
 }
 
-func GetResolvConf(ctx context.Context, stateDir string, idmap *idtools.IdentityMapping, dns *DNSConfig) (string, error) {
+func GetResolvConf(ctx context.Context, stateDir string, idmap *idtools.IdentityMapping, dns *DNSConfig, netMode pb.NetMode) (string, error) {
 	p := filepath.Join(stateDir, "resolv.conf")
-	_, err := g.Do(ctx, stateDir, func(ctx context.Context) (interface{}, error) {
+	if netMode == pb.NetMode_HOST {
+		p = filepath.Join(stateDir, "resolv-host.conf")
+	}
+
+	_, err := g.Do(ctx, p, func(ctx context.Context) (struct{}, error) {
 		generate := !notFirstRun
 		notFirstRun = true
 
@@ -34,15 +39,15 @@ func GetResolvConf(ctx context.Context, stateDir string, idmap *idtools.Identity
 			fi, err := os.Stat(p)
 			if err != nil {
 				if !errors.Is(err, os.ErrNotExist) {
-					return "", err
+					return struct{}{}, err
 				}
 				generate = true
 			}
 			if !generate {
-				fiMain, err := os.Stat(resolvconf.Path())
+				fiMain, err := os.Stat(resolvconfPath())
 				if err != nil {
 					if !errors.Is(err, os.ErrNotExist) {
-						return nil, err
+						return struct{}{}, err
 					}
 					if lastNotEmpty {
 						generate = true
@@ -57,63 +62,61 @@ func GetResolvConf(ctx context.Context, stateDir string, idmap *idtools.Identity
 		}
 
 		if !generate {
-			return "", nil
+			return struct{}{}, nil
 		}
 
-		var dt []byte
-		f, err := resolvconfGet()
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", err
-			}
-		} else {
-			dt = f.Content
-		}
-
-		if dns != nil {
-			var (
-				dnsNameservers   = resolvconf.GetNameservers(dt, resolvconf.IP)
-				dnsSearchDomains = resolvconf.GetSearchDomains(dt)
-				dnsOptions       = resolvconf.GetOptions(dt)
-			)
-			if len(dns.Nameservers) > 0 {
-				dnsNameservers = dns.Nameservers
-			}
-			if len(dns.SearchDomains) > 0 {
-				dnsSearchDomains = dns.SearchDomains
-			}
-			if len(dns.Options) > 0 {
-				dnsOptions = dns.Options
-			}
-
-			f, err = resolvconf.Build(p+".tmp", dnsNameservers, dnsSearchDomains, dnsOptions)
-			if err != nil {
-				return "", err
-			}
-			dt = f.Content
-		}
-
-		f, err = resolvconf.FilterResolvDNS(dt, true)
-		if err != nil {
-			return "", err
+		dt, err := os.ReadFile(resolvconfPath())
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return struct{}{}, err
 		}
 
 		tmpPath := p + ".tmp"
-		if err := os.WriteFile(tmpPath, f.Content, 0644); err != nil {
-			return "", err
+		if dns != nil {
+			var (
+				dnsNameservers   = dns.Nameservers
+				dnsSearchDomains = dns.SearchDomains
+				dnsOptions       = dns.Options
+			)
+			if len(dns.Nameservers) == 0 {
+				dnsNameservers = resolvconf.GetNameservers(dt, resolvconf.IP)
+			}
+			if len(dns.SearchDomains) == 0 {
+				dnsSearchDomains = resolvconf.GetSearchDomains(dt)
+			}
+			if len(dns.Options) == 0 {
+				dnsOptions = resolvconf.GetOptions(dt)
+			}
+
+			f, err := resolvconf.Build(tmpPath, dnsNameservers, dnsSearchDomains, dnsOptions)
+			if err != nil {
+				return struct{}{}, err
+			}
+			dt = f.Content
+		}
+
+		if netMode != pb.NetMode_HOST || len(resolvconf.GetNameservers(dt, resolvconf.IP)) == 0 {
+			f, err := resolvconf.FilterResolvDNS(dt, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			dt = f.Content
+		}
+
+		if err := os.WriteFile(tmpPath, dt, 0644); err != nil {
+			return struct{}{}, err
 		}
 
 		if idmap != nil {
 			root := idmap.RootPair()
 			if err := os.Chown(tmpPath, root.UID, root.GID); err != nil {
-				return "", err
+				return struct{}{}, err
 			}
 		}
 
 		if err := os.Rename(tmpPath, p); err != nil {
-			return "", err
+			return struct{}{}, err
 		}
-		return "", nil
+		return struct{}{}, nil
 	})
 	if err != nil {
 		return "", err

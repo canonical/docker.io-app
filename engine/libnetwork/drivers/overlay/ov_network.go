@@ -1,9 +1,9 @@
 //go:build linux
-// +build linux
 
 package overlay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -14,13 +14,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/drivers/overlay/overlayutils"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/ns"
 	"github.com/docker/docker/libnetwork/osl"
 	"github.com/docker/docker/libnetwork/types"
 	"github.com/hashicorp/go-multierror"
-	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -46,7 +47,7 @@ type subnet struct {
 
 type network struct {
 	id        string
-	sbox      osl.Sandbox
+	sbox      *osl.Namespace
 	endpoints endpointTable
 	driver    *driver
 	joinCnt   int
@@ -63,8 +64,8 @@ func init() {
 	// Lock main() to the initial thread to exclude the goroutines executing
 	// func setDefaultVLAN() from being scheduled onto that thread. Changes to
 	// the network namespace of the initial thread alter /proc/self/ns/net,
-	// which would break any code which (incorrectly) assumes that that file is
-	// a handle to the network namespace for the thread it is currently
+	// which would break any code which (incorrectly) assumes that /proc/self/ns/net
+	// is a handle to the network namespace for the thread it is currently
 	// executing on.
 	runtime.LockOSThread()
 }
@@ -82,7 +83,7 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 		return fmt.Errorf("invalid network id")
 	}
 	if len(ipV4Data) == 0 || ipV4Data[0].Pool.String() == "0.0.0.0/0" {
-		return types.BadRequestErrorf("ipv4 pool is empty")
+		return types.InvalidParameterErrorf("ipv4 pool is empty")
 	}
 
 	// Since we perform lazy configuration make sure we try
@@ -109,15 +110,11 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 	if !ok {
 		return errors.New("no VNI provided")
 	}
-	logrus.Debugf("overlay: Received vxlan IDs: %s", vnisOpt)
-	vniStrings := strings.Split(vnisOpt, ",")
-	for _, vniStr := range vniStrings {
-		vni, err := strconv.Atoi(vniStr)
-		if err != nil {
-			return fmt.Errorf("invalid vxlan id value %q passed", vniStr)
-		}
-
-		vnis = append(vnis, uint32(vni))
+	log.G(context.TODO()).Debugf("overlay: Received vxlan IDs: %s", vnisOpt)
+	var err error
+	vnis, err = overlayutils.AppendVNIList(vnis, vnisOpt)
+	if err != nil {
+		return err
 	}
 
 	if _, ok := optMap[secureOption]; ok {
@@ -158,8 +155,8 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 	// Make sure no rule is on the way from any stale secure network
 	if !n.secure {
 		for _, vni := range vnis {
-			programMangle(vni, false)
-			programInput(vni, false)
+			d.programMangle(vni, false)
+			d.programInput(vni, false)
 		}
 	}
 
@@ -207,7 +204,7 @@ func (d *driver) DeleteNetwork(nid string) error {
 		if ep.ifName != "" {
 			if link, err := ns.NlHandle().LinkByName(ep.ifName); err == nil {
 				if err := ns.NlHandle().LinkDel(link); err != nil {
-					logrus.WithError(err).Warnf("Failed to delete interface (%s)'s link on endpoint (%s) delete", ep.ifName, ep.id)
+					log.G(context.TODO()).WithError(err).Warnf("Failed to delete interface (%s)'s link on endpoint (%s) delete", ep.ifName, ep.id)
 				}
 			}
 		}
@@ -218,18 +215,18 @@ func (d *driver) DeleteNetwork(nid string) error {
 
 	if n.secure {
 		for _, s := range n.subnets {
-			if err := programMangle(s.vni, false); err != nil {
-				logrus.WithFields(logrus.Fields{
-					logrus.ErrorKey: err,
-					"network_id":    n.id,
-					"subnet":        s.subnetIP,
+			if err := d.programMangle(s.vni, false); err != nil {
+				log.G(context.TODO()).WithFields(log.Fields{
+					"error":      err,
+					"network_id": n.id,
+					"subnet":     s.subnetIP,
 				}).Warn("Failed to clean up iptables rules during overlay network deletion")
 			}
-			if err := programInput(s.vni, false); err != nil {
-				logrus.WithFields(logrus.Fields{
-					logrus.ErrorKey: err,
-					"network_id":    n.id,
-					"subnet":        s.subnetIP,
+			if err := d.programInput(s.vni, false); err != nil {
+				log.G(context.TODO()).WithFields(log.Fields{
+					"error":      err,
+					"network_id": n.id,
+					"subnet":     s.subnetIP,
 				}).Warn("Failed to clean up iptables rules during overlay network deletion")
 			}
 		}
@@ -316,9 +313,9 @@ func (n *network) leaveSandbox() {
 // to be called while holding network lock
 func (n *network) destroySandbox() {
 	if n.sbox != nil {
-		for _, iface := range n.sbox.Info().Interfaces() {
+		for _, iface := range n.sbox.Interfaces() {
 			if err := iface.Remove(); err != nil {
-				logrus.Debugf("Remove interface %s failed: %v", iface.SrcName(), err)
+				log.G(context.TODO()).Debugf("Remove interface %s failed: %v", iface.SrcName(), err)
 			}
 		}
 
@@ -326,7 +323,7 @@ func (n *network) destroySandbox() {
 			if s.vxlanName != "" {
 				err := deleteInterface(s.vxlanName)
 				if err != nil {
-					logrus.Warnf("could not cleanup sandbox properly: %v", err)
+					log.G(context.TODO()).Warnf("could not cleanup sandbox properly: %v", err)
 				}
 			}
 		}
@@ -349,26 +346,26 @@ func populateVNITbl() {
 
 			n, err := netns.GetFromPath(path)
 			if err != nil {
-				logrus.Errorf("Could not open namespace path %s during vni population: %v", path, err)
+				log.G(context.TODO()).Errorf("Could not open namespace path %s during vni population: %v", path, err)
 				return nil
 			}
 			defer n.Close()
 
 			nlh, err := netlink.NewHandleAt(n, unix.NETLINK_ROUTE)
 			if err != nil {
-				logrus.Errorf("Could not open netlink handle during vni population for ns %s: %v", path, err)
+				log.G(context.TODO()).Errorf("Could not open netlink handle during vni population for ns %s: %v", path, err)
 				return nil
 			}
 			defer nlh.Close()
 
 			err = nlh.SetSocketTimeout(soTimeout)
 			if err != nil {
-				logrus.Warnf("Failed to set the timeout on the netlink handle sockets for vni table population: %v", err)
+				log.G(context.TODO()).Warnf("Failed to set the timeout on the netlink handle sockets for vni table population: %v", err)
 			}
 
 			links, err := nlh.LinkList()
 			if err != nil {
-				logrus.Errorf("Failed to list interfaces during vni population for ns %s: %v", path, err)
+				log.G(context.TODO()).Errorf("Failed to list interfaces during vni population for ns %s: %v", path, err)
 				return nil
 			}
 
@@ -417,7 +414,7 @@ func (n *network) setupSubnetSandbox(s *subnet, brName, vxlanName string) error 
 	if ok {
 		deleteVxlanByVNI(path, s.vni)
 		if err := unix.Unmount(path, unix.MNT_FORCE); err != nil {
-			logrus.Errorf("unmount of %s failed: %v", path, err)
+			log.G(context.TODO()).Errorf("unmount of %s failed: %v", path, err)
 		}
 		os.Remove(path)
 
@@ -429,25 +426,25 @@ func (n *network) setupSubnetSandbox(s *subnet, brName, vxlanName string) error 
 	// create a bridge and vxlan device for this subnet and move it to the sandbox
 	sbox := n.sbox
 
-	if err := sbox.AddInterface(brName, "br",
-		sbox.InterfaceOptions().Address(s.gwIP),
-		sbox.InterfaceOptions().Bridge(true)); err != nil {
+	if err := sbox.AddInterface(brName, "br", osl.WithIPv4Address(s.gwIP), osl.WithIsBridge(true)); err != nil {
 		return fmt.Errorf("bridge creation in sandbox failed for subnet %q: %v", s.subnetIP.String(), err)
 	}
 
-	err := createVxlan(vxlanName, s.vni, n.maxMTU())
+	v6transport, err := n.driver.isIPv6Transport()
 	if err != nil {
+		log.G(context.TODO()).WithError(err).Errorf("Assuming IPv4 transport; overlay network %s will not pass traffic if the Swarm data plane is IPv6.", n.id)
+	}
+	if err := createVxlan(vxlanName, s.vni, n.maxMTU(), v6transport); err != nil {
 		return err
 	}
 
-	if err := sbox.AddInterface(vxlanName, "vxlan",
-		sbox.InterfaceOptions().Master(brName)); err != nil {
+	if err := sbox.AddInterface(vxlanName, "vxlan", osl.WithMaster(brName)); err != nil {
 		// If adding vxlan device to the overlay namespace fails, remove the bridge interface we
 		// already added to the namespace. This allows the caller to try the setup again.
-		for _, iface := range sbox.Info().Interfaces() {
+		for _, iface := range sbox.Interfaces() {
 			if iface.SrcName() == brName {
 				if ierr := iface.Remove(); ierr != nil {
-					logrus.Errorf("removing bridge failed from ov ns %v failed, %v", n.sbox.Key(), ierr)
+					log.G(context.TODO()).Errorf("removing bridge failed from ov ns %v failed, %v", n.sbox.Key(), ierr)
 				}
 			}
 		}
@@ -457,21 +454,21 @@ func (n *network) setupSubnetSandbox(s *subnet, brName, vxlanName string) error 
 		// failure of vxlan device creation if the vni is assigned to some other
 		// network.
 		if deleteErr := deleteInterface(vxlanName); deleteErr != nil {
-			logrus.Warnf("could not delete vxlan interface, %s, error %v, after config error, %v", vxlanName, deleteErr, err)
+			log.G(context.TODO()).Warnf("could not delete vxlan interface, %s, error %v, after config error, %v", vxlanName, deleteErr, err)
 		}
 		return fmt.Errorf("vxlan interface creation failed for subnet %q: %v", s.subnetIP.String(), err)
 	}
 
 	if err := setDefaultVLAN(sbox); err != nil {
 		// not a fatal error
-		logrus.WithError(err).Error("set bridge default vlan failed")
+		log.G(context.TODO()).WithError(err).Error("set bridge default vlan failed")
 	}
 	return nil
 }
 
-func setDefaultVLAN(sbox osl.Sandbox) error {
+func setDefaultVLAN(ns *osl.Namespace) error {
 	var brName string
-	for _, i := range sbox.Info().Interfaces() {
+	for _, i := range ns.Interfaces() {
 		if i.Bridge() {
 			brName = i.DstName()
 		}
@@ -480,7 +477,7 @@ func setDefaultVLAN(sbox osl.Sandbox) error {
 	// IFLA_BR_VLAN_DEFAULT_PVID was added in Linux v4.4 (see torvalds/linux@0f963b7), so we can't use netlink for
 	// setting this until Docker drops support for CentOS/RHEL 7 (kernel 3.10, eol date: 2024-06-30).
 	var innerErr error
-	err := sbox.InvokeFunc(func() {
+	err := ns.InvokeFunc(func() {
 		// Contrary to what the sysfs(5) man page says, the entries of /sys/class/net
 		// represent the networking devices visible in the network namespace of the
 		// process which mounted the sysfs filesystem, irrespective of the network
@@ -528,12 +525,12 @@ func (n *network) initSubnetSandbox(s *subnet) error {
 	// Program iptables rules for mandatory encryption of the secure
 	// network, or clean up leftover rules for a stale secure network which
 	// was previously assigned the same VNI.
-	if err := programMangle(s.vni, n.secure); err != nil {
+	if err := n.driver.programMangle(s.vni, n.secure); err != nil {
 		return err
 	}
-	if err := programInput(s.vni, n.secure); err != nil {
+	if err := n.driver.programInput(s.vni, n.secure); err != nil {
 		if n.secure {
-			return multierror.Append(err, programMangle(s.vni, false))
+			return multierror.Append(err, n.driver.programMangle(s.vni, false))
 		}
 	}
 
@@ -609,7 +606,7 @@ func (d *driver) network(nid string) *network {
 	return n
 }
 
-func (n *network) sandbox() osl.Sandbox {
+func (n *network) sandbox() *osl.Namespace {
 	n.Lock()
 	defer n.Unlock()
 	return n.sbox

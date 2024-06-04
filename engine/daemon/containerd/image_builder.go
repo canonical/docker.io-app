@@ -1,7 +1,10 @@
 package containerd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,62 +12,78 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/content"
 	cerrdefs "github.com/containerd/containerd/errdefs"
+	containerdimages "github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/rootfs"
-	"github.com/docker/distribution/reference"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
-	imagetypes "github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/internal/compatcontext"
-	registrypkg "github.com/docker/docker/registry"
-
-	// "github.com/docker/docker/api/types/container"
-	containerdimages "github.com/containerd/containerd/images"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/errdefs"
 	dimage "github.com/docker/docker/image"
+	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/pkg/system"
+	registrypkg "github.com/docker/docker/registry"
+	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
+	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sirupsen/logrus"
+)
+
+const (
+	// Digest of the image which was the base image of the committed container.
+	imageLabelClassicBuilderParent = "org.mobyproject.image.parent"
+
+	// "1" means that the image was created directly from the "FROM scratch".
+	imageLabelClassicBuilderFromScratch = "org.mobyproject.image.fromscratch"
+
+	// digest of the ContainerConfig stored in the content store.
+	imageLabelClassicBuilderContainerConfig = "org.mobyproject.image.containerconfig"
+)
+
+const (
+	// gc.ref label that associates the ContainerConfig content blob with the
+	// corresponding Config content.
+	contentLabelGcRefContainerConfig = "containerd.io/gc.ref.content.moby/container.config"
+
+	// Digest of the image this ContainerConfig blobs describes.
+	// Only ContainerConfig content should be labelled with it.
+	contentLabelClassicBuilderImage = "org.mobyproject.content.image"
 )
 
 // GetImageAndReleasableLayer returns an image and releaseable layer for a
 // reference or ID. Every call to GetImageAndReleasableLayer MUST call
 // releasableLayer.Release() to prevent leaking of layers.
 func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID string, opts backend.GetImageAndLayerOptions) (builder.Image, builder.ROLayer, error) {
-	if refOrID == "" { // from SCRATCH
-		imgOS := runtime.GOOS
+	if refOrID == "" { // FROM scratch
 		if runtime.GOOS == "windows" {
-			imgOS = "linux"
+			return nil, nil, fmt.Errorf(`"FROM scratch" is not supported on Windows`)
 		}
 		if opts.Platform != nil {
-			imgOS = opts.Platform.OS
-		}
-		if !system.IsOSSupported(imgOS) {
-			return nil, nil, system.ErrNotSupportedOperatingSystem
+			if err := dimage.CheckOS(opts.Platform.OS); err != nil {
+				return nil, nil, err
+			}
 		}
 		return nil, &rolayer{
-			key:         "",
 			c:           i.client,
 			snapshotter: i.snapshotter,
-			diffID:      "",
-			root:        "",
 		}, nil
 	}
 
 	if opts.PullOption != backend.PullOptionForcePull {
 		// TODO(laurazard): same as below
-		img, err := i.GetImage(ctx, refOrID, image.GetImageOpts{Platform: opts.Platform})
+		img, err := i.GetImage(ctx, refOrID, backend.GetImageOpts{Platform: opts.Platform})
 		if err != nil && opts.PullOption == backend.PullOptionNoPull {
 			return nil, nil, err
 		}
@@ -73,8 +92,8 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 			return nil, nil, err
 		}
 		if img != nil {
-			if !system.IsOSSupported(img.OperatingSystem()) {
-				return nil, nil, system.ErrNotSupportedOperatingSystem
+			if err := dimage.CheckOS(img.OperatingSystem()); err != nil {
+				return nil, nil, err
 			}
 
 			roLayer, err := newROLayerForImage(ctx, &imgDesc, i, opts.Platform)
@@ -99,7 +118,7 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 
 	// TODO(laurazard): pullForBuilder should return whatever we
 	// need here instead of having to go and get it again
-	img, err := i.GetImage(ctx, refOrID, imagetypes.GetImageOpts{
+	img, err := i.GetImage(ctx, refOrID, backend.GetImageOpts{
 		Platform: opts.Platform,
 	})
 	if err != nil {
@@ -119,7 +138,6 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 	if err != nil {
 		return nil, err
 	}
-	taggedRef := reference.TagNameOnly(ref)
 
 	pullRegistryAuth := &registry.AuthConfig{}
 	if len(authConfigs) > 0 {
@@ -133,11 +151,11 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 		pullRegistryAuth = &resolvedConfig
 	}
 
-	if err := i.PullImage(ctx, ref.Name(), taggedRef.(reference.NamedTagged).Tag(), platform, nil, pullRegistryAuth, output); err != nil {
+	if err := i.PullImage(ctx, reference.TagNameOnly(ref), platform, nil, pullRegistryAuth, output); err != nil {
 		return nil, err
 	}
 
-	img, err := i.GetImage(ctx, name, imagetypes.GetImageOpts{Platform: platform})
+	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
 	if err != nil {
 		if errdefs.IsNotFound(err) && img != nil && platform != nil {
 			imgPlat := ocispec.Platform{
@@ -155,15 +173,15 @@ This is most likely caused by a bug in the build system that created the fetched
 Please notify the image author to correct the configuration.`,
 					platforms.Format(p), platforms.Format(imgPlat), name,
 				)
-				logrus.WithError(err).WithField("image", name).Warn("Ignoring error about platform mismatch where the manifest list points to an image whose configuration does not match the platform in the manifest.")
+				log.G(ctx).WithError(err).WithField("image", name).Warn("Ignoring error about platform mismatch where the manifest list points to an image whose configuration does not match the platform in the manifest.")
 			}
 		} else {
 			return nil, err
 		}
 	}
 
-	if !system.IsOSSupported(img.OperatingSystem()) {
-		return nil, system.ErrNotSupportedOperatingSystem
+	if err := dimage.CheckOS(img.OperatingSystem()); err != nil {
+		return nil, err
 	}
 
 	imgDesc, err := i.resolveDescriptor(ctx, name)
@@ -184,56 +202,56 @@ func newROLayerForImage(ctx context.Context, imgDesc *ocispec.Descriptor, i *Ima
 		platMatcher = platforms.Only(*platform)
 	}
 
-	// this needs it's own context + lease so that it doesn't get cleaned before we're ready
-	confDesc, err := containerdimages.Config(ctx, i.client.ContentStore(), *imgDesc, platMatcher)
+	confDesc, err := containerdimages.Config(ctx, i.content, *imgDesc, platMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	diffIDs, err := containerdimages.RootFS(ctx, i.client.ContentStore(), confDesc)
-	if err != nil {
-		return nil, err
-	}
-	parent := identity.ChainID(diffIDs).String()
-
-	s := i.client.SnapshotService(i.snapshotter)
-	key := stringid.GenerateRandomID()
-	ctx, _, err = i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lease for commit: %w", err)
-	}
-	mounts, err := s.View(ctx, key, parent)
+	diffIDs, err := containerdimages.RootFS(ctx, i.content, confDesc)
 	if err != nil {
 		return nil, err
 	}
 
-	tempMountLocation := os.TempDir()
-	root, err := os.MkdirTemp(tempMountLocation, "rootfs-mount")
-	if err != nil {
-		return nil, err
-	}
+	// TODO(vvoland): Check if image is unpacked, and unpack it if it's not.
+	imageSnapshotID := identity.ChainID(diffIDs).String()
 
-	if err := mount.All(mounts, root); err != nil {
-		return nil, err
+	snapshotter := i.StorageDriver()
+	_, lease, err := createLease(ctx, i.client.LeasesService())
+	if err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to lease image snapshot %s: %w", imageSnapshotID, err))
 	}
 
 	return &rolayer{
-		key:                key,
+		key:                imageSnapshotID,
 		c:                  i.client,
-		snapshotter:        i.snapshotter,
-		diffID:             digest.Digest(parent),
-		root:               root,
+		snapshotter:        snapshotter,
+		diffID:             "", // Image RO layer doesn't have a diff.
 		contentStoreDigest: "",
+		lease:              &lease,
 	}, nil
+}
+
+func createLease(ctx context.Context, lm leases.Manager) (context.Context, leases.Lease, error) {
+	lease, err := lm.Create(ctx,
+		leases.WithExpiration(time.Hour*24),
+		leases.WithLabels(map[string]string{
+			"org.mobyproject.lease.classicbuilder": "true",
+		}),
+	)
+	if err != nil {
+		return nil, leases.Lease{}, fmt.Errorf("failed to create a lease for snapshot: %w", err)
+	}
+
+	return leases.WithLease(ctx, lease.ID), lease, nil
 }
 
 type rolayer struct {
 	key                string
 	c                  *containerd.Client
 	snapshotter        string
-	diffID             digest.Digest
-	root               string
+	diffID             layer.DiffID
 	contentStoreDigest digest.Digest
+	lease              *leases.Lease
 }
 
 func (rl *rolayer) ContentStoreDigest() digest.Digest {
@@ -244,45 +262,40 @@ func (rl *rolayer) DiffID() layer.DiffID {
 	if rl.diffID == "" {
 		return layer.DigestSHA256EmptyTar
 	}
-	return layer.DiffID(rl.diffID)
+	return rl.diffID
 }
 
 func (rl *rolayer) Release() error {
-	snapshotter := rl.c.SnapshotService(rl.snapshotter)
-	err := snapshotter.Remove(context.TODO(), rl.key)
-	if err != nil && !cerrdefs.IsNotFound(err) {
-		return err
+	if rl.lease != nil {
+		lm := rl.c.LeasesService()
+		err := lm.Delete(context.TODO(), *rl.lease)
+		if err != nil {
+			return err
+		}
+		rl.lease = nil
 	}
-
-	if rl.root == "" { // nothing to release
-		return nil
-	}
-	if err := mount.UnmountAll(rl.root, 0); err != nil {
-		logrus.WithError(err).WithField("root", rl.root).Error("failed to unmount ROLayer")
-		return err
-	}
-	if err := os.Remove(rl.root); err != nil {
-		logrus.WithError(err).WithField("dir", rl.root).Error("failed to remove mount temp dir")
-		return err
-	}
-	rl.root = ""
 	return nil
 }
 
 // NewRWLayer creates a new read-write layer for the builder
-func (rl *rolayer) NewRWLayer() (builder.RWLayer, error) {
+func (rl *rolayer) NewRWLayer() (_ builder.RWLayer, outErr error) {
 	snapshotter := rl.c.SnapshotService(rl.snapshotter)
 
-	// we need this here for the prepared snapshots or
-	// we'll have racy behaviour where sometimes they
-	// will get GC'd before we commit/use them
-	ctx, _, err := rl.c.WithLease(context.TODO(), leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lease for commit: %w", err)
-	}
-
 	key := stringid.GenerateRandomID()
-	mounts, err := snapshotter.Prepare(ctx, key, rl.diffID.String())
+
+	ctx, lease, err := createLease(context.TODO(), rl.c.LeasesService())
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr != nil {
+			if err := rl.c.LeasesService().Delete(ctx, lease); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to remove lease after NewRWLayer error")
+			}
+		}
+	}()
+
+	mounts, err := snapshotter.Prepare(ctx, key, rl.key)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +314,7 @@ func (rl *rolayer) NewRWLayer() (builder.RWLayer, error) {
 		c:           rl.c,
 		snapshotter: rl.snapshotter,
 		root:        root,
+		lease:       &lease,
 	}, nil
 }
 
@@ -310,23 +324,47 @@ type rwlayer struct {
 	c           *containerd.Client
 	snapshotter string
 	root        string
+	lease       *leases.Lease
 }
 
 func (rw *rwlayer) Root() string {
 	return rw.root
 }
 
-func (rw *rwlayer) Commit() (builder.ROLayer, error) {
-	// we need this here for the prepared snapshots or
-	// we'll have racy behaviour where sometimes they
-	// will get GC'd before we commit/use them
-	ctx, _, err := rw.c.WithLease(context.TODO(), leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lease for commit: %w", err)
-	}
+func (rw *rwlayer) Commit() (_ builder.ROLayer, outErr error) {
 	snapshotter := rw.c.SnapshotService(rw.snapshotter)
 
 	key := stringid.GenerateRandomID()
+
+	lm := rw.c.LeasesService()
+	ctx, lease, err := createLease(context.TODO(), lm)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr != nil {
+			if err := lm.Delete(ctx, lease); err != nil {
+				log.G(ctx).WithError(err).Warn("failed to remove lease after NewRWLayer error")
+			}
+		}
+	}()
+
+	// Unmount the layer, required by the containerd windows snapshotter.
+	// The windowsfilter graphdriver does this inside its own Diff method.
+	//
+	// The only place that calls this in-tree is (b *Builder) exportImage and
+	// that is called from the end of (b *Builder) performCopy which has a
+	// `defer rwLayer.Release()` pending.
+	//
+	// After the snapshotter.Commit the source snapshot is deleted anyway and
+	// it shouldn't be accessed afterwards.
+	if rw.root != "" {
+		if err := mount.UnmountAll(rw.root, 0); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.G(ctx).WithError(err).WithField("root", rw.root).Error("failed to unmount RWLayer")
+			return nil, err
+		}
+	}
+
 	err = snapshotter.Commit(ctx, key, rw.key)
 	if err != nil && !cerrdefs.IsAlreadyExists(err) {
 		return nil, err
@@ -354,31 +392,37 @@ func (rw *rwlayer) Commit() (builder.ROLayer, error) {
 		key:                key,
 		c:                  rw.c,
 		snapshotter:        rw.snapshotter,
-		diffID:             diffID,
-		root:               "",
+		diffID:             layer.DiffID(diffID),
 		contentStoreDigest: desc.Digest,
+		lease:              &lease,
 	}, nil
 }
 
-func (rw *rwlayer) Release() error {
-	snapshotter := rw.c.SnapshotService(rw.snapshotter)
-	err := snapshotter.Remove(context.TODO(), rw.key)
-	if err != nil && !cerrdefs.IsNotFound(err) {
-		return err
-	}
-
+func (rw *rwlayer) Release() (outErr error) {
 	if rw.root == "" { // nothing to release
 		return nil
 	}
-	if err := mount.UnmountAll(rw.root, 0); err != nil {
-		logrus.WithError(err).WithField("root", rw.root).Error("failed to unmount ROLayer")
+
+	if err := mount.UnmountAll(rw.root, 0); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.G(context.TODO()).WithError(err).WithField("root", rw.root).Error("failed to unmount RWLayer")
 		return err
 	}
-	if err := os.Remove(rw.root); err != nil {
-		logrus.WithError(err).WithField("dir", rw.root).Error("failed to remove mount temp dir")
+	if err := os.Remove(rw.root); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.G(context.TODO()).WithError(err).WithField("dir", rw.root).Error("failed to remove mount temp dir")
 		return err
 	}
 	rw.root = ""
+
+	if rw.lease != nil {
+		lm := rw.c.LeasesService()
+		err := lm.Delete(context.TODO(), *rw.lease)
+		if err != nil {
+			log.G(context.TODO()).WithError(err).Warn("failed to delete lease when releasing RWLayer")
+		} else {
+			rw.lease = nil
+		}
+	}
+
 	return nil
 }
 
@@ -391,125 +435,198 @@ func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent st
 		return nil, err
 	}
 
-	rootFS := ocispec.RootFS{
-		Type:    imgToCreate.RootFS.Type,
-		DiffIDs: []digest.Digest{},
-	}
-	for _, diffId := range imgToCreate.RootFS.DiffIDs {
-		rootFS.DiffIDs = append(rootFS.DiffIDs, digest.Digest(diffId))
-	}
-	exposedPorts := make(map[string]struct{}, len(imgToCreate.Config.ExposedPorts))
-	for k, v := range imgToCreate.Config.ExposedPorts {
-		exposedPorts[string(k)] = v
-	}
-
-	var ociHistory []ocispec.History
-	for _, history := range imgToCreate.History {
-		created := history.Created
-		ociHistory = append(ociHistory, ocispec.History{
-			Created:    &created,
-			CreatedBy:  history.CreatedBy,
-			Author:     history.Author,
-			Comment:    history.Comment,
-			EmptyLayer: history.EmptyLayer,
-		})
-	}
-
-	// make an ocispec.Image from the docker/image.Image
-	ociImgToCreate := ocispec.Image{
-		Created: &imgToCreate.Created,
-		Author:  imgToCreate.Author,
-		Platform: ocispec.Platform{
-			Architecture: imgToCreate.Architecture,
-			Variant:      imgToCreate.Variant,
-			OS:           imgToCreate.OS,
-			OSVersion:    imgToCreate.OSVersion,
-			OSFeatures:   imgToCreate.OSFeatures,
-		},
-		Config: ocispec.ImageConfig{
-			User:         imgToCreate.Config.User,
-			ExposedPorts: exposedPorts,
-			Env:          imgToCreate.Config.Env,
-			Entrypoint:   imgToCreate.Config.Entrypoint,
-			Cmd:          imgToCreate.Config.Cmd,
-			Volumes:      imgToCreate.Config.Volumes,
-			WorkingDir:   imgToCreate.Config.WorkingDir,
-			Labels:       imgToCreate.Config.Labels,
-			StopSignal:   imgToCreate.Config.StopSignal,
-		},
-		RootFS:  rootFS,
-		History: ociHistory,
-	}
+	ociImgToCreate := dockerImageToDockerOCIImage(*imgToCreate)
 
 	var layers []ocispec.Descriptor
+
+	var parentDigest digest.Digest
 	// if the image has a parent, we need to start with the parents layers descriptors
 	if parent != "" {
 		parentDesc, err := i.resolveDescriptor(ctx, parent)
 		if err != nil {
 			return nil, err
 		}
-		parentImageManifest, err := containerdimages.Manifest(ctx, i.client.ContentStore(), parentDesc, platforms.Default())
+		parentImageManifest, err := containerdimages.Manifest(ctx, i.content, parentDesc, platforms.Default())
 		if err != nil {
 			return nil, err
 		}
 
 		layers = parentImageManifest.Layers
+		parentDigest = parentDesc.Digest
 	}
 
-	// get the info for the new layers
-	info, err := i.client.ContentStore().Info(ctx, layerDigest)
+	cs := i.content
+
+	ra, err := cs.ReaderAt(ctx, ocispec.Descriptor{Digest: layerDigest})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read diff archive: %w", err)
 	}
+	defer ra.Close()
 
-	// append the new layer descriptor
-	layers = append(layers,
-		ocispec.Descriptor{
-			MediaType: containerdimages.MediaTypeDockerSchema2LayerGzip,
-			Digest:    layerDigest,
-			Size:      info.Size,
-		},
-	)
-
-	// necessary to prevent the contents from being GC'd
-	// between writing them here and creating an image
-	ctx, release, err := i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+	empty, err := archive.IsEmpty(content.NewReader(ra))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to check if archive is empty: %w", err)
 	}
-	defer func() {
-		if err := release(compatcontext.WithoutCancel(ctx)); err != nil {
-			logrus.WithError(err).Warn("failed to release lease created for create")
-		}
-	}()
-
-	commitManifestDesc, err := writeContentsForImage(ctx, i.snapshotter, i.client.ContentStore(), ociImgToCreate, layers)
-	if err != nil {
-		return nil, err
-	}
-
-	// image create
-	img := containerdimages.Image{
-		Name:      danglingImageName(commitManifestDesc.Digest),
-		Target:    commitManifestDesc,
-		CreatedAt: time.Now(),
-	}
-
-	createdImage, err := i.client.ImageService().Update(ctx, img)
-	if err != nil {
-		if !cerrdefs.IsNotFound(err) {
+	if !empty {
+		info, err := cs.Info(ctx, layerDigest)
+		if err != nil {
 			return nil, err
 		}
 
-		if createdImage, err = i.client.ImageService().Create(ctx, img); err != nil {
-			return nil, fmt.Errorf("failed to create new image: %w", err)
-		}
+		layers = append(layers, ocispec.Descriptor{
+			MediaType: containerdimages.MediaTypeDockerSchema2LayerGzip,
+			Digest:    layerDigest,
+			Size:      info.Size,
+		})
 	}
 
-	if err := i.unpackImage(ctx, createdImage, platforms.DefaultSpec()); err != nil {
+	createdImageId, err := i.createImageOCI(ctx, ociImgToCreate, parentDigest, layers, imgToCreate.ContainerConfig)
+	if err != nil {
 		return nil, err
 	}
 
-	newImage := dimage.Clone(imgToCreate, dimage.ID(createdImage.Target.Digest))
-	return newImage, nil
+	return dimage.Clone(imgToCreate, createdImageId), nil
+}
+
+func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec.DockerOCIImage,
+	parentDigest digest.Digest, layers []ocispec.Descriptor,
+	containerConfig container.Config,
+) (dimage.ID, error) {
+	// Necessary to prevent the contents from being GC'd
+	// between writing them here and creating an image
+	ctx, release, err := i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := release(compatcontext.WithoutCancel(ctx)); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to release lease created for create")
+		}
+	}()
+
+	manifestDesc, ccDesc, err := writeContentsForImage(ctx, i.snapshotter, i.content, imgToCreate, layers, containerConfig)
+	if err != nil {
+		return "", err
+	}
+
+	img := containerdimages.Image{
+		Name:      danglingImageName(manifestDesc.Digest),
+		Target:    manifestDesc,
+		CreatedAt: time.Now(),
+		Labels: map[string]string{
+			imageLabelClassicBuilderParent:          parentDigest.String(),
+			imageLabelClassicBuilderContainerConfig: ccDesc.Digest.String(),
+		},
+	}
+
+	if parentDigest == "" {
+		img.Labels[imageLabelClassicBuilderFromScratch] = "1"
+	}
+
+	createdImage, err := i.images.Update(ctx, img)
+	if err != nil {
+		if !cerrdefs.IsNotFound(err) {
+			return "", err
+		}
+
+		if createdImage, err = i.images.Create(ctx, img); err != nil {
+			return "", fmt.Errorf("failed to create new image: %w", err)
+		}
+	}
+
+	if err := i.unpackImage(ctx, i.StorageDriver(), img, manifestDesc); err != nil {
+		return "", err
+	}
+
+	return dimage.ID(createdImage.Target.Digest), nil
+}
+
+// writeContentsForImage will commit oci image config and manifest into containerd's content store.
+func writeContentsForImage(ctx context.Context, snName string, cs content.Store,
+	newConfig imagespec.DockerOCIImage, layers []ocispec.Descriptor,
+	containerConfig container.Config,
+) (
+	manifestDesc ocispec.Descriptor,
+	containerConfigDesc ocispec.Descriptor,
+	_ error,
+) {
+	newConfigJSON, err := json.Marshal(newConfig)
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Descriptor{}, err
+	}
+
+	configDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageConfig,
+		Digest:    digest.FromBytes(newConfigJSON),
+		Size:      int64(len(newConfigJSON)),
+	}
+
+	newMfst := struct {
+		MediaType string `json:"mediaType,omitempty"`
+		ocispec.Manifest
+	}{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Manifest: ocispec.Manifest{
+			Versioned: specs.Versioned{
+				SchemaVersion: 2,
+			},
+			Config: configDesc,
+			Layers: layers,
+		},
+	}
+
+	newMfstJSON, err := json.MarshalIndent(newMfst, "", "    ")
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Descriptor{}, err
+	}
+
+	newMfstDesc := ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.FromBytes(newMfstJSON),
+		Size:      int64(len(newMfstJSON)),
+	}
+
+	// new manifest should reference the layers and config content
+	labels := map[string]string{
+		"containerd.io/gc.ref.content.0": configDesc.Digest.String(),
+	}
+	for i, l := range layers {
+		labels[fmt.Sprintf("containerd.io/gc.ref.content.%d", i+1)] = l.Digest.String()
+	}
+
+	err = content.WriteBlob(ctx, cs, newMfstDesc.Digest.String(), bytes.NewReader(newMfstJSON), newMfstDesc, content.WithLabels(labels))
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Descriptor{}, err
+	}
+
+	ccDesc, err := saveContainerConfig(ctx, cs, newMfstDesc.Digest, containerConfig)
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Descriptor{}, err
+	}
+
+	// config should reference to snapshotter and container config
+	labelOpt := content.WithLabels(map[string]string{
+		fmt.Sprintf("containerd.io/gc.ref.snapshot.%s", snName): identity.ChainID(newConfig.RootFS.DiffIDs).String(),
+		contentLabelGcRefContainerConfig:                        ccDesc.Digest.String(),
+	})
+	err = content.WriteBlob(ctx, cs, configDesc.Digest.String(), bytes.NewReader(newConfigJSON), configDesc, labelOpt)
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Descriptor{}, err
+	}
+
+	return newMfstDesc, ccDesc, nil
+}
+
+// saveContainerConfig serializes the given ContainerConfig into a json and
+// stores it in the content store and returns its descriptor.
+func saveContainerConfig(ctx context.Context, content content.Ingester, imgID digest.Digest, containerConfig container.Config) (ocispec.Descriptor, error) {
+	containerConfigDesc, err := storeJson(ctx, content,
+		"application/vnd.docker.container.image.v1+json", containerConfig,
+		map[string]string{contentLabelClassicBuilderImage: imgID.String()},
+	)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+
+	return containerConfigDesc, nil
 }

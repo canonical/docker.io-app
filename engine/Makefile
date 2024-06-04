@@ -4,7 +4,7 @@ DOCKER ?= docker
 BUILDX ?= $(DOCKER) buildx
 
 # set the graph driver as the current graphdriver if not set
-DOCKER_GRAPHDRIVER := $(if $(DOCKER_GRAPHDRIVER),$(DOCKER_GRAPHDRIVER),$(shell docker info 2>&1 | grep "Storage Driver" | sed 's/.*: //'))
+DOCKER_GRAPHDRIVER := $(if $(DOCKER_GRAPHDRIVER),$(DOCKER_GRAPHDRIVER),$(shell docker info -f '{{ .Driver }}' 2>&1))
 export DOCKER_GRAPHDRIVER
 
 DOCKER_GITCOMMIT := $(shell git rev-parse HEAD)
@@ -16,6 +16,9 @@ export VALIDATE_REPO
 export VALIDATE_BRANCH
 export VALIDATE_ORIGIN_BRANCH
 
+export PAGER
+export GIT_PAGER
+
 # env vars passed through directly to Docker's build scripts
 # to allow things like `make KEEPBUNDLE=1 binary` easily
 # `project/PACKAGERS.md` have some limited documentation of some of these
@@ -24,10 +27,9 @@ export VALIDATE_ORIGIN_BRANCH
 # option of "go build". For example, a built-in graphdriver priority list
 # can be changed during build time like this:
 #
-# make DOCKER_LDFLAGS="-X github.com/docker/docker/daemon/graphdriver.priority=overlay2,devicemapper" dynbinary
+# make DOCKER_LDFLAGS="-X github.com/docker/docker/daemon/graphdriver.priority=overlay2,zfs" dynbinary
 #
 DOCKER_ENVS := \
-	-e BUILD_APT_MIRROR \
 	-e BUILDFLAGS \
 	-e KEEPBUNDLE \
 	-e DOCKER_BUILD_ARGS \
@@ -61,6 +63,7 @@ DOCKER_ENVS := \
 	-e TEST_INTEGRATION_FAIL_FAST \
 	-e TEST_SKIP_INTEGRATION \
 	-e TEST_SKIP_INTEGRATION_CLI \
+	-e TEST_IGNORE_CGROUP_CHECK \
 	-e TESTCOVERAGE \
 	-e TESTDEBUG \
 	-e TESTDIRS \
@@ -76,7 +79,12 @@ DOCKER_ENVS := \
 	-e PLATFORM \
 	-e DEFAULT_PRODUCT_LICENSE \
 	-e PRODUCT \
-	-e PACKAGER_NAME
+	-e PACKAGER_NAME \
+	-e PAGER \
+	-e GIT_PAGER \
+	-e OTEL_EXPORTER_OTLP_ENDPOINT \
+	-e OTEL_EXPORTER_OTLP_PROTOCOL \
+	-e OTEL_SERVICE_NAME
 # note: we _cannot_ add "-e DOCKER_BUILDTAGS" here because even if it's unset in the shell, that would shadow the "ENV DOCKER_BUILDTAGS" set in our Dockerfile, which is very important for our official builds
 
 # to allow `make BIND_DIR=. shell` or `make BIND_DIR= test`
@@ -108,8 +116,6 @@ DOCKER_PORT_FORWARD := $(if $(DOCKER_PORT),-p "$(DOCKER_PORT)",)
 DELVE_PORT_FORWARD := $(if $(DELVE_PORT),-p "$(DELVE_PORT)",)
 
 DOCKER_FLAGS := $(DOCKER) run --rm --privileged $(DOCKER_CONTAINER_NAME) $(DOCKER_ENVS) $(DOCKER_MOUNT) $(DOCKER_PORT_FORWARD) $(DELVE_PORT_FORWARD)
-BUILD_APT_MIRROR := $(if $(DOCKER_BUILD_APT_MIRROR),--build-arg APT_MIRROR=$(DOCKER_BUILD_APT_MIRROR))
-export BUILD_APT_MIRROR
 
 SWAGGER_DOCS_PORT ?= 9000
 
@@ -137,7 +143,6 @@ endif
 DOCKER_RUN_DOCKER := $(DOCKER_FLAGS) "$(DOCKER_IMAGE)"
 
 DOCKER_BUILD_ARGS += --build-arg=GO_VERSION
-DOCKER_BUILD_ARGS += --build-arg=APT_MIRROR
 DOCKER_BUILD_ARGS += --build-arg=DOCKERCLI_VERSION
 DOCKER_BUILD_ARGS += --build-arg=DOCKERCLI_REPOSITORY
 DOCKER_BUILD_ARGS += --build-arg=DOCKERCLI_INTEGRATION_VERSION
@@ -146,7 +151,7 @@ ifdef DOCKER_SYSTEMD
 DOCKER_BUILD_ARGS += --build-arg=SYSTEMD=true
 endif
 
-BUILD_OPTS := ${BUILD_APT_MIRROR} ${DOCKER_BUILD_ARGS} ${DOCKER_BUILD_OPTS}
+BUILD_OPTS := ${DOCKER_BUILD_ARGS} ${DOCKER_BUILD_OPTS}
 BUILD_CMD := $(BUILDX) build
 BAKE_CMD := $(BUILDX) bake
 
@@ -220,6 +225,11 @@ test-unit: build ## run the unit tests
 validate: build ## validate DCO, Seccomp profile generation, gofmt,\n./pkg/ isolation, golint, tests, tomls, go vet and vendor
 	$(DOCKER_RUN_DOCKER) hack/validate/all
 
+validate-generate-files:
+	$(BUILD_CMD) --target "validate" \
+		--output "type=cacheonly" \
+		--file "./hack/dockerfiles/generate-files.Dockerfile" .
+
 validate-%: build ## validate specific check
 	$(DOCKER_RUN_DOCKER) hack/validate/$*
 
@@ -241,3 +251,16 @@ swagger-docs: ## preview the API documentation
 		-e 'REDOC_OPTIONS=hide-hostname="true" lazy-rendering' \
 		-p $(SWAGGER_DOCS_PORT):80 \
 		bfirsh/redoc:1.14.0
+
+.PHONY: generate-files
+generate-files:
+	$(eval $@_TMP_OUT := $(shell mktemp -d -t moby-output.XXXXXXXXXX))
+	@if [ -z "$($@_TMP_OUT)" ]; then \
+		echo "Temp dir is not set"; \
+		exit 1; \
+	fi
+	$(BUILD_CMD) --target "update" \
+		--output "type=local,dest=$($@_TMP_OUT)" \
+		--file "./hack/dockerfiles/generate-files.Dockerfile" .
+	cp -R "$($@_TMP_OUT)"/. .
+	rm -rf "$($@_TMP_OUT)"/*
