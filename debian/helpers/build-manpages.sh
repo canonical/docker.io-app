@@ -22,13 +22,13 @@ trap clean EXIT
 cp -r cli/ "${build_dir}"
 pushd "${build_dir}"/cli
 
-# Check if golang-1.20-go is installed
-if dpkg -l golang-1.20-go >/dev/null 2>&1; then
-  # Add Go 1.20 to the $PATH to be used instead of the default
-  # (in case the default is not 1.20).
-  PATH=/usr/lib/go-1.20/bin:"${PATH}"
+# Check if golang-1.21-go is installed
+if dpkg -l golang-1.21-go >/dev/null 2>&1; then
+  # Add Go 1.21 to the $PATH to be used instead of the default
+  # (in case the default is not 1.21).
+  PATH=/usr/lib/go-1.21/bin:"${PATH}"
 else
-  echo "[E] Please, install golang-1.20-go."
+  echo "[E] Please, install golang-1.21-go."
   exit 5
 fi
 
