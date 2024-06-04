@@ -3,8 +3,11 @@ docker.io-app (26.1.3-0ubuntu1) UNRELEASED; urgency=medium
   * New upstream release.
     - Allow runc to kill containers when confined to the runc profile in
       AppArmor version 4.0.0 and later.
+  * d/helpers/build-manpages.sh: build manpages with Go 1.21.
+  * d/manpages: update them all.
+  * d/docker.io.docs: remove NOTICE file of a dependency removed from cli.
 
- -- Lucas Kanashiro <kanashiro@ubuntu.com>  Tue, 04 Jun 2024 17:45:06 -0300
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Tue, 04 Jun 2024 18:01:29 -0300
 
 docker.io-app (24.0.7-0ubuntu4) noble; urgency=medium
 
