@@ -1,16 +1,17 @@
 //go:build linux
-// +build linux
 
 package overlay
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"syscall"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/drivers/overlay/overlayutils"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/ns"
-	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -47,7 +48,8 @@ func createVethPair() (string, string, error) {
 	// Generate and add the interface pipe host <-> sandbox
 	veth := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{Name: name1, TxQLen: 0},
-		PeerName:  name2}
+		PeerName:  name2,
+	}
 	if err := nlh.LinkAdd(veth); err != nil {
 		return "", "", fmt.Errorf("error creating veth pair: %v", err)
 	}
@@ -55,7 +57,7 @@ func createVethPair() (string, string, error) {
 	return name1, name2, nil
 }
 
-func createVxlan(name string, vni uint32, mtu int) error {
+func createVxlan(name string, vni uint32, mtu int, vtepIPv6 bool) error {
 	vxlan := &netlink.Vxlan{
 		LinkAttrs: netlink.LinkAttrs{Name: name, MTU: mtu},
 		VxlanId:   int(vni),
@@ -64,6 +66,19 @@ func createVxlan(name string, vni uint32, mtu int) error {
 		Proxy:     true,
 		L3miss:    true,
 		L2miss:    true,
+	}
+
+	// The kernel restricts the destination VTEP (virtual tunnel endpoint) in
+	// VXLAN forwarding database entries to a single address family, defaulting
+	// to IPv4 unless either an IPv6 group or default remote destination address
+	// is configured when the VXLAN link is created.
+	//
+	// Set up the VXLAN link for IPv6 destination addresses by setting the VXLAN
+	// group address to the IPv6 unspecified address, like iproute2.
+	// https://github.com/iproute2/iproute2/commit/97d564b90ccb1e4a3c756d9caae161f55b2b63a2
+	// https://patchwork.ozlabs.org/project/netdev/patch/20180917171325.GA2660@localhost.localdomain/
+	if vtepIPv6 {
+		vxlan.Group = net.IPv6unspecified
 	}
 
 	if err := ns.NlHandle().LinkAdd(vxlan); err != nil {
@@ -102,7 +117,7 @@ func deleteVxlanByVNI(path string, vni uint32) error {
 		defer nlh.Close()
 		err = nlh.SetSocketTimeout(soTimeout)
 		if err != nil {
-			logrus.Warnf("Failed to set the timeout on the netlink handle sockets for vxlan deletion: %v", err)
+			log.G(context.TODO()).Warnf("Failed to set the timeout on the netlink handle sockets for vxlan deletion: %v", err)
 		}
 	}
 

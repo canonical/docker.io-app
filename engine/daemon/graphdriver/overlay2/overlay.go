@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package overlay2 // import "github.com/docker/docker/daemon/graphdriver/overlay2"
 
@@ -16,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/containerd/continuity/fs"
+	"github.com/containerd/log"
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/daemon/graphdriver/overlayutils"
 	"github.com/docker/docker/pkg/archive"
@@ -30,14 +30,11 @@ import (
 	"github.com/moby/locker"
 	"github.com/moby/sys/mount"
 	"github.com/opencontainers/selinux/go-selinux/label"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
-var (
-	// untar defines the untar method
-	untar = chrootarchive.UntarUncompressed
-)
+// untar defines the untar method
+var untar = chrootarchive.UntarUncompressed
 
 // This backend uses the overlay union filesystem for containers
 // with diff directories for each layer.
@@ -104,7 +101,7 @@ type Driver struct {
 }
 
 var (
-	logger                = logrus.WithField("storage-driver", "overlay2")
+	logger                = log.G(context.TODO()).WithField("storage-driver", "overlay2")
 	backingFs             = "<unknown>"
 	projectQuotaSupported = false
 
@@ -170,10 +167,10 @@ func Init(home string, options []string, idMap idtools.IdentityMapping) (graphdr
 		UID: cur.UID,
 		GID: idMap.RootPair().GID,
 	}
-	if err := idtools.MkdirAllAndChown(home, 0710, dirID); err != nil {
+	if err := idtools.MkdirAllAndChown(home, 0o710, dirID); err != nil {
 		return nil, err
 	}
-	if err := idtools.MkdirAllAndChown(path.Join(home, linkDir), 0700, cur); err != nil {
+	if err := idtools.MkdirAllAndChown(path.Join(home, linkDir), 0o700, cur); err != nil {
 		return nil, err
 	}
 
@@ -349,10 +346,10 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		GID: root.GID,
 	}
 
-	if err := idtools.MkdirAllAndChown(path.Dir(dir), 0710, dirID); err != nil {
+	if err := idtools.MkdirAllAndChown(path.Dir(dir), 0o710, dirID); err != nil {
 		return err
 	}
-	if err := idtools.MkdirAndChown(dir, 0710, dirID); err != nil {
+	if err := idtools.MkdirAndChown(dir, 0o710, dirID); err != nil {
 		return err
 	}
 
@@ -377,7 +374,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		}
 	}
 
-	if err := idtools.MkdirAndChown(path.Join(dir, diffDirName), 0755, root); err != nil {
+	if err := idtools.MkdirAndChown(path.Join(dir, diffDirName), 0o755, root); err != nil {
 		return err
 	}
 
@@ -396,7 +393,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		return nil
 	}
 
-	if err := idtools.MkdirAndChown(path.Join(dir, workDirName), 0700, root); err != nil {
+	if err := idtools.MkdirAndChown(path.Join(dir, workDirName), 0o700, root); err != nil {
 		return err
 	}
 
@@ -409,7 +406,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 		return err
 	}
 	if lower != "" {
-		if err := ioutils.AtomicWriteFile(path.Join(dir, lowerFile), []byte(lower), 0o666); err != nil {
+		if err := ioutils.AtomicWriteFile(path.Join(dir, lowerFile), []byte(lower), 0o644); err != nil {
 			return err
 		}
 	}
@@ -569,7 +566,7 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 	mountTarget := mergedDir
 
 	root := d.idMap.RootPair()
-	if err := idtools.MkdirAndChown(mergedDir, 0700, root); err != nil {
+	if err := idtools.MkdirAndChown(mergedDir, 0o700, root); err != nil {
 		return "", err
 	}
 

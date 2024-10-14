@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 
+	resourcestypes "github.com/moby/buildkit/executor/resources/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -30,4 +31,8 @@ func (h *noneNS) Set(s *specs.Spec) error {
 
 func (h *noneNS) Close() error {
 	return nil
+}
+
+func (h *noneNS) Sample() (*resourcestypes.NetworkSample, error) {
+	return nil, nil
 }

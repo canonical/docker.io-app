@@ -1,7 +1,9 @@
 package main
 
 import (
-	"github.com/sirupsen/logrus"
+	"context"
+
+	"github.com/containerd/log"
 	"google.golang.org/grpc/grpclog"
 )
 
@@ -12,6 +14,6 @@ import (
 // warn => debug
 // error => warn
 func configureGRPCLog() {
-	l := logrus.WithField("library", "grpc")
-	grpclog.SetLoggerV2(grpclog.NewLoggerV2(l.WriterLevel(logrus.TraceLevel), l.WriterLevel(logrus.DebugLevel), l.WriterLevel(logrus.WarnLevel)))
+	l := log.G(context.TODO()).WithField("library", "grpc")
+	grpclog.SetLoggerV2(grpclog.NewLoggerV2(l.WriterLevel(log.TraceLevel), l.WriterLevel(log.DebugLevel), l.WriterLevel(log.WarnLevel)))
 }

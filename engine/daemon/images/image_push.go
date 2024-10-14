@@ -5,8 +5,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/docker/distribution/manifest/schema2"
-	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/distribution"
 	progressutils "github.com/docker/docker/distribution/utils"
@@ -48,6 +48,6 @@ func (i *ImageService) PushImage(ctx context.Context, ref reference.Named, metaH
 	err := distribution.Push(ctx, ref, imagePushConfig)
 	close(progressChan)
 	<-writesDone
-	imageActions.WithValues("push").UpdateSince(start)
+	ImageActions.WithValues("push").UpdateSince(start)
 	return err
 }

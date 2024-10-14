@@ -89,14 +89,14 @@ To disable btrfs:
 export DOCKER_BUILDTAGS='exclude_graphdriver_btrfs'
 ```
 
-To disable devicemapper:
+To disable zfs:
 ```bash
-export DOCKER_BUILDTAGS='exclude_graphdriver_devicemapper'
+export DOCKER_BUILDTAGS='exclude_graphdriver_zfs'
 ```
 
 NOTE: if you need to set more than one build tag, space separate them:
 ```bash
-export DOCKER_BUILDTAGS='exclude_graphdriver_devicemapper exclude_graphdriver_btrfs'
+export DOCKER_BUILDTAGS='exclude_graphdriver_btrfs exclude_graphdriver_zfs'
 ```
 
 ## System Dependencies
@@ -106,6 +106,8 @@ export DOCKER_BUILDTAGS='exclude_graphdriver_devicemapper exclude_graphdriver_bt
 To function properly, the Docker daemon needs the following software to be
 installed and available at runtime:
 
+* containerd version 1.6.22 or later
+  * containerd versions 1.7.0 through 1.7.2 are incompatible
 * iptables version 1.4 or later
 * procps (or similar provider of a "ps" executable)
 * e2fsprogs version 1.4.12 or later (in use: mkfs.ext4, tune2fs)

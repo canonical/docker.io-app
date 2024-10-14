@@ -5,9 +5,28 @@ import (
 	"io"
 	"time"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+// ContainerCreateConfig is the parameter set to ContainerCreate()
+type ContainerCreateConfig struct {
+	Name                        string
+	Config                      *container.Config
+	HostConfig                  *container.HostConfig
+	NetworkingConfig            *network.NetworkingConfig
+	Platform                    *ocispec.Platform
+	DefaultReadOnlyNonRecursive bool
+}
+
+// ContainerRmConfig holds arguments for the container remove
+// operation. This struct is used to tell the backend what operations
+// to perform.
+type ContainerRmConfig struct {
+	ForceRemove, RemoveVolume, RemoveLink bool
+}
 
 // ContainerAttachConfig holds the streams to use when connecting to a container to view logs.
 type ContainerAttachConfig struct {
@@ -71,7 +90,6 @@ type ContainerStatsConfig struct {
 	Stream    bool
 	OneShot   bool
 	OutStream io.Writer
-	Version   string
 }
 
 // ExecInspect holds information about a running process started
@@ -111,6 +129,13 @@ type CreateImageConfig struct {
 	Changes []string
 }
 
+// GetImageOpts holds parameters to retrieve image information
+// from the backend.
+type GetImageOpts struct {
+	Platform *ocispec.Platform
+	Details  bool
+}
+
 // CommitConfig is the configuration for creating an image as part of a build.
 type CommitConfig struct {
 	Author              string
@@ -121,4 +146,26 @@ type CommitConfig struct {
 	ContainerMountLabel string
 	ContainerOS         string
 	ParentImageID       string
+}
+
+// PluginRmConfig holds arguments for plugin remove.
+type PluginRmConfig struct {
+	ForceRemove bool
+}
+
+// PluginEnableConfig holds arguments for plugin enable
+type PluginEnableConfig struct {
+	Timeout int
+}
+
+// PluginDisableConfig holds arguments for plugin disable.
+type PluginDisableConfig struct {
+	ForceDisable bool
+}
+
+// NetworkListConfig stores the options available for listing networks
+type NetworkListConfig struct {
+	// TODO(@cpuguy83): naming is hard, this is pulled from what was being used in the router before moving here
+	Detailed bool
+	Verbose  bool
 }

@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package daemon // import "github.com/docker/docker/daemon"
 
@@ -10,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/archive"
@@ -86,7 +86,7 @@ func (daemon *Daemon) containerArchivePath(container *container.Container, path 
 		return err
 	})
 
-	daemon.LogContainerEvent(container, "archive-path")
+	daemon.LogContainerEvent(container, events.ActionArchivePath)
 
 	return content, stat, nil
 }
@@ -156,58 +156,9 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 		return err
 	}
 
-	daemon.LogContainerEvent(container, "extract-to-dir")
+	daemon.LogContainerEvent(container, events.ActionExtractToDir)
 
 	return nil
-}
-
-func (daemon *Daemon) containerCopy(container *container.Container, resource string) (rc io.ReadCloser, err error) {
-	container.Lock()
-
-	defer func() {
-		if err != nil {
-			// Wait to unlock the container until the archive is fully read
-			// (see the ReadCloseWrapper func below) or if there is an error
-			// before that occurs.
-			container.Unlock()
-		}
-	}()
-
-	cfs, err := daemon.openContainerFS(container)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			cfs.Close()
-		}
-	}()
-
-	err = cfs.RunInFS(context.TODO(), func() error {
-		_, err := os.Stat(resource)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	tb, err := archive.NewTarballer(resource, &archive.TarOptions{
-		Compression: archive.Uncompressed,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	cfs.GoInFS(context.TODO(), tb.Do)
-	archv := tb.Reader()
-	reader := ioutils.NewReadCloserWrapper(archv, func() error {
-		err := archv.Close()
-		_ = cfs.Close()
-		container.Unlock()
-		return err
-	})
-	daemon.LogContainerEvent(container, "copy")
-	return reader, nil
 }
 
 // checkIfPathIsInAVolume checks if the path is in a volume. If it is, it

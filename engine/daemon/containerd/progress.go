@@ -8,13 +8,16 @@ import (
 
 	"github.com/containerd/containerd/content"
 	cerrdefs "github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
+	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sirupsen/logrus"
 )
 
 type progressUpdater interface {
@@ -48,11 +51,11 @@ func (j *jobs) showProgress(ctx context.Context, out progress.Output, updater pr
 			case <-ticker.C:
 				if err := updater.UpdateProgress(ctx, j, out, start); err != nil {
 					if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-						logrus.WithError(err).Error("Updating progress failed")
+						log.G(ctx).WithError(err).Error("Updating progress failed")
 					}
 				}
 			case <-ctx.Done():
-				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*500)
+				ctx, cancel := context.WithTimeout(compatcontext.WithoutCancel(ctx), time.Millisecond*500)
 				defer cancel()
 				updater.UpdateProgress(ctx, j, out, start)
 				close(lastUpdate)
@@ -104,17 +107,18 @@ func (j *jobs) Jobs() []ocispec.Descriptor {
 }
 
 type pullProgress struct {
-	Store      content.Store
-	ShowExists bool
+	store      content.Store
+	showExists bool
+	hideLayers bool
 }
 
 func (p pullProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out progress.Output, start time.Time) error {
-	actives, err := p.Store.ListStatuses(ctx, "")
+	actives, err := p.store.ListStatuses(ctx, "")
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
-		logrus.WithError(err).Error("status check failed")
+		log.G(ctx).WithError(err).Error("status check failed")
 		return nil
 	}
 	pulling := make(map[string]content.Status, len(actives))
@@ -125,8 +129,15 @@ func (p pullProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out pro
 	}
 
 	for _, j := range ongoing.Jobs() {
+		if p.hideLayers {
+			ongoing.Remove(j)
+			continue
+		}
 		key := remotes.MakeRefKey(ctx, j)
 		if info, ok := pulling[key]; ok {
+			if info.Offset == 0 {
+				continue
+			}
 			out.WriteProgress(progress.Progress{
 				ID:      stringid.TruncateID(j.Digest.Encoded()),
 				Action:  "Downloading",
@@ -136,7 +147,7 @@ func (p pullProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out pro
 			continue
 		}
 
-		info, err := p.Store.Info(ctx, j.Digest)
+		info, err := p.store.Info(ctx, j.Digest)
 		if err != nil {
 			if !cerrdefs.IsNotFound(err) {
 				return err
@@ -149,7 +160,7 @@ func (p pullProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out pro
 				LastUpdate: true,
 			})
 			ongoing.Remove(j)
-		} else if p.ShowExists {
+		} else if p.showExists {
 			out.WriteProgress(progress.Progress{
 				ID:         stringid.TruncateID(j.Digest.Encoded()),
 				Action:     "Already exists",
@@ -163,30 +174,7 @@ func (p pullProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out pro
 }
 
 type pushProgress struct {
-	Tracker   docker.StatusTracker
-	mountable map[digest.Digest]struct{}
-	mutex     sync.Mutex
-}
-
-func (p *pushProgress) addMountable(dgst digest.Digest) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	if p.mountable == nil {
-		p.mountable = map[digest.Digest]struct{}{}
-	}
-	p.mountable[dgst] = struct{}{}
-}
-
-func (p *pushProgress) isMountable(dgst digest.Digest) bool {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	if p.mountable == nil {
-		return false
-	}
-	_, has := p.mountable[dgst]
-	return has
+	Tracker docker.StatusTracker
 }
 
 func (p *pushProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out progress.Output, start time.Time) error {
@@ -203,8 +191,18 @@ func (p *pushProgress) UpdateProgress(ctx context.Context, ongoing *jobs, out pr
 		}
 
 		if status.Committed && status.Offset >= status.Total {
-			if p.isMountable(j.Digest) {
-				progress.Update(out, id, "Mounted")
+			if status.MountedFrom != "" {
+				from := status.MountedFrom
+				if ref, err := reference.ParseNormalizedNamed(from); err == nil {
+					from = reference.Path(ref)
+				}
+				progress.Update(out, id, "Mounted from "+from)
+			} else if status.Exists {
+				if images.IsLayerType(j.MediaType) {
+					progress.Update(out, id, "Layer already exists")
+				} else {
+					progress.Update(out, id, "Already exists")
+				}
 			} else {
 				progress.Update(out, id, "Pushed")
 			}

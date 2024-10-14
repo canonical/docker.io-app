@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/events"
@@ -76,7 +76,7 @@ func (b *Backend) Build(ctx context.Context, config backend.BuildConfig) (string
 		return "", nil
 	}
 
-	var imageID = build.ImageID
+	imageID := build.ImageID
 	if options.Squash {
 		if imageID, err = squashBuild(build, b.imageComponent); err != nil {
 			return "", err
@@ -104,7 +104,7 @@ func (b *Backend) PruneCache(ctx context.Context, opts types.BuildCachePruneOpti
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to prune build cache")
 	}
-	b.eventsService.Log("prune", events.BuilderEventType, events.Actor{
+	b.eventsService.Log(events.ActionPrune, events.BuilderEventType, events.Actor{
 		Attributes: map[string]string{
 			"reclaimed": strconv.FormatInt(buildCacheSize, 10),
 		},

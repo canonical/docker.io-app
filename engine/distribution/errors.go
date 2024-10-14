@@ -1,13 +1,15 @@
 package distribution // import "github.com/docker/docker/distribution"
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
 	"syscall"
 
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
 	"github.com/docker/distribution"
-	"github.com/docker/distribution/reference"
 	"github.com/docker/distribution/registry/api/errcode"
 	v2 "github.com/docker/distribution/registry/api/v2"
 	"github.com/docker/distribution/registry/client"
@@ -15,7 +17,6 @@ import (
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/errdefs"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // fallbackError wraps an error that can possibly allow fallback to a different
@@ -85,7 +86,7 @@ func translatePullError(err error, ref reference.Named) error {
 	case errcode.Errors:
 		if len(v) != 0 {
 			for _, extra := range v[1:] {
-				logrus.WithError(extra).Infof("Ignoring extra error returned from registry")
+				log.G(context.TODO()).WithError(extra).Infof("Ignoring extra error returned from registry")
 			}
 			return translatePullError(v[0], ref)
 		}
@@ -211,3 +212,16 @@ func (e reservedNameError) Error() string {
 }
 
 func (e reservedNameError) Forbidden() {}
+
+type invalidArgumentErr struct{ error }
+
+func (invalidArgumentErr) InvalidParameter() {}
+
+func DeprecatedSchema1ImageError(ref reference.Named) error {
+	msg := "[DEPRECATION NOTICE] Docker Image Format v1 and Docker Image manifest version 2, schema 1 support is disabled by default and will be removed in an upcoming release."
+	if ref != nil {
+		msg += " Suggest the author of " + ref.String() + " to upgrade the image to the OCI Format or Docker Image manifest v2, schema 2."
+	}
+	msg += " More information at https://docs.docker.com/go/deprecated-image-specs/"
+	return invalidArgumentErr{errors.New(msg)}
+}

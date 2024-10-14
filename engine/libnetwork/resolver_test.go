@@ -1,20 +1,20 @@
 package libnetwork
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"net"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/libnetwork/testutils"
+	"github.com/containerd/log"
+	"github.com/docker/docker/internal/testutils/netnsutils"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
-	"gotest.tools/v3/skip"
 )
 
 // a simple/null address type that will be used to fake a local address for unit testing
@@ -38,6 +38,10 @@ type tstwriter struct {
 }
 
 func (w *tstwriter) WriteMsg(m *dns.Msg) (err error) {
+	// Assert that the message is serializable.
+	if _, err := m.Pack(); err != nil {
+		return err
+	}
 	w.msg = m
 	return nil
 }
@@ -82,7 +86,7 @@ func checkDNSAnswersCount(t *testing.T, m *dns.Msg, expected int) {
 func checkDNSResponseCode(t *testing.T, m *dns.Msg, expected int) {
 	t.Helper()
 	if m.MsgHdr.Rcode != expected {
-		t.Fatalf("Expected DNS response code: %d. Found: %d", expected, m.MsgHdr.Rcode)
+		t.Fatalf("Expected DNS response code: %d (%s). Found: %d (%s)", expected, dns.RcodeToString[expected], m.MsgHdr.Rcode, dns.RcodeToString[m.MsgHdr.Rcode])
 	}
 }
 
@@ -91,102 +95,6 @@ func checkDNSRRType(t *testing.T, actual, expected uint16) {
 	if actual != expected {
 		t.Fatalf("Expected DNS Rrtype: %d. Found: %d", expected, actual)
 	}
-}
-
-func TestDNSIPQuery(t *testing.T) {
-	skip.If(t, runtime.GOOS == "windows", "test only works on linux")
-
-	defer testutils.SetupTestOSContext(t)()
-	c, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Stop()
-
-	n, err := c.NewNetwork("bridge", "dtnet1", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := n.Delete(); err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	ep, err := n.CreateEndpoint("testep")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sb, err := c.NewSandbox("c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() {
-		if err := sb.Delete(); err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	// we need the endpoint only to populate ep_list for the sandbox as part of resolve_name
-	// it is not set as a target for name resolution and does not serve any other purpose
-	err = ep.Join(sb)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// add service records which are used to resolve names. These are the real targets for the DNS querries
-	n.(*network).addSvcRecords("ep1", "name1", "svc1", net.ParseIP("192.168.0.1"), net.IP{}, true, "test")
-
-	w := new(tstwriter)
-	// the unit tests right now will focus on non-proxyed DNS requests
-	r := NewResolver(resolverIPSandbox, false, sb)
-
-	// test name1's IP is resolved correctly with the default A type query
-	// Also make sure DNS lookups are case insensitive
-	names := []string{"name1", "NaMe1"}
-	for _, name := range names {
-		q := new(dns.Msg)
-		q.SetQuestion(name, dns.TypeA)
-		r.serveDNS(w, q)
-		resp := w.GetResponse()
-		checkNonNullResponse(t, resp)
-		t.Log("Response: ", resp.String())
-		checkDNSResponseCode(t, resp, dns.RcodeSuccess)
-		checkDNSAnswersCount(t, resp, 1)
-		checkDNSRRType(t, resp.Answer[0].Header().Rrtype, dns.TypeA)
-		if answer, ok := resp.Answer[0].(*dns.A); ok {
-			if !answer.A.Equal(net.ParseIP("192.168.0.1")) {
-				t.Fatalf("IP response in Answer %v does not match 192.168.0.1", answer.A)
-			}
-		} else {
-			t.Fatal("Answer of type A not found")
-		}
-		w.ClearResponse()
-	}
-
-	// test MX query with name1 results in Success response with 0 answer records
-	q := new(dns.Msg)
-	q.SetQuestion("name1", dns.TypeMX)
-	r.serveDNS(w, q)
-	resp := w.GetResponse()
-	checkNonNullResponse(t, resp)
-	t.Log("Response: ", resp.String())
-	checkDNSResponseCode(t, resp, dns.RcodeSuccess)
-	checkDNSAnswersCount(t, resp, 0)
-	w.ClearResponse()
-
-	// test MX query with non existent name results in ServFail response with 0 answer records
-	// since this is a unit test env, we disable proxying DNS above which results in ServFail rather than NXDOMAIN
-	q = new(dns.Msg)
-	q.SetQuestion("nonexistent", dns.TypeMX)
-	r.serveDNS(w, q)
-	resp = w.GetResponse()
-	checkNonNullResponse(t, resp)
-	t.Log("Response: ", resp.String())
-	checkDNSResponseCode(t, resp, dns.RcodeServerFailure)
-	w.ClearResponse()
 }
 
 func newDNSHandlerServFailOnce(requests *int) func(w dns.ResponseWriter, r *dns.Msg) {
@@ -199,7 +107,7 @@ func newDNSHandlerServFailOnce(requests *int) func(w dns.ResponseWriter, r *dns.
 		}
 		*requests = *requests + 1
 		if err := w.WriteMsg(m); err != nil {
-			logrus.WithError(err).Error("Error writing dns response")
+			log.G(context.TODO()).WithError(err).Error("Error writing dns response")
 		}
 	}
 }
@@ -230,79 +138,6 @@ func waitForLocalDNSServer(t *testing.T) {
 			break
 		}
 	}
-}
-
-func TestDNSProxyServFail(t *testing.T) {
-	skip.If(t, runtime.GOOS == "windows", "test only works on linux")
-
-	osctx := testutils.SetupTestOSContextEx(t)
-	defer osctx.Cleanup(t)
-
-	c, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Stop()
-
-	n, err := c.NewNetwork("bridge", "dtnet2", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := n.Delete(); err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	sb, err := c.NewSandbox("c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() {
-		if err := sb.Delete(); err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	var nRequests int
-	// initialize a local DNS server and configure it to fail the first query
-	dns.HandleFunc(".", newDNSHandlerServFailOnce(&nRequests))
-	// use TCP for predictable results. Connection tests (to figure out DNS server initialization) don't work with UDP
-	server := &dns.Server{Addr: "127.0.0.1:53", Net: "tcp"}
-	srvErrCh := make(chan error, 1)
-	osctx.Go(t, func() {
-		srvErrCh <- server.ListenAndServe()
-	})
-	defer func() {
-		server.Shutdown() //nolint:errcheck
-		if err := <-srvErrCh; err != nil {
-			t.Error(err)
-		}
-	}()
-
-	waitForLocalDNSServer(t)
-	t.Log("DNS Server can be reached")
-
-	w := new(tstwriter)
-	r := NewResolver(resolverIPSandbox, true, sb)
-	q := new(dns.Msg)
-	q.SetQuestion("name1.", dns.TypeA)
-
-	var localDNSEntries []extDNSEntry
-	extTestDNSEntry := extDNSEntry{IPStr: "127.0.0.1", HostLoopback: true}
-
-	// configure two external DNS entries and point both to local DNS server thread
-	localDNSEntries = append(localDNSEntries, extTestDNSEntry)
-	localDNSEntries = append(localDNSEntries, extTestDNSEntry)
-
-	// this should generate two requests: the first will fail leading to a retry
-	r.SetExtServers(localDNSEntries)
-	r.serveDNS(w, q)
-	if nRequests != 2 {
-		t.Fatalf("Expected 2 DNS querries. Found: %d", nRequests)
-	}
-	t.Logf("Expected number of DNS requests generated")
 }
 
 // Packet 24 extracted from
@@ -395,11 +230,11 @@ func TestOversizedDNSReply(t *testing.T) {
 	checkDNSRRType(t, resp.Answer[0].Header().Rrtype, dns.TypeA)
 }
 
-func testLogger(t *testing.T) *logrus.Logger {
+func testLogger(t *testing.T) *logrus.Entry {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	logger.SetOutput(tlogWriter{t})
-	return logger
+	return logrus.NewEntry(logger)
 }
 
 type tlogWriter struct{ t *testing.T }
@@ -411,7 +246,9 @@ func (w tlogWriter) Write(p []byte) (n int, err error) {
 
 type noopDNSBackend struct{ DNSBackend }
 
-func (noopDNSBackend) ResolveName(name string, iplen int) ([]net.IP, bool) { return nil, false }
+func (noopDNSBackend) ResolveName(_ context.Context, name string, iplen int) ([]net.IP, bool) {
+	return nil, false
+}
 
 func (noopDNSBackend) ExecFunc(f func()) error { f(); return nil }
 
@@ -455,7 +292,7 @@ func TestReplySERVFAIL(t *testing.T) {
 
 type badSRVDNSBackend struct{ noopDNSBackend }
 
-func (badSRVDNSBackend) ResolveService(name string) ([]*net.SRV, []net.IP) {
+func (badSRVDNSBackend) ResolveService(_ context.Context, _ string) ([]*net.SRV, []net.IP) {
 	return []*net.SRV{nil, nil, nil}, nil // Mismatched slice lengths
 }
 
@@ -499,7 +336,7 @@ func TestProxyNXDOMAIN(t *testing.T) {
 	// whether we are leaking unlocked OS threads set to the wrong network
 	// namespace. Make a best-effort attempt to detect that situation so we
 	// are not left chasing ghosts next time.
-	testutils.AssertSocketSameNetNS(t, srv.PacketConn.(*net.UDPConn))
+	netnsutils.AssertSocketSameNetNS(t, srv.PacketConn.(*net.UDPConn))
 
 	srvAddr := srv.PacketConn.LocalAddr().(*net.UDPAddr)
 	rsv := NewResolver("", true, noopDNSBackend{})
@@ -521,4 +358,27 @@ func TestProxyNXDOMAIN(t *testing.T) {
 	assert.Assert(t, is.Len(resp.Answer, 0))
 	assert.Assert(t, is.Len(resp.Ns, 1))
 	assert.Equal(t, resp.Ns[0].String(), mockSOA.String())
+}
+
+type ptrDNSBackend struct {
+	noopDNSBackend
+	zone map[string]string
+}
+
+func (b *ptrDNSBackend) ResolveIP(_ context.Context, name string) string {
+	return b.zone[name]
+}
+
+// Regression test for https://github.com/moby/moby/issues/46928
+func TestInvalidReverseDNS(t *testing.T) {
+	rsv := NewResolver("", false, &ptrDNSBackend{zone: map[string]string{"4.3.2.1": "sixtyfourcharslong9012345678901234567890123456789012345678901234"}})
+	rsv.logger = testLogger(t)
+
+	w := &tstwriter{}
+	q := new(dns.Msg).SetQuestion("4.3.2.1.in-addr.arpa.", dns.TypePTR)
+	rsv.serveDNS(w, q)
+	resp := w.GetResponse()
+	checkNonNullResponse(t, resp)
+	t.Log("Response: ", resp.String())
+	checkDNSResponseCode(t, resp, dns.RcodeServerFailure)
 }

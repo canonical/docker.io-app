@@ -430,7 +430,8 @@ func TestPrependEnvOnCmd(t *testing.T) {
 	cmd := []string{"foo", "bar"}
 	cmdWithEnv := prependEnvOnCmd(buildArgs, args, cmd)
 	expected := strslice.StrSlice([]string{
-		"|3", "NO_PROXY=YA", "args=not", "sorted=nope", "foo", "bar"})
+		"|3", "NO_PROXY=YA", "args=not", "sorted=nope", "foo", "bar",
+	})
 	assert.Check(t, is.DeepEqual(expected, cmdWithEnv))
 }
 
@@ -478,7 +479,7 @@ func TestRunWithBuildArgs(t *testing.T) {
 			config: &container.Config{Cmd: origCmd},
 		}, nil, nil
 	}
-	mockBackend.containerCreateFunc = func(config types.ContainerCreateConfig) (container.CreateResponse, error) {
+	mockBackend.containerCreateFunc = func(config backend.ContainerCreateConfig) (container.CreateResponse, error) {
 		// Check the runConfig.Cmd sent to create()
 		assert.Check(t, is.DeepEqual(cmdWithShell, config.Config.Cmd))
 		assert.Check(t, is.Contains(config.Config.Env, "one=two"))
@@ -547,7 +548,7 @@ func TestRunIgnoresHealthcheck(t *testing.T) {
 			config: &container.Config{Cmd: origCmd},
 		}, nil, nil
 	}
-	mockBackend.containerCreateFunc = func(config types.ContainerCreateConfig) (container.CreateResponse, error) {
+	mockBackend.containerCreateFunc = func(config backend.ContainerCreateConfig) (container.CreateResponse, error) {
 		return container.CreateResponse{ID: "12345"}, nil
 	}
 	mockBackend.commitFunc = func(cfg backend.CommitConfig) (image.ID, error) {
@@ -574,7 +575,7 @@ func TestRunIgnoresHealthcheck(t *testing.T) {
 	assert.NilError(t, dispatch(context.TODO(), sb, cmd))
 	assert.Assert(t, sb.state.runConfig.Healthcheck != nil)
 
-	mockBackend.containerCreateFunc = func(config types.ContainerCreateConfig) (container.CreateResponse, error) {
+	mockBackend.containerCreateFunc = func(config backend.ContainerCreateConfig) (container.CreateResponse, error) {
 		// Check the Healthcheck is disabled.
 		assert.Check(t, is.DeepEqual([]string{"NONE"}, config.Config.Healthcheck.Test))
 		return container.CreateResponse{ID: "123456"}, nil

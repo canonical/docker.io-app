@@ -1,8 +1,27 @@
-docker.io-app (24.0.7-0ubuntu2~22.04.1) jammy; urgency=medium
+docker.io-app (26.1.3-0ubuntu1) oracular; urgency=medium
 
-  * Backport version from Noble to Jammy (LP: #2040460).
+  * New upstream release.
+    - Allow runc to kill containers when confined to the runc profile in
+      AppArmor version 4.0.0 and later.
+  * d/helpers/build-manpages.sh: build manpages with Go 1.21.
+  * d/manpages: update them all.
+  * d/docker.io.docs: remove NOTICE file of a dependency removed from cli.
 
- -- Lucas Kanashiro <kanashiro@ubuntu.com>  Wed, 13 Mar 2024 17:23:54 -0300
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Tue, 04 Jun 2024 18:01:29 -0300
+
+docker.io-app (24.0.7-0ubuntu4) noble; urgency=medium
+
+  * Build with Go 1.22.
+    - d/control: b-d on golang-1.22-go instead of golang-1.21-go
+    - d/rules: add Go 1.22 to $PATH
+
+ -- Lucas Kanashiro <kanashiro@ubuntu.com>  Wed, 17 Apr 2024 17:08:25 -0300
+
+docker.io-app (24.0.7-0ubuntu3) noble; urgency=medium
+
+  * No-change rebuild for CVE-2024-3094
+
+ -- William Grant <wgrant@ubuntu.com>  Mon, 01 Apr 2024 16:45:29 +1100
 
 docker.io-app (24.0.7-0ubuntu2) noble; urgency=medium
 
@@ -19,14 +38,6 @@ docker.io-app (24.0.7-0ubuntu1) noble; urgency=medium
   * d/manpages/*: update manpages for version 24.0.7
 
  -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 15 Jan 2024 16:40:29 -0300
-
-docker.io-app (24.0.5-0ubuntu1~22.04.1) jammy; urgency=medium
-
-  * Backport version from Mantic to Jammy (LP: #2030500).
-    - d/control: do not suggest docker-buildx and docker-compose-v2. They are
-      not available in Jammy at the moment.
-
- -- Lucas Kanashiro <kanashiro@ubuntu.com>  Mon, 21 Aug 2023 16:50:14 -0300
 
 docker.io-app (24.0.5-0ubuntu1) mantic; urgency=medium
 

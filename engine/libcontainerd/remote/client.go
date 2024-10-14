@@ -20,21 +20,23 @@ import (
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/content"
 	cerrdefs "github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/events"
 	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/protobuf"
 	v2runcoptions "github.com/containerd/containerd/runtime/v2/runc/options"
+	"github.com/containerd/log"
 	"github.com/containerd/typeurl/v2"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd/queue"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/hashicorp/go-multierror"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // DockerContainerBundlePath is the label key pointing to the container's bundle path
@@ -43,7 +45,7 @@ const DockerContainerBundlePath = "com.docker/engine.bundle.path"
 type client struct {
 	client   *containerd.Client
 	stateDir string
-	logger   *logrus.Entry
+	logger   *log.Entry
 	ns       string
 
 	backend libcontainerdtypes.Backend
@@ -60,10 +62,6 @@ type container struct {
 type task struct {
 	containerd.Task
 	ctr *container
-
-	// Workaround for https://github.com/containerd/containerd/issues/8557.
-	// See also https://github.com/moby/moby/issues/45595.
-	serializeExecStartsWorkaround sync.Mutex
 }
 
 type process struct {
@@ -75,7 +73,7 @@ func NewClient(ctx context.Context, cli *containerd.Client, stateDir, ns string,
 	c := &client{
 		client:   cli,
 		stateDir: stateDir,
-		logger:   logrus.WithField("module", "libcontainerd").WithField("namespace", ns),
+		logger:   log.G(ctx).WithField("module", "libcontainerd").WithField("namespace", ns),
 		ns:       ns,
 		backend:  b,
 	}
@@ -147,8 +145,8 @@ func (c *client) NewContainer(ctx context.Context, id string, ociSpec *specs.Spe
 	return &created, nil
 }
 
-// Start create and start a task for the specified containerd id
-func (c *container) Start(ctx context.Context, checkpointDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (libcontainerdtypes.Task, error) {
+// NewTask creates a task for the specified containerd id
+func (c *container) NewTask(ctx context.Context, checkpointDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (libcontainerdtypes.Task, error) {
 	var (
 		checkpoint     *types.Descriptor
 		t              containerd.Task
@@ -164,9 +162,9 @@ func (c *container) Start(ctx context.Context, checkpointDir string, withStdin b
 		// remove the checkpoint when we're done
 		defer func() {
 			if checkpoint != nil {
-				err := c.client.client.ContentStore().Delete(ctx, checkpoint.Digest)
+				err := c.client.client.ContentStore().Delete(ctx, digest.Digest(checkpoint.Digest))
 				if err != nil {
-					c.client.logger.WithError(err).WithFields(logrus.Fields{
+					c.client.logger.WithError(err).WithFields(log.Fields{
 						"ref":    checkpointDir,
 						"digest": checkpoint.Digest,
 					}).Warnf("failed to delete temporary checkpoint entry")
@@ -206,10 +204,10 @@ func (c *container) Start(ctx context.Context, checkpointDir string, withStdin b
 	if runtime.GOOS != "windows" {
 		taskOpts = append(taskOpts, func(_ context.Context, _ *containerd.Client, info *containerd.TaskInfo) error {
 			if c.v2runcoptions != nil {
-				opts := *c.v2runcoptions
+				opts := proto.Clone(c.v2runcoptions).(*v2runcoptions.Options)
 				opts.IoUid = uint32(uid)
 				opts.IoGid = uint32(gid)
-				info.Options = &opts
+				info.Options = opts
 			}
 			return nil
 		})
@@ -238,17 +236,12 @@ func (c *container) Start(ctx context.Context, checkpointDir string, withStdin b
 	// Signal c.createIO that it can call CloseIO
 	stdinCloseSync <- t
 
-	if err := t.Start(ctx); err != nil {
-		// Only Stopped tasks can be deleted. Created tasks have to be
-		// killed first, to transition them to Stopped.
-		if _, err := t.Delete(ctx, containerd.WithProcessKill); err != nil {
-			c.client.logger.WithError(err).WithField("container", c.c8dCtr.ID()).
-				Error("failed to delete task after fail start")
-		}
-		return nil, wrapError(err)
-	}
-
 	return c.newTask(t), nil
+}
+
+func (t *task) Start(ctx context.Context) error {
+	return wrapError(t.Task.Start(ctx))
+
 }
 
 // Exec creates exec process.
@@ -300,12 +293,7 @@ func (t *task) Exec(ctx context.Context, processID string, spec *specs.Process, 
 	// the stdin of exec process will be created after p.Start in containerd
 	defer func() { stdinCloseSync <- p }()
 
-	err = func() error {
-		t.serializeExecStartsWorkaround.Lock()
-		defer t.serializeExecStartsWorkaround.Unlock()
-		return p.Start(ctx)
-	}()
-	if err != nil {
+	if err = p.Start(ctx); err != nil {
 		// use new context for cleanup because old one may be cancelled by user, but leave a timeout to make sure
 		// we are not waiting forever if containerd is unresponsive or to work around fifo cancelling issues in
 		// older containerd-shim
@@ -343,7 +331,7 @@ func (t *task) Stats(ctx context.Context) (*libcontainerdtypes.Stats, error) {
 	if err != nil {
 		return nil, err
 	}
-	return libcontainerdtypes.InterfaceToStats(m.Timestamp, v), nil
+	return libcontainerdtypes.InterfaceToStats(protobuf.FromTimestamp(m.Timestamp), v), nil
 }
 
 func (t *task) Summary(ctx context.Context) ([]libcontainerdtypes.Summary, error) {
@@ -391,7 +379,7 @@ func (c *container) Delete(ctx context.Context) error {
 	}
 	if os.Getenv("LIBCONTAINERD_NOCLEAN") != "1" {
 		if err := os.RemoveAll(bundle); err != nil {
-			c.client.logger.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
+			c.client.logger.WithContext(ctx).WithError(err).WithFields(log.Fields{
 				"container": c.c8dCtr.ID(),
 				"bundle":    bundle,
 			}).Error("failed to remove state dir")
@@ -572,7 +560,7 @@ func (c *client) processEvent(ctx context.Context, et libcontainerdtypes.EventTy
 	c.eventQ.Append(ei.ContainerID, func() {
 		err := c.backend.ProcessEvent(ei.ContainerID, et, ei)
 		if err != nil {
-			c.logger.WithContext(ctx).WithError(err).WithFields(logrus.Fields{
+			c.logger.WithContext(ctx).WithError(err).WithFields(log.Fields{
 				"container":  ei.ContainerID,
 				"event":      et,
 				"event-info": ei,
@@ -597,7 +585,7 @@ func (c *client) waitServe(ctx context.Context) bool {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				return false
 			}
-			logrus.WithError(err).Warn("Error while testing if containerd API is ready")
+			log.G(ctx).WithError(err).Warn("Error while testing if containerd API is ready")
 		}
 
 		if serving {
@@ -614,13 +602,6 @@ func (c *client) waitServe(ctx context.Context) bool {
 }
 
 func (c *client) processEventStream(ctx context.Context, ns string) {
-	var (
-		err error
-		ev  *events.Envelope
-		et  libcontainerdtypes.EventType
-		ei  libcontainerdtypes.EventInfo
-	)
-
 	// Create a new context specifically for this subscription.
 	// The context must be cancelled to cancel the subscription.
 	// In cases where we have to restart event stream processing,
@@ -636,7 +617,7 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 
 	for {
 		select {
-		case err = <-errC:
+		case err := <-errC:
 			if err != nil {
 				errStatus, ok := status.FromError(err)
 				if !ok || errStatus.Code() != codes.Canceled {
@@ -650,7 +631,7 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 				c.logger.WithError(ctx.Err()).Info("stopping event stream following graceful shutdown")
 			}
 			return
-		case ev = <-eventStream:
+		case ev := <-eventStream:
 			if ev.Event == nil {
 				c.logger.WithField("event", ev).Warn("invalid event")
 				continue
@@ -666,72 +647,60 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 
 			switch t := v.(type) {
 			case *apievents.TaskCreate:
-				et = libcontainerdtypes.EventCreate
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventCreate, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
 					ProcessID:   t.ContainerID,
 					Pid:         t.Pid,
-				}
+				})
 			case *apievents.TaskStart:
-				et = libcontainerdtypes.EventStart
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventStart, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
 					ProcessID:   t.ContainerID,
 					Pid:         t.Pid,
-				}
+				})
 			case *apievents.TaskExit:
-				et = libcontainerdtypes.EventExit
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventExit, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
 					ProcessID:   t.ID,
 					Pid:         t.Pid,
 					ExitCode:    t.ExitStatus,
-					ExitedAt:    t.ExitedAt,
-				}
+					ExitedAt:    protobuf.FromTimestamp(t.ExitedAt),
+				})
 			case *apievents.TaskOOM:
-				et = libcontainerdtypes.EventOOM
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventOOM, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
-				}
+				})
 			case *apievents.TaskExecAdded:
-				et = libcontainerdtypes.EventExecAdded
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventExecAdded, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
 					ProcessID:   t.ExecID,
-				}
+				})
 			case *apievents.TaskExecStarted:
-				et = libcontainerdtypes.EventExecStarted
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventExecStarted, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
 					ProcessID:   t.ExecID,
 					Pid:         t.Pid,
-				}
+				})
 			case *apievents.TaskPaused:
-				et = libcontainerdtypes.EventPaused
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventPaused, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
-				}
+				})
 			case *apievents.TaskResumed:
-				et = libcontainerdtypes.EventResumed
-				ei = libcontainerdtypes.EventInfo{
+				c.processEvent(ctx, libcontainerdtypes.EventResumed, libcontainerdtypes.EventInfo{
 					ContainerID: t.ContainerID,
-				}
+				})
 			case *apievents.TaskDelete:
-				c.logger.WithFields(logrus.Fields{
+				c.logger.WithFields(log.Fields{
 					"topic":     ev.Topic,
 					"type":      reflect.TypeOf(t),
-					"container": t.ContainerID},
-				).Info("ignoring event")
-				continue
+					"container": t.ContainerID,
+				}).Info("ignoring event")
 			default:
-				c.logger.WithFields(logrus.Fields{
+				c.logger.WithFields(log.Fields{
 					"topic": ev.Topic,
-					"type":  reflect.TypeOf(t)},
-				).Info("ignoring event")
-				continue
+					"type":  reflect.TypeOf(t),
+				}).Info("ignoring event")
 			}
-
-			c.processEvent(ctx, et, ei)
 		}
 	}
 }
@@ -754,8 +723,8 @@ func (c *client) writeContent(ctx context.Context, mediaType, ref string, r io.R
 	}
 	return &types.Descriptor{
 		MediaType: mediaType,
-		Digest:    writer.Digest(),
-		Size_:     size,
+		Digest:    writer.Digest().String(),
+		Size:      size,
 	}, nil
 }
 

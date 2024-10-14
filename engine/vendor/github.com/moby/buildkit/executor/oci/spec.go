@@ -2,8 +2,10 @@ package oci
 
 import (
 	"context"
+	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -12,7 +14,6 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/userns"
-	"github.com/containerd/continuity/fs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/moby/buildkit/executor"
@@ -36,6 +37,12 @@ const (
 	// NoProcessSandbox should be enabled only when the BuildKit is running in a container as an unprivileged user.
 	NoProcessSandbox
 )
+
+var tracingEnvVars = []string{
+	"OTEL_TRACES_EXPORTER=otlp",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=" + getTracingSocket(),
+	"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=grpc",
+}
 
 func (pm ProcessMode) String() string {
 	switch pm {
@@ -114,12 +121,12 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 
 	if tracingSocket != "" {
 		// https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/protocol/exporter.md
-		meta.Env = append(meta.Env, "OTEL_TRACES_EXPORTER=otlp", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=unix:///dev/otel-grpc.sock", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=grpc")
+		meta.Env = append(meta.Env, tracingEnvVars...)
 		meta.Env = append(meta.Env, traceexec.Environ(ctx)...)
 	}
 
 	opts = append(opts,
-		oci.WithProcessArgs(meta.Args...),
+		withProcessArgs(meta.Args...),
 		oci.WithEnv(meta.Env),
 		oci.WithProcessCwd(meta.Cwd),
 		oci.WithNewPrivileges,
@@ -129,6 +136,12 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 	s, err := oci.GenerateSpec(ctx, nil, c, opts...)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if cgroupV2NamespaceSupported() {
+		s.Linux.Namespaces = append(s.Linux.Namespaces, specs.LinuxNamespace{
+			Type: specs.CgroupNamespace,
+		})
 	}
 
 	if len(meta.Ulimit) == 0 {
@@ -185,12 +198,12 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 	}
 
 	if tracingSocket != "" {
-		s.Mounts = append(s.Mounts, specs.Mount{
-			Destination: "/dev/otel-grpc.sock",
-			Type:        "bind",
-			Source:      tracingSocket,
-			Options:     []string{"ro", "rbind"},
-		})
+		// moby/buildkit#4764
+		if _, err := os.Stat(tracingSocket); err == nil {
+			if mount := getTracingSocketMount(tracingSocket); mount != nil {
+				s.Mounts = append(s.Mounts, *mount)
+			}
+		}
 	}
 
 	s.Mounts = dedupMounts(s.Mounts)
@@ -208,6 +221,7 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 type mountRef struct {
 	mount   mount.Mount
 	unmount func() error
+	subRefs map[string]mountRef
 }
 
 type submounts struct {
@@ -223,12 +237,19 @@ func (s *submounts) subMount(m mount.Mount, subPath string) (mount.Mount, error)
 	}
 	h, err := hashstructure.Hash(m, hashstructure.FormatV2, nil)
 	if err != nil {
-		return mount.Mount{}, nil
+		return mount.Mount{}, err
 	}
 	if mr, ok := s.m[h]; ok {
-		sm, err := sub(mr.mount, subPath)
+		if sm, ok := mr.subRefs[subPath]; ok {
+			return sm.mount, nil
+		}
+		sm, unmount, err := sub(mr.mount, subPath)
 		if err != nil {
-			return mount.Mount{}, nil
+			return mount.Mount{}, err
+		}
+		mr.subRefs[subPath] = mountRef{
+			mount:   sm,
+			unmount: unmount,
 		}
 		return sm, nil
 	}
@@ -240,25 +261,37 @@ func (s *submounts) subMount(m mount.Mount, subPath string) (mount.Mount, error)
 		return mount.Mount{}, err
 	}
 
-	opts := []string{"rbind"}
-	for _, opt := range m.Options {
-		if opt == "ro" {
-			opts = append(opts, opt)
-		}
+	var mntType string
+	opts := []string{}
+	if m.ReadOnly() {
+		opts = append(opts, "ro")
+	}
+
+	if runtime.GOOS != "windows" {
+		// Windows uses a mechanism similar to bind mounts, but will err out if we request
+		// a mount type it does not understand. Leaving the mount type empty on Windows will
+		// yield the same result.
+		mntType = "bind"
+		opts = append(opts, "rbind")
 	}
 
 	s.m[h] = mountRef{
 		mount: mount.Mount{
 			Source:  mp,
-			Type:    "bind",
+			Type:    mntType,
 			Options: opts,
 		},
 		unmount: lm.Unmount,
+		subRefs: map[string]mountRef{},
 	}
 
-	sm, err := sub(s.m[h].mount, subPath)
+	sm, unmount, err := sub(s.m[h].mount, subPath)
 	if err != nil {
 		return mount.Mount{}, err
+	}
+	s.m[h].subRefs[subPath] = mountRef{
+		mount:   sm,
+		unmount: unmount,
 	}
 	return sm, nil
 }
@@ -269,31 +302,13 @@ func (s *submounts) cleanup() {
 	for _, m := range s.m {
 		func(m mountRef) {
 			go func() {
+				for _, sm := range m.subRefs {
+					sm.unmount()
+				}
 				m.unmount()
 				wg.Done()
 			}()
 		}(m)
 	}
 	wg.Wait()
-}
-
-func sub(m mount.Mount, subPath string) (mount.Mount, error) {
-	src, err := fs.RootPath(m.Source, subPath)
-	if err != nil {
-		return mount.Mount{}, err
-	}
-	m.Source = src
-	return m, nil
-}
-
-func specMapping(s []idtools.IDMap) []specs.LinuxIDMapping {
-	var ids []specs.LinuxIDMapping
-	for _, item := range s {
-		ids = append(ids, specs.LinuxIDMapping{
-			HostID:      uint32(item.HostID),
-			ContainerID: uint32(item.ContainerID),
-			Size:        uint32(item.Size),
-		})
-	}
-	return ids
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/server/httputils"
 	basictypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
@@ -15,7 +16,6 @@ import (
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/errdefs"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 func (sr *swarmRouter) initCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
@@ -36,7 +36,7 @@ func (sr *swarmRouter) initCluster(ctx context.Context, w http.ResponseWriter, r
 	}
 	nodeID, err := sr.backend.Init(req)
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error initializing swarm")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error initializing swarm")
 		return err
 	}
 	return httputils.WriteJSON(w, http.StatusOK, nodeID)
@@ -62,7 +62,7 @@ func (sr *swarmRouter) leaveCluster(ctx context.Context, w http.ResponseWriter, 
 func (sr *swarmRouter) inspectCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	swarm, err := sr.backend.Inspect()
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error getting swarm")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error getting swarm")
 		return err
 	}
 
@@ -114,7 +114,7 @@ func (sr *swarmRouter) updateCluster(ctx context.Context, w http.ResponseWriter,
 	}
 
 	if err := sr.backend.Update(version, swarm, flags); err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error configuring swarm")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error configuring swarm")
 		return err
 	}
 	return nil
@@ -127,7 +127,7 @@ func (sr *swarmRouter) unlockCluster(ctx context.Context, w http.ResponseWriter,
 	}
 
 	if err := sr.backend.UnlockSwarm(req); err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error unlocking swarm")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error unlocking swarm")
 		return err
 	}
 	return nil
@@ -136,7 +136,7 @@ func (sr *swarmRouter) unlockCluster(ctx context.Context, w http.ResponseWriter,
 func (sr *swarmRouter) getUnlockKey(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	unlockKey, err := sr.backend.GetUnlockKey()
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error retrieving swarm unlock key")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error retrieving swarm unlock key")
 		return err
 	}
 
@@ -168,7 +168,7 @@ func (sr *swarmRouter) getServices(ctx context.Context, w http.ResponseWriter, r
 
 	services, err := sr.backend.GetServices(basictypes.ServiceListOptions{Filters: filter, Status: status})
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error getting services")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error getting services")
 		return err
 	}
 
@@ -194,7 +194,7 @@ func (sr *swarmRouter) getService(ctx context.Context, w http.ResponseWriter, r 
 
 	service, err := sr.backend.GetService(vars["id"], insertDefaults)
 	if err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":      err,
 			"service-id": vars["id"],
 		}).Debug("Error getting service")
@@ -209,6 +209,10 @@ func (sr *swarmRouter) createService(ctx context.Context, w http.ResponseWriter,
 	if err := httputils.ReadJSON(r, &service); err != nil {
 		return err
 	}
+	// TODO(thaJeztah): remove logentries check and migration code in release v26.0.0.
+	if service.TaskTemplate.LogDriver != nil && service.TaskTemplate.LogDriver.Name == "logentries" {
+		return errdefs.InvalidParameter(errors.New("the logentries logging driver has been deprecated and removed"))
+	}
 
 	// Get returns "" if the header does not exist
 	encodedAuth := r.Header.Get(registry.AuthHeader)
@@ -219,9 +223,18 @@ func (sr *swarmRouter) createService(ctx context.Context, w http.ResponseWriter,
 		}
 		adjustForAPIVersion(v, &service)
 	}
+
+	version := httputils.VersionFromContext(ctx)
+	if versions.LessThan(version, "1.44") {
+		if service.TaskTemplate.ContainerSpec != nil && service.TaskTemplate.ContainerSpec.Healthcheck != nil {
+			// StartInterval was added in API 1.44
+			service.TaskTemplate.ContainerSpec.Healthcheck.StartInterval = 0
+		}
+	}
+
 	resp, err := sr.backend.CreateService(service, encodedAuth, queryRegistry)
 	if err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithFields(log.Fields{
 			"error":        err,
 			"service-name": service.Name,
 		}).Debug("Error creating service")
@@ -235,6 +248,10 @@ func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter,
 	var service types.ServiceSpec
 	if err := httputils.ReadJSON(r, &service); err != nil {
 		return err
+	}
+	// TODO(thaJeztah): remove logentries check and migration code in release v26.0.0.
+	if service.TaskTemplate.LogDriver != nil && service.TaskTemplate.LogDriver.Name == "logentries" {
+		return errdefs.InvalidParameter(errors.New("the logentries logging driver has been deprecated and removed"))
 	}
 
 	rawVersion := r.URL.Query().Get("version")
@@ -260,7 +277,7 @@ func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter,
 
 	resp, err := sr.backend.UpdateService(vars["id"], version, service, flags, queryRegistry)
 	if err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":      err,
 			"service-id": vars["id"],
 		}).Debug("Error updating service")
@@ -271,7 +288,7 @@ func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter,
 
 func (sr *swarmRouter) removeService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := sr.backend.RemoveService(vars["id"]); err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":      err,
 			"service-id": vars["id"],
 		}).Debug("Error removing service")
@@ -315,7 +332,7 @@ func (sr *swarmRouter) getNodes(ctx context.Context, w http.ResponseWriter, r *h
 
 	nodes, err := sr.backend.GetNodes(basictypes.NodeListOptions{Filters: filter})
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error getting nodes")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error getting nodes")
 		return err
 	}
 
@@ -325,7 +342,7 @@ func (sr *swarmRouter) getNodes(ctx context.Context, w http.ResponseWriter, r *h
 func (sr *swarmRouter) getNode(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	node, err := sr.backend.GetNode(vars["id"])
 	if err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":   err,
 			"node-id": vars["id"],
 		}).Debug("Error getting node")
@@ -349,7 +366,7 @@ func (sr *swarmRouter) updateNode(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	if err := sr.backend.UpdateNode(vars["id"], version, node); err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":   err,
 			"node-id": vars["id"],
 		}).Debug("Error updating node")
@@ -366,7 +383,7 @@ func (sr *swarmRouter) removeNode(ctx context.Context, w http.ResponseWriter, r 
 	force := httputils.BoolValue(r, "force")
 
 	if err := sr.backend.RemoveNode(vars["id"], force); err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":   err,
 			"node-id": vars["id"],
 		}).Debug("Error removing node")
@@ -386,7 +403,7 @@ func (sr *swarmRouter) getTasks(ctx context.Context, w http.ResponseWriter, r *h
 
 	tasks, err := sr.backend.GetTasks(basictypes.TaskListOptions{Filters: filter})
 	if err != nil {
-		logrus.WithContext(ctx).WithError(err).Debug("Error getting tasks")
+		log.G(ctx).WithContext(ctx).WithError(err).Debug("Error getting tasks")
 		return err
 	}
 
@@ -396,7 +413,7 @@ func (sr *swarmRouter) getTasks(ctx context.Context, w http.ResponseWriter, r *h
 func (sr *swarmRouter) getTask(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	task, err := sr.backend.GetTask(vars["id"])
 	if err != nil {
-		logrus.WithContext(ctx).WithFields(logrus.Fields{
+		log.G(ctx).WithContext(ctx).WithFields(log.Fields{
 			"error":   err,
 			"task-id": vars["id"],
 		}).Debug("Error getting task")

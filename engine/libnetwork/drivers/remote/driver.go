@@ -1,19 +1,23 @@
 package remote
 
 import (
+	"context"
 	"fmt"
 	"net"
 
-	"github.com/docker/docker/libnetwork/datastore"
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/discoverapi"
 	"github.com/docker/docker/libnetwork/driverapi"
 	"github.com/docker/docker/libnetwork/drivers/remote/api"
+	"github.com/docker/docker/libnetwork/scope"
 	"github.com/docker/docker/libnetwork/types"
 	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/docker/pkg/plugins"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
+
+// remote driver must implement the discover-API.
+var _ discoverapi.Discover = (*driver)(nil)
 
 type driver struct {
 	endpoint    *plugins.Client
@@ -24,16 +28,8 @@ type maybeError interface {
 	GetError() string
 }
 
-func newDriver(name string, client *plugins.Client) driverapi.Driver {
+func newDriver(name string, client *plugins.Client) *driver {
 	return &driver{networkType: name, endpoint: client}
-}
-
-// Init makes sure a remote driver is registered when a network driver
-// plugin is activated.
-//
-// Deprecated: use [Register].
-func Init(dc driverapi.DriverCallback, config map[string]interface{}) error {
-	return Register(dc, dc.GetPluginGetter())
 }
 
 // Register makes sure a remote driver is registered with r when a network
@@ -42,13 +38,13 @@ func Register(r driverapi.Registerer, pg plugingetter.PluginGetter) error {
 	newPluginHandler := func(name string, client *plugins.Client) {
 		// negotiate driver capability with client
 		d := newDriver(name, client)
-		c, err := d.(*driver).getCapabilities()
+		c, err := d.getCapabilities()
 		if err != nil {
-			logrus.Errorf("error getting capability for %s due to %v", name, err)
+			log.G(context.TODO()).Errorf("error getting capability for %s due to %v", name, err)
 			return
 		}
 		if err = r.RegisterDriver(name, d, *c); err != nil {
-			logrus.Errorf("error registering driver for %s due to %v", name, err)
+			log.G(context.TODO()).Errorf("error registering driver for %s due to %v", name, err)
 		}
 	}
 
@@ -101,19 +97,15 @@ func (d *driver) getCapabilities() (*driverapi.Capability, error) {
 
 	c := &driverapi.Capability{}
 	switch capResp.Scope {
-	case "global":
-		c.DataScope = datastore.GlobalScope
-	case "local":
-		c.DataScope = datastore.LocalScope
+	case scope.Global, scope.Local:
+		c.DataScope = capResp.Scope
 	default:
 		return nil, fmt.Errorf("invalid capability: expecting 'local' or 'global', got %s", capResp.Scope)
 	}
 
 	switch capResp.ConnectivityScope {
-	case "global":
-		c.ConnectivityScope = datastore.GlobalScope
-	case "local":
-		c.ConnectivityScope = datastore.LocalScope
+	case scope.Global, scope.Local:
+		c.ConnectivityScope = capResp.ConnectivityScope
 	case "":
 		c.ConnectivityScope = c.DataScope
 	default:
@@ -177,8 +169,7 @@ func (d *driver) CreateNetwork(id string, options map[string]interface{}, nInfo 
 }
 
 func (d *driver) DeleteNetwork(nid string) error {
-	delete := &api.DeleteNetworkRequest{NetworkID: nid}
-	return d.call("DeleteNetwork", delete, &api.DeleteNetworkResponse{})
+	return d.call("DeleteNetwork", &api.DeleteNetworkRequest{NetworkID: nid}, &api.DeleteNetworkResponse{})
 }
 
 func (d *driver) CreateEndpoint(nid, eid string, ifInfo driverapi.InterfaceInfo, epOptions map[string]interface{}) error {
@@ -245,11 +236,11 @@ func errorWithRollback(msg string, err error) error {
 }
 
 func (d *driver) DeleteEndpoint(nid, eid string) error {
-	delete := &api.DeleteEndpointRequest{
+	deleteRequest := &api.DeleteEndpointRequest{
 		NetworkID:  nid,
 		EndpointID: eid,
 	}
-	return d.call("DeleteEndpoint", delete, &api.DeleteEndpointResponse{})
+	return d.call("DeleteEndpoint", deleteRequest, &api.DeleteEndpointResponse{})
 }
 
 func (d *driver) EndpointOperInfo(nid, eid string) (map[string]interface{}, error) {
@@ -392,7 +383,7 @@ func (d *driver) DiscoverDelete(dType discoverapi.DiscoveryType, data interface{
 }
 
 func parseStaticRoutes(r api.JoinResponse) ([]*types.StaticRoute, error) {
-	var routes = make([]*types.StaticRoute, len(r.StaticRoutes))
+	routes := make([]*types.StaticRoute, len(r.StaticRoutes))
 	for i, inRoute := range r.StaticRoutes {
 		var err error
 		outRoute := &types.StaticRoute{RouteType: inRoute.RouteType}
@@ -415,7 +406,7 @@ func parseStaticRoutes(r api.JoinResponse) ([]*types.StaticRoute, error) {
 	return routes, nil
 }
 
-// parseInterfaces validates all the parameters of an Interface and returns them.
+// parseInterface validates all the parameters of an Interface and returns them.
 func parseInterface(r api.CreateEndpointResponse) (*api.Interface, error) {
 	var outIf *api.Interface
 

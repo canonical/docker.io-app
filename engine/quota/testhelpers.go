@@ -1,5 +1,4 @@
 //go:build linux && !exclude_disk_quota && cgo
-// +build linux,!exclude_disk_quota,cgo
 
 package quota // import "github.com/docker/docker/quota"
 
@@ -10,8 +9,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-const imageSize = 64 * 1024 * 1024
 
 // CanTestQuota - checks if xfs prjquota can be tested
 // returns a reason if not
@@ -27,8 +24,14 @@ func CanTestQuota() (string, bool) {
 }
 
 // PrepareQuotaTestImage - prepares an xfs prjquota test image
-// returns the path the the image on success
+// returns the path of the image on success
 func PrepareQuotaTestImage(t *testing.T) (string, error) {
+	// imageSize is the size of the test-image. The minimum size allowed
+	// is 300MB.
+	//
+	// See https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/commit/?id=6e0ed3d19c54603f0f7d628ea04b550151d8a262
+	const imageSize = 300 * 1024 * 1024
+
 	mkfs, err := exec.LookPath("mkfs.xfs")
 	if err != nil {
 		return "", err

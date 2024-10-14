@@ -1,8 +1,8 @@
 package networkdb
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/go-events"
 	"github.com/hashicorp/memberlist"
-	"github.com/sirupsen/logrus"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -22,8 +22,8 @@ import (
 var dbPort int32 = 10000
 
 func TestMain(m *testing.M) {
-	os.WriteFile("/proc/sys/net/ipv6/conf/lo/disable_ipv6", []byte{'0', '\n'}, 0644)
-	logrus.SetLevel(logrus.ErrorLevel)
+	os.WriteFile("/proc/sys/net/ipv6/conf/lo/disable_ipv6", []byte{'0', '\n'}, 0o644)
+	log.SetLevel("error")
 	os.Exit(m.Run())
 }
 
@@ -67,7 +67,7 @@ func createNetworkDBInstances(t *testing.T, num int, namePrefix string, conf *Co
 
 func closeNetworkDBInstances(t *testing.T, dbs []*NetworkDB) {
 	t.Helper()
-	log.Print("Closing DB instances...")
+	log.G(context.TODO()).Print("Closing DB instances...")
 	for _, db := range dbs {
 		db.Close()
 	}
@@ -367,7 +367,7 @@ func TestNetworkDBWatch(t *testing.T) {
 	err = dbs[1].JoinNetwork("network1")
 	assert.NilError(t, err)
 
-	ch, cancel := dbs[1].Watch("", "", "")
+	ch, cancel := dbs[1].Watch("", "")
 
 	err = dbs[0].CreateEntry("test_table", "network1", "test_key", []byte("test_value"))
 	assert.NilError(t, err)
@@ -839,7 +839,7 @@ func TestNetworkDBIslands(t *testing.T) {
 		return defaultTimeout
 	}
 
-	logrus.SetLevel(logrus.DebugLevel)
+	_ = log.SetLevel("debug")
 	conf := DefaultConfig()
 	// Shorten durations to speed up test execution.
 	conf.rejoinClusterDuration = conf.rejoinClusterDuration / 10
@@ -850,9 +850,11 @@ func TestNetworkDBIslands(t *testing.T) {
 	node := dbs[0].nodes[dbs[0].config.NodeID]
 	baseIPStr := node.Addr.String()
 	// Node 0,1,2 are going to be the 3 bootstrap nodes
-	members := []string{fmt.Sprintf("%s:%d", baseIPStr, dbs[0].config.BindPort),
+	members := []string{
+		fmt.Sprintf("%s:%d", baseIPStr, dbs[0].config.BindPort),
 		fmt.Sprintf("%s:%d", baseIPStr, dbs[1].config.BindPort),
-		fmt.Sprintf("%s:%d", baseIPStr, dbs[2].config.BindPort)}
+		fmt.Sprintf("%s:%d", baseIPStr, dbs[2].config.BindPort),
+	}
 	// Rejoining will update the list of the bootstrap members
 	for i := 3; i < 5; i++ {
 		t.Logf("Re-joining: %d", i)
@@ -861,7 +863,7 @@ func TestNetworkDBIslands(t *testing.T) {
 
 	// Now the 3 bootstrap nodes will cleanly leave, and will be properly removed from the other 2 nodes
 	for i := 0; i < 3; i++ {
-		logrus.Infof("node %d leaving", i)
+		log.G(context.TODO()).Infof("node %d leaving", i)
 		dbs[i].Close()
 	}
 
@@ -896,7 +898,7 @@ func TestNetworkDBIslands(t *testing.T) {
 
 	// Spawn again the first 3 nodes with different names but same IP:port
 	for i := 0; i < 3; i++ {
-		logrus.Infof("node %d coming back", i)
+		log.G(context.TODO()).Infof("node %d coming back", i)
 		conf := *dbs[i].config
 		conf.NodeID = stringid.TruncateID(stringid.GenerateRandomID())
 		dbs[i] = launchNode(t, conf)

@@ -1,22 +1,25 @@
 package mobyexporter
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	distref "github.com/docker/distribution/reference"
+	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/leases"
+	"github.com/containerd/log"
+	distref "github.com/distribution/reference"
 	"github.com/docker/docker/image"
+	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/layer"
 	"github.com/moby/buildkit/exporter"
+	"github.com/moby/buildkit/exporter/containerimage"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
+	"github.com/moby/buildkit/util/leaseutil"
 	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-)
-
-const (
-	keyImageName = "name"
 )
 
 // Differ can make a moby layer from a snapshot
@@ -30,9 +33,11 @@ type ImageTagger interface {
 
 // Opt defines a struct for creating new exporter
 type Opt struct {
-	ImageStore  image.Store
-	Differ      Differ
-	ImageTagger ImageTagger
+	ImageStore   image.Store
+	Differ       Differ
+	ImageTagger  ImageTagger
+	ContentStore content.Store
+	LeaseManager leases.Manager
 }
 
 type imageExporter struct {
@@ -45,13 +50,14 @@ func New(opt Opt) (exporter.Exporter, error) {
 	return im, nil
 }
 
-func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exporter.ExporterInstance, error) {
+func (e *imageExporter) Resolve(ctx context.Context, id int, opt map[string]string) (exporter.ExporterInstance, error) {
 	i := &imageExporterInstance{
 		imageExporter: e,
+		id:            id,
 	}
 	for k, v := range opt {
-		switch k {
-		case keyImageName:
+		switch exptypes.ImageExporterOptKey(k) {
+		case exptypes.OptKeyName:
 			for _, v := range strings.Split(v, ",") {
 				ref, err := distref.ParseNormalizedNamed(v)
 				if err != nil {
@@ -71,8 +77,13 @@ func (e *imageExporter) Resolve(ctx context.Context, opt map[string]string) (exp
 
 type imageExporterInstance struct {
 	*imageExporter
+	id          int
 	targetNames []distref.Named
 	meta        map[string][]byte
+}
+
+func (e *imageExporterInstance) ID() int {
+	return e.id
 }
 
 func (e *imageExporterInstance) Name() string {
@@ -83,7 +94,7 @@ func (e *imageExporterInstance) Config() *exporter.Config {
 	return exporter.NewConfig()
 }
 
-func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source, sessionID string) (map[string]string, exporter.DescriptorReference, error) {
+func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source, inlineCache exptypes.InlineCache, sessionID string) (map[string]string, exporter.DescriptorReference, error) {
 	if len(inp.Refs) > 1 {
 		return nil, nil, fmt.Errorf("exporting multiple references to image store is currently unsupported")
 	}
@@ -103,18 +114,14 @@ func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source
 	case 0:
 		config = inp.Metadata[exptypes.ExporterImageConfigKey]
 	case 1:
-		platformsBytes, ok := inp.Metadata[exptypes.ExporterPlatformsKey]
-		if !ok {
-			return nil, nil, fmt.Errorf("cannot export image, missing platforms mapping")
+		ps, err := exptypes.ParsePlatforms(inp.Metadata)
+		if err != nil {
+			return nil, nil, fmt.Errorf("cannot export image, failed to parse platforms: %w", err)
 		}
-		var p exptypes.Platforms
-		if err := json.Unmarshal(platformsBytes, &p); err != nil {
-			return nil, nil, errors.Wrapf(err, "failed to parse platforms passed to exporter")
+		if len(ps.Platforms) != len(inp.Refs) {
+			return nil, nil, errors.Errorf("number of platforms does not match references %d %d", len(ps.Platforms), len(inp.Refs))
 		}
-		if len(p.Platforms) != len(inp.Refs) {
-			return nil, nil, errors.Errorf("number of platforms does not match references %d %d", len(p.Platforms), len(inp.Refs))
-		}
-		config = inp.Metadata[fmt.Sprintf("%s/%s", exptypes.ExporterImageConfigKey, p.Platforms[0].ID)]
+		config = inp.Metadata[fmt.Sprintf("%s/%s", exptypes.ExporterImageConfigKey, ps.Platforms[0].ID)]
 	}
 
 	var diffs []digest.Digest
@@ -157,7 +164,21 @@ func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source
 
 	diffs, history = normalizeLayersAndHistory(diffs, history, ref)
 
-	config, err = patchImageConfig(config, diffs, history, inp.Metadata[exptypes.ExporterInlineCache])
+	var inlineCacheEntry *exptypes.InlineCacheEntry
+	if inlineCache != nil {
+		inlineCacheResult, err := inlineCache(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if inlineCacheResult != nil {
+			if ref != nil {
+				inlineCacheEntry, _ = inlineCacheResult.FindRef(ref.ID())
+			} else {
+				inlineCacheEntry = inlineCacheResult.Ref
+			}
+		}
+	}
+	config, err = patchImageConfig(config, diffs, history, inlineCacheEntry)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,8 +192,10 @@ func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source
 	}
 	_ = configDone(nil)
 
-	if e.opt.ImageTagger != nil {
-		for _, targetName := range e.targetNames {
+	var names []string
+	for _, targetName := range e.targetNames {
+		names = append(names, targetName.String())
+		if e.opt.ImageTagger != nil {
 			tagDone := oneOffProgress(ctx, "naming to "+targetName.String())
 			if err := e.opt.ImageTagger.TagImage(ctx, image.ID(digest.Digest(id)), targetName); err != nil {
 				return nil, nil, tagDone(err)
@@ -181,8 +204,49 @@ func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source
 		}
 	}
 
-	return map[string]string{
+	resp := map[string]string{
 		exptypes.ExporterImageConfigDigestKey: configDigest.String(),
 		exptypes.ExporterImageDigestKey:       id.String(),
-	}, nil, nil
+	}
+	if len(names) > 0 {
+		resp["image.name"] = strings.Join(names, ",")
+	}
+
+	descRef, err := e.newTempReference(ctx, config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create a temporary descriptor reference: %w", err)
+	}
+
+	return resp, descRef, nil
+}
+
+func (e *imageExporterInstance) newTempReference(ctx context.Context, config []byte) (exporter.DescriptorReference, error) {
+	lm := e.opt.LeaseManager
+
+	dgst := digest.FromBytes(config)
+	leaseCtx, done, err := leaseutil.WithLease(ctx, lm, leaseutil.MakeTemporary)
+	if err != nil {
+		return nil, err
+	}
+
+	unlease := func(ctx context.Context) error {
+		err := done(compatcontext.WithoutCancel(ctx))
+		if err != nil {
+			log.G(ctx).WithError(err).Error("failed to delete descriptor reference lease")
+		}
+		return err
+	}
+
+	desc := ocispec.Descriptor{
+		Digest:    dgst,
+		MediaType: "application/vnd.docker.container.image.v1+json",
+		Size:      int64(len(config)),
+	}
+
+	if err := content.WriteBlob(leaseCtx, e.opt.ContentStore, desc.Digest.String(), bytes.NewReader(config), desc); err != nil {
+		unlease(leaseCtx)
+		return nil, fmt.Errorf("failed to save temporary image config: %w", err)
+	}
+
+	return containerimage.NewDescriptorReference(desc, unlease), nil
 }

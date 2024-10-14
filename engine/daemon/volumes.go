@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/log"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	mounttypes "github.com/docker/docker/api/types/mount"
@@ -18,7 +19,6 @@ import (
 	"github.com/docker/docker/volume/service"
 	volumeopts "github.com/docker/docker/volume/service/opts"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 var _ volume.LiveRestorer = (*volumeWrapper)(nil)
@@ -54,7 +54,7 @@ func (m mounts) parts(i int) int {
 // 2. Select the volumes mounted from another containers. Overrides previously configured mount point destination.
 // 3. Select the bind mounts set by the client. Overrides previously configured mount point destinations.
 // 4. Cleanup old volumes that are about to be reassigned.
-func (daemon *Daemon) registerMountPoints(container *container.Container, hostConfig *containertypes.HostConfig) (retErr error) {
+func (daemon *Daemon) registerMountPoints(container *container.Container, hostConfig *containertypes.HostConfig, defaultReadOnlyNonRecursive bool) (retErr error) {
 	binds := map[string]bool{}
 	mountPoints := map[string]*volumemounts.MountPoint{}
 	parser := volumemounts.NewParser()
@@ -74,7 +74,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 
 	dereferenceIfExists := func(destination string) {
 		if v, ok := mountPoints[destination]; ok {
-			logrus.Debugf("Duplicate mount point '%s'", destination)
+			log.G(ctx).Debugf("Duplicate mount point '%s'", destination)
 			if v.Volume != nil {
 				daemon.volumes.Release(ctx, v.Volume.Name(), container.ID)
 			}
@@ -158,6 +158,15 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 			}
 		}
 
+		if bind.Type == mount.TypeBind && !bind.RW {
+			if defaultReadOnlyNonRecursive {
+				if bind.Spec.BindOptions == nil {
+					bind.Spec.BindOptions = &mounttypes.BindOptions{}
+				}
+				bind.Spec.BindOptions.ReadOnlyNonRecursive = true
+			}
+		}
+
 		binds[bind.Destination] = true
 		dereferenceIfExists(bind.Destination)
 		mountPoints[bind.Destination] = bind
@@ -212,8 +221,17 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 			}
 		}
 
-		if mp.Type == mounttypes.TypeBind && (cfg.BindOptions == nil || !cfg.BindOptions.CreateMountpoint) {
-			mp.SkipMountpointCreation = true
+		if mp.Type == mounttypes.TypeBind {
+			if cfg.BindOptions == nil || !cfg.BindOptions.CreateMountpoint {
+				mp.SkipMountpointCreation = true
+			}
+
+			if !mp.RW && defaultReadOnlyNonRecursive {
+				if mp.Spec.BindOptions == nil {
+					mp.Spec.BindOptions = &mounttypes.BindOptions{}
+				}
+				mp.Spec.BindOptions.ReadOnlyNonRecursive = true
+			}
 		}
 
 		binds[mp.Destination] = true

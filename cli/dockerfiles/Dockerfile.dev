@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.20.10
-ARG ALPINE_VERSION=3.17
+ARG GO_VERSION=1.21.10
+ARG ALPINE_VERSION=3.18
 
-ARG BUILDX_VERSION=0.11.2
+ARG BUILDX_VERSION=0.12.1
 FROM docker/buildx-bin:${BUILDX_VERSION} AS buildx
 
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS golang
@@ -11,7 +11,7 @@ ENV GOTOOLCHAIN=local
 ENV CGO_ENABLED=0
 
 FROM golang AS gofumpt
-ARG GOFUMPT_VERSION=v0.4.0
+ARG GOFUMPT_VERSION=v0.6.0
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=tmpfs,target=/go/src/ \

@@ -1,14 +1,12 @@
 package service // import "github.com/docker/docker/integration/service"
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/integration/internal/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -30,15 +28,13 @@ import (
 func TestServiceListWithStatuses(t *testing.T) {
 	skip.If(t, testEnv.IsRemoteDaemon)
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
-	// statuses were added in API version 1.41
-	skip.If(t, versions.LessThan(testEnv.DaemonInfo.ServerVersion, "1.41"))
-	defer setupTest(t)()
-	d := swarm.NewSwarm(t, testEnv)
+
+	ctx := setupTest(t)
+
+	d := swarm.NewSwarm(ctx, t, testEnv)
 	defer d.Stop(t)
 	client := d.NewClientT(t)
 	defer client.Close()
-
-	ctx := context.Background()
 
 	serviceCount := 3
 	// create some services.
@@ -57,7 +53,7 @@ func TestServiceListWithStatuses(t *testing.T) {
 		// serviceContainerCount function does not do. instead, we'll use a
 		// bespoke closure right here.
 		poll.WaitOn(t, func(log poll.LogT) poll.Result {
-			tasks, err := client.TaskList(context.Background(), types.TaskListOptions{
+			tasks, err := client.TaskList(ctx, types.TaskListOptions{
 				Filters: filters.NewArgs(filters.Arg("service", id)),
 			})
 

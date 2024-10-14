@@ -3,7 +3,6 @@ package local
 import (
 	"context"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,15 +19,6 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 )
 
-const (
-	attestationPrefixKey = "attestation-prefix"
-
-	// preferNondistLayersKey is an exporter option which can be used to mark a layer as non-distributable if the layer reference was
-	// already found to use a non-distributable media type.
-	// When this option is not set, the exporter will change the media type of the layer to a distributable one.
-	preferNondistLayersKey = "prefer-nondist-layers"
-)
-
 type Opt struct {
 	SessionManager *session.Manager
 }
@@ -43,35 +33,29 @@ func New(opt Opt) (exporter.Exporter, error) {
 	return le, nil
 }
 
-func (e *localExporter) Resolve(ctx context.Context, opt map[string]string) (exporter.ExporterInstance, error) {
-	li := &localExporterInstance{localExporter: e}
-
-	tm, opt, err := epoch.ParseExporterAttrs(opt)
+func (e *localExporter) Resolve(ctx context.Context, id int, opt map[string]string) (exporter.ExporterInstance, error) {
+	li := &localExporterInstance{
+		localExporter: e,
+		id:            id,
+	}
+	_, err := li.opts.Load(opt)
 	if err != nil {
 		return nil, err
 	}
-	li.opts.Epoch = tm
-
-	for k, v := range opt {
-		switch k {
-		case preferNondistLayersKey:
-			b, err := strconv.ParseBool(v)
-			if err != nil {
-				return nil, errors.Wrapf(err, "non-bool value for %s: %s", preferNondistLayersKey, v)
-			}
-			li.preferNonDist = b
-		case attestationPrefixKey:
-			li.opts.AttestationPrefix = v
-		}
-	}
+	_ = opt
 
 	return li, nil
 }
 
 type localExporterInstance struct {
 	*localExporter
-	opts          local.CreateFSOpts
-	preferNonDist bool
+	id int
+
+	opts local.CreateFSOpts
+}
+
+func (e *localExporterInstance) ID() int {
+	return e.id
 }
 
 func (e *localExporterInstance) Name() string {
@@ -82,7 +66,7 @@ func (e *localExporterInstance) Config() *exporter.Config {
 	return exporter.NewConfig()
 }
 
-func (e *localExporterInstance) Export(ctx context.Context, inp *exporter.Source, sessionID string) (map[string]string, exporter.DescriptorReference, error) {
+func (e *localExporterInstance) Export(ctx context.Context, inp *exporter.Source, _ exptypes.InlineCache, sessionID string) (map[string]string, exporter.DescriptorReference, error) {
 	var defers []func() error
 
 	defer func() {
@@ -168,15 +152,16 @@ func (e *localExporterInstance) Export(ctx context.Context, inp *exporter.Source
 		fs = d.FS
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	timeoutCtx, cancel := context.WithCancelCause(ctx)
+	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 5*time.Second, errors.WithStack(context.DeadlineExceeded))
+	defer cancel(errors.WithStack(context.Canceled))
 
 	caller, err := e.opt.SessionManager.Get(timeoutCtx, sessionID, false)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	w, err := filesync.CopyFileWriter(ctx, nil, caller)
+	w, err := filesync.CopyFileWriter(ctx, nil, e.id, caller)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
+	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/docker/docker/errdefs"
@@ -17,7 +18,7 @@ import (
 )
 
 // PrepareSnapshot prepares a snapshot from a parent image for a container
-func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform) error {
+func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
 	var parentSnapshot string
 	if parentImage != "" {
 		img, err := i.resolveImage(ctx, parentImage)
@@ -25,9 +26,9 @@ func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentIma
 			return err
 		}
 
-		cs := i.client.ContentStore()
+		cs := i.content
 
-		matcher := platforms.Default()
+		matcher := matchAllWithPreference(platforms.Default())
 		if platform != nil {
 			matcher = platforms.Only(*platform)
 		}
@@ -57,23 +58,44 @@ func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentIma
 		parentSnapshot = identity.ChainID(diffIDs).String()
 	}
 
-	// Add a lease so that containerd doesn't garbage collect our snapshot
 	ls := i.client.LeasesService()
 	lease, err := ls.Create(ctx, leases.WithID(id))
 	if err != nil {
 		return err
 	}
+	ctx = leases.WithLease(ctx, lease.ID)
 
-	if err := ls.AddResource(ctx, lease, leases.Resource{
-		ID:   id,
-		Type: "snapshots/" + i.StorageDriver(),
-	}); err != nil {
+	snapshotter := i.client.SnapshotService(i.StorageDriver())
+
+	if err := i.prepareInitLayer(ctx, id, parentSnapshot, setupInit); err != nil {
 		return err
 	}
 
-	s := i.client.SnapshotService(i.StorageDriver())
-	_, err = s.Prepare(ctx, id, parentSnapshot)
+	if !i.idMapping.Empty() {
+		return i.remapSnapshot(ctx, snapshotter, id, id+"-init")
+	}
+
+	_, err = snapshotter.Prepare(ctx, id, id+"-init")
 	return err
+}
+
+func (i *ImageService) prepareInitLayer(ctx context.Context, id string, parent string, setupInit func(string) error) error {
+	snapshotter := i.client.SnapshotService(i.StorageDriver())
+
+	mounts, err := snapshotter.Prepare(ctx, id+"-init-key", parent)
+	if err != nil {
+		return err
+	}
+
+	if setupInit != nil {
+		if err := mount.WithTempMount(ctx, mounts, func(root string) error {
+			return setupInit(root)
+		}); err != nil {
+			return err
+		}
+	}
+
+	return snapshotter.Commit(ctx, id+"-init", id+"-init-key")
 }
 
 // calculateSnapshotParentUsage returns the usage of all ancestors of the

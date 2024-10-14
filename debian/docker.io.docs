@@ -4,7 +4,6 @@ cli/NOTICE
 cli/vendor/github.com/containerd/containerd/NOTICE
 cli/vendor/github.com/docker/docker/NOTICE
 cli/vendor/github.com/docker/go-metrics/NOTICE
-cli/vendor/github.com/opencontainers/runc/NOTICE
 cli/vendor/github.com/prometheus/client_golang/NOTICE
 cli/vendor/gopkg.in/yaml.v2/NOTICE
 engine/NOTICE

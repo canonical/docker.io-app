@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/errdefs"
@@ -18,7 +19,6 @@ import (
 	"github.com/docker/docker/volume/drivers"
 	"github.com/docker/docker/volume/service/opts"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 type ds interface {
@@ -28,7 +28,7 @@ type ds interface {
 // VolumeEventLogger interface provides methods to log volume-related events
 type VolumeEventLogger interface {
 	// LogVolumeEvent generates an event related to a volume.
-	LogVolumeEvent(volumeID, action string, attributes map[string]string)
+	LogVolumeEvent(volumeID string, action events.Action, attributes map[string]string)
 }
 
 // VolumesService manages access to volumes
@@ -240,16 +240,16 @@ func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*types
 
 		vSize, err := directory.Size(ctx, v.Path())
 		if err != nil {
-			logrus.WithField("volume", v.Name()).WithError(err).Warn("could not determine size of volume")
+			log.G(ctx).WithField("volume", v.Name()).WithError(err).Warn("could not determine size of volume")
 		}
 		if err := s.vs.Remove(ctx, v); err != nil {
-			logrus.WithError(err).WithField("volume", v.Name()).Warnf("Could not determine size of volume")
+			log.G(ctx).WithError(err).WithField("volume", v.Name()).Warnf("Could not determine size of volume")
 			continue
 		}
 		rep.SpaceReclaimed += uint64(vSize)
 		rep.VolumesDeleted = append(rep.VolumesDeleted, v.Name())
 	}
-	s.eventLogger.LogVolumeEvent("", "prune", map[string]string{
+	s.eventLogger.LogVolumeEvent("", events.ActionPrune, map[string]string{
 		"reclaimed": strconv.FormatInt(int64(rep.SpaceReclaimed), 10),
 	})
 	return rep, nil

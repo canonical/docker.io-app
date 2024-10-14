@@ -1,16 +1,18 @@
 package ipam
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
 	"strings"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/bitmap"
+	"github.com/docker/docker/libnetwork/internal/netiputil"
 	"github.com/docker/docker/libnetwork/ipamapi"
 	"github.com/docker/docker/libnetwork/ipbits"
 	"github.com/docker/docker/libnetwork/types"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -45,7 +47,7 @@ func newAddrSpace(predefined []*net.IPNet) (*addrSpace, error) {
 	pdf := make([]netip.Prefix, len(predefined))
 	for i, n := range predefined {
 		var ok bool
-		pdf[i], ok = toPrefix(n)
+		pdf[i], ok = netiputil.ToPrefix(n)
 		if !ok {
 			return nil, fmt.Errorf("network at index %d (%v) is not in canonical form", i, n)
 		}
@@ -63,45 +65,44 @@ func (a *Allocator) GetDefaultAddressSpaces() (string, string, error) {
 
 // RequestPool returns an address pool along with its unique id.
 // addressSpace must be a valid address space name and must not be the empty string.
-// If pool is the empty string then the default predefined pool for addressSpace will be used, otherwise pool must be a valid IP address and length in CIDR notation.
-// If subPool is not empty, it must be a valid IP address and length in CIDR notation which is a sub-range of pool.
-// subPool must be empty if pool is empty.
-func (a *Allocator) RequestPool(addressSpace, pool, subPool string, options map[string]string, v6 bool) (string, *net.IPNet, map[string]string, error) {
-	logrus.Debugf("RequestPool(%s, %s, %s, %v, %t)", addressSpace, pool, subPool, options, v6)
+// If requestedPool is the empty string then the default predefined pool for addressSpace will be used, otherwise pool must be a valid IP address and length in CIDR notation.
+// If requestedSubPool is not empty, it must be a valid IP address and length in CIDR notation which is a sub-range of requestedPool.
+// requestedSubPool must be empty if requestedPool is empty.
+func (a *Allocator) RequestPool(addressSpace, requestedPool, requestedSubPool string, _ map[string]string, v6 bool) (poolID string, pool *net.IPNet, meta map[string]string, err error) {
+	log.G(context.TODO()).Debugf("RequestPool(%s, %s, %s, _, %t)", addressSpace, requestedPool, requestedSubPool, v6)
 
-	parseErr := func(err error) (string, *net.IPNet, map[string]string, error) {
-		return "", nil, nil, types.InternalErrorf("failed to parse pool request for address space %q pool %q subpool %q: %v", addressSpace, pool, subPool, err)
+	parseErr := func(err error) error {
+		return types.InternalErrorf("failed to parse pool request for address space %q pool %q subpool %q: %v", addressSpace, requestedPool, requestedSubPool, err)
 	}
 
 	if addressSpace == "" {
-		return parseErr(ipamapi.ErrInvalidAddressSpace)
+		return "", nil, nil, parseErr(ipamapi.ErrInvalidAddressSpace)
 	}
 	aSpace, err := a.getAddrSpace(addressSpace)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	k := PoolID{AddressSpace: addressSpace}
+	if requestedPool == "" && requestedSubPool != "" {
+		return "", nil, nil, parseErr(ipamapi.ErrInvalidSubPool)
+	}
 
-	if pool == "" {
-		if subPool != "" {
-			return parseErr(ipamapi.ErrInvalidSubPool)
-		}
+	k := PoolID{AddressSpace: addressSpace}
+	if requestedPool == "" {
 		k.Subnet, err = aSpace.allocatePredefinedPool(v6)
 		if err != nil {
 			return "", nil, nil, err
 		}
-		return k.String(), toIPNet(k.Subnet), nil, nil
+		return k.String(), netiputil.ToIPNet(k.Subnet), nil, nil
 	}
 
-	if k.Subnet, err = netip.ParsePrefix(pool); err != nil {
-		return parseErr(ipamapi.ErrInvalidPool)
+	if k.Subnet, err = netip.ParsePrefix(requestedPool); err != nil {
+		return "", nil, nil, parseErr(ipamapi.ErrInvalidPool)
 	}
 
-	if subPool != "" {
-		var err error
-		k.ChildSubnet, err = netip.ParsePrefix(subPool)
+	if requestedSubPool != "" {
+		k.ChildSubnet, err = netip.ParsePrefix(requestedSubPool)
 		if err != nil {
-			return parseErr(ipamapi.ErrInvalidSubPool)
+			return "", nil, nil, parseErr(ipamapi.ErrInvalidSubPool)
 		}
 	}
 
@@ -119,15 +120,15 @@ func (a *Allocator) RequestPool(addressSpace, pool, subPool string, options map[
 		return "", nil, nil, err
 	}
 
-	return k.String(), toIPNet(k.Subnet), nil, nil
+	return k.String(), netiputil.ToIPNet(k.Subnet), nil, nil
 }
 
 // ReleasePool releases the address pool identified by the passed id
 func (a *Allocator) ReleasePool(poolID string) error {
-	logrus.Debugf("ReleasePool(%s)", poolID)
-	k := PoolID{}
-	if err := k.FromString(poolID); err != nil {
-		return types.BadRequestErrorf("invalid pool id: %s", poolID)
+	log.G(context.TODO()).Debugf("ReleasePool(%s)", poolID)
+	k, err := PoolIDFromString(poolID)
+	if err != nil {
+		return types.InvalidParameterErrorf("invalid pool id: %s", poolID)
 	}
 
 	aSpace, err := a.getAddrSpace(k.AddressSpace)
@@ -147,7 +148,7 @@ func (a *Allocator) getAddrSpace(as string) (*addrSpace, error) {
 	case globalAddressSpace:
 		return a.global, nil
 	}
-	return nil, types.BadRequestErrorf("cannot find address space %s", as)
+	return nil, types.InvalidParameterErrorf("cannot find address space %s", as)
 }
 
 func newPoolData(pool netip.Prefix) *PoolData {
@@ -214,7 +215,7 @@ func (aSpace *addrSpace) allocatePredefinedPool(ipV6 bool) (netip.Prefix, error)
 		}
 		// Shouldn't be necessary, but check prevents IP collisions should
 		// predefined pools overlap for any reason.
-		if !aSpace.contains(nw) {
+		if !aSpace.overlaps(nw) {
 			aSpace.updatePredefinedStartIndex(i + 1)
 			err := aSpace.allocateSubnetL(nw, netip.Prefix{})
 			if err != nil {
@@ -233,10 +234,10 @@ func (aSpace *addrSpace) allocatePredefinedPool(ipV6 bool) (netip.Prefix, error)
 
 // RequestAddress returns an address from the specified pool ID
 func (a *Allocator) RequestAddress(poolID string, prefAddress net.IP, opts map[string]string) (*net.IPNet, map[string]string, error) {
-	logrus.Debugf("RequestAddress(%s, %v, %v)", poolID, prefAddress, opts)
-	k := PoolID{}
-	if err := k.FromString(poolID); err != nil {
-		return nil, nil, types.BadRequestErrorf("invalid pool id: %s", poolID)
+	log.G(context.TODO()).Debugf("RequestAddress(%s, %v, %v)", poolID, prefAddress, opts)
+	k, err := PoolIDFromString(poolID)
+	if err != nil {
+		return nil, nil, types.InvalidParameterErrorf("invalid pool id: %s", poolID)
 	}
 
 	aSpace, err := a.getAddrSpace(k.AddressSpace)
@@ -248,7 +249,7 @@ func (a *Allocator) RequestAddress(poolID string, prefAddress net.IP, opts map[s
 		var ok bool
 		pref, ok = netip.AddrFromSlice(prefAddress)
 		if !ok {
-			return nil, nil, types.BadRequestErrorf("invalid preferred address: %v", prefAddress)
+			return nil, nil, types.InvalidParameterErrorf("invalid preferred address: %v", prefAddress)
 		}
 	}
 	p, err := aSpace.requestAddress(k.Subnet, k.ChildSubnet, pref.Unmap(), opts)
@@ -293,10 +294,10 @@ func (aSpace *addrSpace) requestAddress(nw, sub netip.Prefix, prefAddress netip.
 
 // ReleaseAddress releases the address from the specified pool ID
 func (a *Allocator) ReleaseAddress(poolID string, address net.IP) error {
-	logrus.Debugf("ReleaseAddress(%s, %v)", poolID, address)
-	k := PoolID{}
-	if err := k.FromString(poolID); err != nil {
-		return types.BadRequestErrorf("invalid pool id: %s", poolID)
+	log.G(context.TODO()).Debugf("ReleaseAddress(%s, %v)", poolID, address)
+	k, err := PoolIDFromString(poolID)
+	if err != nil {
+		return types.InvalidParameterErrorf("invalid pool id: %s", poolID)
 	}
 
 	aSpace, err := a.getAddrSpace(k.AddressSpace)
@@ -306,7 +307,7 @@ func (a *Allocator) ReleaseAddress(poolID string, address net.IP) error {
 
 	addr, ok := netip.AddrFromSlice(address)
 	if !ok {
-		return types.BadRequestErrorf("invalid address: %v", address)
+		return types.InvalidParameterErrorf("invalid address: %v", address)
 	}
 
 	return aSpace.releaseAddress(k.Subnet, k.ChildSubnet, addr.Unmap())
@@ -327,16 +328,16 @@ func (aSpace *addrSpace) releaseAddress(nw, sub netip.Prefix, address netip.Addr
 	}
 
 	if !address.IsValid() {
-		return types.BadRequestErrorf("invalid address")
+		return types.InvalidParameterErrorf("invalid address")
 	}
 
 	if !nw.Contains(address) {
 		return ipamapi.ErrIPOutOfRange
 	}
 
-	defer logrus.Debugf("Released address Address:%v Sequence:%s", address, p.addrs)
+	defer log.G(context.TODO()).Debugf("Released address Address:%v Sequence:%s", address, p.addrs)
 
-	return p.addrs.Unset(hostID(address, uint(nw.Bits())))
+	return p.addrs.Unset(netiputil.HostID(address, uint(nw.Bits())))
 }
 
 func getAddress(base netip.Prefix, bitmask *bitmap.Bitmap, prefAddress netip.Addr, ipr netip.Prefix, serial bool) (netip.Addr, error) {
@@ -345,7 +346,7 @@ func getAddress(base netip.Prefix, bitmask *bitmap.Bitmap, prefAddress netip.Add
 		err     error
 	)
 
-	logrus.Debugf("Request address PoolID:%v %s Serial:%v PrefAddress:%v ", base, bitmask, serial, prefAddress)
+	log.G(context.TODO()).Debugf("Request address PoolID:%v %s Serial:%v PrefAddress:%v ", base, bitmask, serial, prefAddress)
 
 	if bitmask.Unselected() == 0 {
 		return netip.Addr{}, ipamapi.ErrNoAvailableIPs
@@ -353,10 +354,10 @@ func getAddress(base netip.Prefix, bitmask *bitmap.Bitmap, prefAddress netip.Add
 	if ipr == (netip.Prefix{}) && prefAddress == (netip.Addr{}) {
 		ordinal, err = bitmask.SetAny(serial)
 	} else if prefAddress != (netip.Addr{}) {
-		ordinal = hostID(prefAddress, uint(base.Bits()))
+		ordinal = netiputil.HostID(prefAddress, uint(base.Bits()))
 		err = bitmask.Set(ordinal)
 	} else {
-		start, end := subnetRange(base, ipr)
+		start, end := netiputil.SubnetRange(base, ipr)
 		ordinal, err = bitmask.SetAnyInRange(start, end, serial)
 	}
 

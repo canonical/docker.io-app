@@ -7,7 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	timetypes "github.com/docker/docker/api/types/time"
@@ -15,7 +17,6 @@ import (
 	"github.com/docker/docker/libnetwork"
 	"github.com/docker/docker/runconfig"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -56,11 +57,12 @@ func (daemon *Daemon) ContainersPrune(ctx context.Context, pruneFilters filters.
 		return nil, err
 	}
 
+	cfg := &daemon.config().Config
 	allContainers := daemon.List()
 	for _, c := range allContainers {
 		select {
 		case <-ctx.Done():
-			logrus.Debugf("ContainersPrune operation cancelled: %#v", *rep)
+			log.G(ctx).Debugf("ContainersPrune operation cancelled: %#v", *rep)
 			return rep, nil
 		default:
 		}
@@ -77,9 +79,9 @@ func (daemon *Daemon) ContainersPrune(ctx context.Context, pruneFilters filters.
 				return nil, err
 			}
 			// TODO: sets RmLink to true?
-			err = daemon.ContainerRm(c.ID, &types.ContainerRmConfig{})
+			err = daemon.containerRm(cfg, c.ID, &backend.ContainerRmConfig{})
 			if err != nil {
-				logrus.Warnf("failed to prune container %s: %v", c.ID, err)
+				log.G(ctx).Warnf("failed to prune container %s: %v", c.ID, err)
 				continue
 			}
 			if cSize > 0 {
@@ -88,7 +90,7 @@ func (daemon *Daemon) ContainersPrune(ctx context.Context, pruneFilters filters.
 			rep.ContainersDeleted = append(rep.ContainersDeleted, c.ID)
 		}
 	}
-	daemon.EventsService.Log("prune", events.ContainerEventType, events.Actor{
+	daemon.EventsService.Log(events.ActionPrune, events.ContainerEventType, events.Actor{
 		Attributes: map[string]string{"reclaimed": strconv.FormatUint(rep.SpaceReclaimed, 10)},
 	})
 	return rep, nil
@@ -101,20 +103,20 @@ func (daemon *Daemon) localNetworksPrune(ctx context.Context, pruneFilters filte
 	until, _ := getUntilFromPruneFilters(pruneFilters)
 
 	// When the function returns true, the walk will stop.
-	l := func(nw libnetwork.Network) bool {
+	daemon.netController.WalkNetworks(func(nw *libnetwork.Network) bool {
 		select {
 		case <-ctx.Done():
 			// context cancelled
 			return true
 		default:
 		}
-		if nw.Info().ConfigOnly() {
+		if nw.ConfigOnly() {
 			return false
 		}
-		if !until.IsZero() && nw.Info().Created().After(until) {
+		if !until.IsZero() && nw.Created().After(until) {
 			return false
 		}
-		if !matchLabels(pruneFilters, nw.Info().Labels()) {
+		if !matchLabels(pruneFilters, nw.Labels()) {
 			return false
 		}
 		nwName := nw.Name()
@@ -125,13 +127,12 @@ func (daemon *Daemon) localNetworksPrune(ctx context.Context, pruneFilters filte
 			return false
 		}
 		if err := daemon.DeleteNetwork(nw.ID()); err != nil {
-			logrus.Warnf("could not remove local network %s: %v", nwName, err)
+			log.G(ctx).Warnf("could not remove local network %s: %v", nwName, err)
 			return false
 		}
 		rep.NetworksDeleted = append(rep.NetworksDeleted, nwName)
 		return false
-	}
-	daemon.netController.WalkNetworks(l)
+	})
 	return rep
 }
 
@@ -175,7 +176,7 @@ func (daemon *Daemon) clusterNetworksPrune(ctx context.Context, pruneFilters fil
 				// we can safely ignore the "network .. is in use" error
 				match := networkIsInUse.FindStringSubmatch(err.Error())
 				if len(match) != 2 || match[1] != nw.ID {
-					logrus.Warnf("could not remove cluster network %s: %v", nw.Name, err)
+					log.G(ctx).Warnf("could not remove cluster network %s: %v", nw.Name, err)
 				}
 				continue
 			}
@@ -212,11 +213,11 @@ func (daemon *Daemon) NetworksPrune(ctx context.Context, pruneFilters filters.Ar
 
 	select {
 	case <-ctx.Done():
-		logrus.Debugf("NetworksPrune operation cancelled: %#v", *rep)
+		log.G(ctx).Debugf("NetworksPrune operation cancelled: %#v", *rep)
 		return rep, nil
 	default:
 	}
-	daemon.EventsService.Log("prune", events.NetworkEventType, events.Actor{
+	daemon.EventsService.Log(events.ActionPrune, events.NetworkEventType, events.Actor{
 		Attributes: map[string]string{"reclaimed": "0"},
 	})
 	return rep, nil

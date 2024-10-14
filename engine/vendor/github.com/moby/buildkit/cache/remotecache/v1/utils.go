@@ -6,11 +6,16 @@ import (
 	"sort"
 
 	"github.com/moby/buildkit/solver"
+	"github.com/moby/buildkit/util/bklog"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
+
+type withCheckDescriptor interface {
+	// CheckDescriptor is additional method on Provider to check if the descriptor is available without opening the reader
+	CheckDescriptor(context.Context, ocispecs.Descriptor) error
+}
 
 // sortConfig sorts the config structure to make sure it is deterministic
 func sortConfig(cc *CacheConfig) {
@@ -128,7 +133,7 @@ type normalizeState struct {
 	next  int
 }
 
-func (s *normalizeState) removeLoops() {
+func (s *normalizeState) removeLoops(ctx context.Context) {
 	roots := []digest.Digest{}
 	for dgst, it := range s.byKey {
 		if len(it.links) == 0 {
@@ -139,11 +144,11 @@ func (s *normalizeState) removeLoops() {
 	visited := map[digest.Digest]struct{}{}
 
 	for _, d := range roots {
-		s.checkLoops(d, visited)
+		s.checkLoops(ctx, d, visited)
 	}
 }
 
-func (s *normalizeState) checkLoops(d digest.Digest, visited map[digest.Digest]struct{}) {
+func (s *normalizeState) checkLoops(ctx context.Context, d digest.Digest, visited map[digest.Digest]struct{}) {
 	it, ok := s.byKey[d]
 	if !ok {
 		return
@@ -165,11 +170,11 @@ func (s *normalizeState) checkLoops(d digest.Digest, visited map[digest.Digest]s
 					continue
 				}
 				if !it2.removeLink(it) {
-					logrus.Warnf("failed to remove looping cache key %s %s", d, id)
+					bklog.G(ctx).Warnf("failed to remove looping cache key %s %s", d, id)
 				}
 				delete(links[l], id)
 			} else {
-				s.checkLoops(id, visited)
+				s.checkLoops(ctx, id, visited)
 			}
 		}
 	}
@@ -279,9 +284,7 @@ func marshalRemote(ctx context.Context, r *solver.Remote, state *marshalState) s
 		return ""
 	}
 
-	if cd, ok := r.Provider.(interface {
-		CheckDescriptor(context.Context, ocispecs.Descriptor) error
-	}); ok && len(r.Descriptors) > 0 {
+	if cd, ok := r.Provider.(withCheckDescriptor); ok && len(r.Descriptors) > 0 {
 		for _, d := range r.Descriptors {
 			if cd.CheckDescriptor(ctx, d) != nil {
 				return ""
