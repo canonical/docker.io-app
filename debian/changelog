@@ -1,3 +1,9 @@
+docker.io-app (26.1.3-0ubuntu1~24.04.1) noble; urgency=medium
+
+  * Backport from oracular to noble. (LP: #2040461)
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Mon, 14 Oct 2024 11:29:26 -0300
+
 docker.io-app (26.1.3-0ubuntu1) oracular; urgency=medium
 
   * New upstream release.
