@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -48,18 +48,18 @@ Docker images can consist of multiple layers. In the example above, the image
 consists of a single layer; \fBe756f3fdd6a3\fR\&.
 
 .PP
-Layers can be reused by images. For example, the \fBdebian:bullseye\fR image shares
-its layer with the \fBdebian:latest\fR\&. Pulling the \fBdebian:bullseye\fR image therefore
+Layers can be reused by images. For example, the \fBdebian:bookworm\fR image shares
+its layer with the \fBdebian:latest\fR\&. Pulling the \fBdebian:bookworm\fR image therefore
 only pulls its metadata, but not its layers, because the layer is already present
 locally:
 
 .EX
-$ docker image pull debian:bullseye
+$ docker image pull debian:bookworm
 
-bullseye: Pulling from library/debian
+bookworm: Pulling from library/debian
 Digest: sha256:3f1d6c17773a45c97bd8f158d665c9709d7b29ed7917ac934086ad96f92e4510
-Status: Downloaded newer image for debian:bullseye
-docker.io/library/debian:bullseye
+Status: Downloaded newer image for debian:bookworm
+docker.io/library/debian:bookworm
 
 .EE
 
@@ -71,7 +71,7 @@ command:
 $ docker images
 
 REPOSITORY   TAG        IMAGE ID       CREATED        SIZE
-debian       bullseye   4eacea30377a   8 days ago     124MB
+debian       bookworm   4eacea30377a   8 days ago     124MB
 debian       latest     4eacea30377a   8 days ago     124MB
 
 .EE
@@ -79,7 +79,7 @@ debian       latest     4eacea30377a   8 days ago     124MB
 .PP
 Docker uses a content-addressable image store, and the image ID is a SHA256
 digest covering the image's configuration and layers. In the example above,
-\fBdebian:bullseye\fR and \fBdebian:latest\fR have the same image ID because they are
+\fBdebian:bookworm\fR and \fBdebian:latest\fR have the same image ID because they are
 the \fIsame\fP image tagged with different names. Because they are the same image,
 their layers are stored only once and do not consume extra disk space.
 

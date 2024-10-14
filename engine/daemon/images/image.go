@@ -11,15 +11,15 @@ import (
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/platforms"
-	"github.com/docker/distribution/reference"
-	imagetypes "github.com/docker/docker/api/types/image"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // ErrImageDoesNotExist is error returned when no image can be found for a reference.
@@ -46,20 +46,22 @@ type manifest struct {
 	Config ocispec.Descriptor `json:"config"`
 }
 
-func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, image string, platform *ocispec.Platform) error {
-	// Only makes sense when conatinerd image store is used
+func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
+	// Only makes sense when containerd image store is used
 	panic("not implemented")
 }
 
 func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.Image, platform ocispec.Platform) (bool, error) {
-	logger := logrus.WithField("image", img.ID).WithField("desiredPlatform", platforms.Format(platform))
-
 	ls, err := i.leases.ListResources(ctx, leases.Lease{ID: imageKey(img.ID().String())})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}
-		logger.WithError(err).Error("Error looking up image leases")
+		log.G(ctx).WithFields(log.Fields{
+			"error":           err,
+			"image":           img.ID,
+			"desiredPlatform": platforms.Format(platform),
+		}).Error("Error looking up image leases")
 		return false, err
 	}
 
@@ -77,7 +79,12 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 	}
 
 	for _, r := range ls {
-		logger := logger.WithField("resourceID", r.ID).WithField("resourceType", r.Type)
+		logger := log.G(ctx).WithFields(log.Fields{
+			"image":           img.ID,
+			"desiredPlatform": platforms.Format(platform),
+			"resourceID":      r.ID,
+			"resourceType":    r.Type,
+		})
 		logger.Debug("Checking lease resource for platform match")
 		if r.Type != "content" {
 			continue
@@ -157,7 +164,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 }
 
 // GetImage returns an image corresponding to the image referred to by refOrID.
-func (i *ImageService) GetImage(ctx context.Context, refOrID string, options imagetypes.GetImageOpts) (*image.Image, error) {
+func (i *ImageService) GetImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (*image.Image, error) {
 	img, err := i.getImage(ctx, refOrID, options)
 	if err != nil {
 		return nil, err
@@ -194,11 +201,11 @@ func (i *ImageService) GetImage(ctx context.Context, refOrID string, options ima
 	return img, nil
 }
 
-func (i *ImageService) GetImageManifest(ctx context.Context, refOrID string, options imagetypes.GetImageOpts) (*ocispec.Descriptor, error) {
+func (i *ImageService) GetImageManifest(ctx context.Context, refOrID string, options backend.GetImageOpts) (*ocispec.Descriptor, error) {
 	panic("not implemented")
 }
 
-func (i *ImageService) getImage(ctx context.Context, refOrID string, options imagetypes.GetImageOpts) (retImg *image.Image, retErr error) {
+func (i *ImageService) getImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (retImg *image.Image, retErr error) {
 	defer func() {
 		if retErr != nil || retImg == nil || options.Platform == nil {
 			return
@@ -241,12 +248,12 @@ func (i *ImageService) getImage(ctx context.Context, refOrID string, options ima
 	if !ok {
 		digested, ok := ref.(reference.Digested)
 		if !ok {
-			return nil, ErrImageDoesNotExist{ref}
+			return nil, ErrImageDoesNotExist{Ref: ref}
 		}
 		if img, err := i.imageStore.Get(image.ID(digested.Digest())); err == nil {
 			return img, nil
 		}
-		return nil, ErrImageDoesNotExist{ref}
+		return nil, ErrImageDoesNotExist{Ref: ref}
 	}
 
 	if dgst, err := i.referenceStore.Get(namedRef); err == nil {
@@ -260,12 +267,12 @@ func (i *ImageService) getImage(ctx context.Context, refOrID string, options ima
 	if id, err := i.imageStore.Search(refOrID); err == nil {
 		img, err := i.imageStore.Get(id)
 		if err != nil {
-			return nil, ErrImageDoesNotExist{ref}
+			return nil, ErrImageDoesNotExist{Ref: ref}
 		}
 		return img, nil
 	}
 
-	return nil, ErrImageDoesNotExist{ref}
+	return nil, ErrImageDoesNotExist{Ref: ref}
 }
 
 // OnlyPlatformWithFallback uses `platforms.Only` with a fallback to handle the case where the platform

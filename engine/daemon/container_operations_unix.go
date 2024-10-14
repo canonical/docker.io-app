@@ -1,16 +1,18 @@
 //go:build linux || freebsd
-// +build linux freebsd
 
 package daemon // import "github.com/docker/docker/daemon"
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/container"
+	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/links"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libnetwork"
@@ -21,7 +23,6 @@ import (
 	"github.com/moby/sys/mount"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -58,60 +59,93 @@ func (daemon *Daemon) setupLinkedContainers(container *container.Container) ([]s
 	return env, nil
 }
 
-func (daemon *Daemon) getIpcContainer(id string) (*container.Container, error) {
-	errMsg := "can't join IPC of container " + id
-	// Check the container exists
+func (daemon *Daemon) getIPCContainer(id string) (*container.Container, error) {
+	// Check if the container exists, is running, and not restarting
 	ctr, err := daemon.GetContainer(id)
 	if err != nil {
-		return nil, errors.Wrap(err, errMsg)
+		return nil, errdefs.InvalidParameter(err)
 	}
-	// Check the container is running and not restarting
-	if err := daemon.checkContainer(ctr, containerIsRunning, containerIsNotRestarting); err != nil {
-		return nil, errors.Wrap(err, errMsg)
+	if !ctr.IsRunning() {
+		return nil, errNotRunning(id)
 	}
+	if ctr.IsRestarting() {
+		return nil, errContainerIsRestarting(id)
+	}
+
 	// Check the container ipc is shareable
 	if st, err := os.Stat(ctr.ShmPath); err != nil || !st.IsDir() {
 		if err == nil || os.IsNotExist(err) {
-			return nil, errors.New(errMsg + ": non-shareable IPC (hint: use IpcMode:shareable for the donor container)")
+			return nil, errdefs.InvalidParameter(errors.New("container " + id + ": non-shareable IPC (hint: use IpcMode:shareable for the donor container)"))
 		}
 		// stat() failed?
-		return nil, errors.Wrap(err, errMsg+": unexpected error from stat "+ctr.ShmPath)
+		return nil, errdefs.System(errors.Wrap(err, "container "+id))
 	}
 
 	return ctr, nil
 }
 
-func (daemon *Daemon) getPidContainer(ctr *container.Container) (*container.Container, error) {
-	containerID := ctr.HostConfig.PidMode.Container()
-	ctr, err := daemon.GetContainer(containerID)
+func (daemon *Daemon) getPIDContainer(id string) (*container.Container, error) {
+	ctr, err := daemon.GetContainer(id)
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot join PID of a non running container: %s", containerID)
+		return nil, errdefs.InvalidParameter(err)
 	}
-	return ctr, daemon.checkContainer(ctr, containerIsRunning, containerIsNotRestarting)
+	if !ctr.IsRunning() {
+		return nil, errNotRunning(id)
+	}
+	if ctr.IsRestarting() {
+		return nil, errContainerIsRestarting(id)
+	}
+
+	return ctr, nil
 }
 
-func containerIsRunning(c *container.Container) error {
-	if !c.IsRunning() {
-		return errdefs.Conflict(errors.Errorf("container %s is not running", c.ID))
+// setupContainerDirs sets up base container directories (root, ipc, tmpfs and secrets).
+func (daemon *Daemon) setupContainerDirs(c *container.Container) (_ []container.Mount, err error) {
+	if err := daemon.setupContainerMountsRoot(c); err != nil {
+		return nil, err
 	}
-	return nil
+
+	if err := daemon.setupIPCDirs(c); err != nil {
+		return nil, err
+	}
+
+	if err := daemon.setupSecretDir(c); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			daemon.cleanupSecretDir(c)
+		}
+	}()
+
+	var ms []container.Mount
+	if !c.HostConfig.IpcMode.IsPrivate() && !c.HostConfig.IpcMode.IsEmpty() {
+		ms = append(ms, c.IpcMounts()...)
+	}
+
+	tmpfsMounts, err := c.TmpfsMounts()
+	if err != nil {
+		return nil, err
+	}
+	ms = append(ms, tmpfsMounts...)
+
+	secretMounts, err := c.SecretMounts()
+	if err != nil {
+		return nil, err
+	}
+	ms = append(ms, secretMounts...)
+
+	return ms, nil
 }
 
-func containerIsNotRestarting(c *container.Container) error {
-	if c.IsRestarting() {
-		return errContainerIsRestarting(c.ID)
-	}
-	return nil
-}
-
-func (daemon *Daemon) setupIpcDirs(c *container.Container) error {
+func (daemon *Daemon) setupIPCDirs(c *container.Container) error {
 	ipcMode := c.HostConfig.IpcMode
 
 	switch {
 	case ipcMode.IsContainer():
-		ic, err := daemon.getIpcContainer(ipcMode.Container())
+		ic, err := daemon.getIPCContainer(ipcMode.Container())
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed to join IPC namespace")
 		}
 		c.ShmPath = ic.ShmPath
 
@@ -139,7 +173,7 @@ func (daemon *Daemon) setupIpcDirs(c *container.Container) error {
 				return err
 			}
 
-			if err := idtools.MkdirAllAndChown(shmPath, 0700, rootIDs); err != nil {
+			if err := idtools.MkdirAllAndChown(shmPath, 0o700, rootIDs); err != nil {
 				return err
 			}
 
@@ -184,7 +218,7 @@ func (daemon *Daemon) setupSecretDir(c *container.Container) (setupErr error) {
 	for _, s := range c.SecretReferences {
 		// TODO (ehazlett): use type switch when more are supported
 		if s.File == nil {
-			logrus.Error("secret target type is not a file target")
+			log.G(context.TODO()).Error("secret target type is not a file target")
 			continue
 		}
 
@@ -194,11 +228,11 @@ func (daemon *Daemon) setupSecretDir(c *container.Container) (setupErr error) {
 		if err != nil {
 			return errors.Wrap(err, "error getting secret file path")
 		}
-		if err := idtools.MkdirAllAndChown(filepath.Dir(fPath), 0700, rootIDs); err != nil {
+		if err := idtools.MkdirAllAndChown(filepath.Dir(fPath), 0o700, rootIDs); err != nil {
 			return errors.Wrap(err, "error creating secret mount path")
 		}
 
-		logrus.WithFields(logrus.Fields{
+		log.G(context.TODO()).WithFields(log.Fields{
 			"name": s.File.Name,
 			"path": fPath,
 		}).Debug("injecting secret")
@@ -234,7 +268,7 @@ func (daemon *Daemon) setupSecretDir(c *container.Container) (setupErr error) {
 			// a valid type of config so we should not error when we encounter
 			// one.
 			if configRef.Runtime == nil {
-				logrus.Error("config target type is not a file or runtime target")
+				log.G(context.TODO()).Error("config target type is not a file or runtime target")
 			}
 			// However, in any case, this isn't a file config, so we have no
 			// further work to do
@@ -245,11 +279,11 @@ func (daemon *Daemon) setupSecretDir(c *container.Container) (setupErr error) {
 		if err != nil {
 			return errors.Wrap(err, "error getting config file path for container")
 		}
-		if err := idtools.MkdirAllAndChown(filepath.Dir(fPath), 0700, rootIDs); err != nil {
+		if err := idtools.MkdirAllAndChown(filepath.Dir(fPath), 0o700, rootIDs); err != nil {
 			return errors.Wrap(err, "error creating config mount path")
 		}
 
-		logrus.WithFields(logrus.Fields{
+		log.G(context.TODO()).WithFields(log.Fields{
 			"name": configRef.File.Name,
 			"path": fPath,
 		}).Debug("injecting config")
@@ -292,7 +326,7 @@ func (daemon *Daemon) createSecretsDir(c *container.Container) error {
 	}
 
 	// create tmpfs
-	if err := idtools.MkdirAllAndChown(dir, 0700, rootIDs); err != nil {
+	if err := idtools.MkdirAllAndChown(dir, 0o700, rootIDs); err != nil {
 		return errors.Wrap(err, "error creating secret local mount path")
 	}
 
@@ -309,7 +343,7 @@ func (daemon *Daemon) remountSecretDir(c *container.Container) error {
 		return errors.Wrap(err, "error getting container secrets path")
 	}
 	if err := label.Relabel(dir, c.MountLabel, false); err != nil {
-		logrus.WithError(err).WithField("dir", dir).Warn("Error while attempting to set selinux label")
+		log.G(context.TODO()).WithError(err).WithField("dir", dir).Warn("Error while attempting to set selinux label")
 	}
 	rootIDs := daemon.idMapping.RootPair()
 	tmpfsOwnership := fmt.Sprintf("uid=%d,gid=%d", rootIDs.UID, rootIDs.GID)
@@ -325,13 +359,13 @@ func (daemon *Daemon) remountSecretDir(c *container.Container) error {
 func (daemon *Daemon) cleanupSecretDir(c *container.Container) {
 	dir, err := c.SecretMountPath()
 	if err != nil {
-		logrus.WithError(err).WithField("container", c.ID).Warn("error getting secrets mount path for container")
+		log.G(context.TODO()).WithError(err).WithField("container", c.ID).Warn("error getting secrets mount path for container")
 	}
 	if err := mount.RecursiveUnmount(dir); err != nil {
-		logrus.WithField("dir", dir).WithError(err).Warn("Error while attempting to unmount dir, this may prevent removal of container.")
+		log.G(context.TODO()).WithField("dir", dir).WithError(err).Warn("Error while attempting to unmount dir, this may prevent removal of container.")
 	}
 	if err := os.RemoveAll(dir); err != nil {
-		logrus.WithField("dir", dir).WithError(err).Error("Error removing dir.")
+		log.G(context.TODO()).WithField("dir", dir).WithError(err).Error("Error removing dir.")
 	}
 }
 
@@ -347,7 +381,7 @@ func killProcessDirectly(container *container.Container) error {
 			return errdefs.System(err)
 		}
 		err = errNoSuchProcess{pid, syscall.SIGKILL}
-		logrus.WithError(err).WithField("container", container.ID).Debug("no such process")
+		log.G(context.TODO()).WithError(err).WithField("container", container.ID).Debug("no such process")
 		return err
 	}
 
@@ -356,7 +390,7 @@ func killProcessDirectly(container *container.Container) error {
 		// Since we can not kill a zombie pid, add zombie check here
 		isZombie, err := process.Zombie(pid)
 		if err != nil {
-			logrus.WithError(err).WithField("container", container.ID).Warn("Container state is invalid")
+			log.G(context.TODO()).WithError(err).WithField("container", container.ID).Warn("Container state is invalid")
 			return err
 		}
 		if isZombie {
@@ -372,17 +406,20 @@ func isLinkable(child *container.Container) bool {
 	return ok
 }
 
+// TODO(aker): remove when we make the default bridge network behave like any other network
 func enableIPOnPredefinedNetwork() bool {
 	return false
 }
 
 // serviceDiscoveryOnDefaultNetwork indicates if service discovery is supported on the default network
+// TODO(aker): remove when we make the default bridge network behave like any other network
 func serviceDiscoveryOnDefaultNetwork() bool {
 	return false
 }
 
-func (daemon *Daemon) setupPathsAndSandboxOptions(container *container.Container, sboxOptions *[]libnetwork.SandboxOption) error {
+func buildSandboxPlatformOptions(container *container.Container, cfg *config.Config, sboxOptions *[]libnetwork.SandboxOption) error {
 	var err error
+	var originResolvConfPath string
 
 	// Set the correct paths for /etc/hosts and /etc/resolv.conf, based on the
 	// networking-mode of the container. Note that containers with "container"
@@ -396,8 +433,8 @@ func (daemon *Daemon) setupPathsAndSandboxOptions(container *container.Container
 		*sboxOptions = append(
 			*sboxOptions,
 			libnetwork.OptionOriginHostsPath("/etc/hosts"),
-			libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"),
 		)
+		originResolvConfPath = "/etc/resolv.conf"
 	case container.HostConfig.NetworkMode.IsUserDefined():
 		// The container uses a user-defined network. We use the embedded DNS
 		// server for container name resolution and to act as a DNS forwarder
@@ -410,10 +447,7 @@ func (daemon *Daemon) setupPathsAndSandboxOptions(container *container.Container
 		// If systemd-resolvd is used, the "upstream" DNS servers can be found in
 		// /run/systemd/resolve/resolv.conf. We do not query those DNS servers
 		// directly, as they can be dynamically reconfigured.
-		*sboxOptions = append(
-			*sboxOptions,
-			libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"),
-		)
+		originResolvConfPath = "/etc/resolv.conf"
 	default:
 		// For other situations, such as the default bridge network, container
 		// discovery / name resolution is handled through /etc/hosts, and no
@@ -426,11 +460,15 @@ func (daemon *Daemon) setupPathsAndSandboxOptions(container *container.Container
 		// DNS servers on the host can be dynamically updated.
 		//
 		// Copy the host's resolv.conf for the container (/run/systemd/resolve/resolv.conf or /etc/resolv.conf)
-		*sboxOptions = append(
-			*sboxOptions,
-			libnetwork.OptionOriginResolvConfPath(daemon.configStore.GetResolvConf()),
-		)
+		originResolvConfPath = cfg.GetResolvConf()
 	}
+
+	// Allow tests to point at their own resolv.conf file.
+	if envPath := os.Getenv("DOCKER_TEST_RESOLV_CONF_PATH"); envPath != "" {
+		log.G(context.TODO()).Infof("Using OriginResolvConfPath from env: %s", envPath)
+		originResolvConfPath = envPath
+	}
+	*sboxOptions = append(*sboxOptions, libnetwork.OptionOriginResolvConfPath(originResolvConfPath))
 
 	container.HostsPath, err = container.GetRootResourcePath("hosts")
 	if err != nil {
@@ -443,6 +481,7 @@ func (daemon *Daemon) setupPathsAndSandboxOptions(container *container.Container
 		return err
 	}
 	*sboxOptions = append(*sboxOptions, libnetwork.OptionResolvConfPath(container.ResolvConfPath))
+
 	return nil
 }
 
@@ -459,5 +498,5 @@ func (daemon *Daemon) setupContainerMountsRoot(c *container.Container) error {
 	if err != nil {
 		return err
 	}
-	return idtools.MkdirAllAndChown(p, 0710, idtools.Identity{UID: idtools.CurrentIdentity().UID, GID: daemon.IdentityMapping().RootPair().GID})
+	return idtools.MkdirAllAndChown(p, 0o710, idtools.Identity{UID: idtools.CurrentIdentity().UID, GID: daemon.IdentityMapping().RootPair().GID})
 }

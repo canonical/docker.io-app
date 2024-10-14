@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -21,10 +22,9 @@ import (
 	"github.com/moby/swarmkit/v2/agent/exec"
 	"github.com/moby/swarmkit/v2/api"
 	"github.com/moby/swarmkit/v2/api/naming"
-	"github.com/moby/swarmkit/v2/log"
+	swarmlog "github.com/moby/swarmkit/v2/log"
 	"github.com/moby/swarmkit/v2/template"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 type executor struct {
@@ -52,13 +52,16 @@ func NewExecutor(b executorpkg.Backend, p plugin.Backend, i executorpkg.ImageBac
 		pluginBackend: p,
 		imageBackend:  i,
 		volumeBackend: v,
-		dependencies:  agent.NewDependencyManager(b.PluginGetter()),
+		dependencies:  agent.NewDependencyManager(convert.SwarmPluginGetter(b.PluginGetter())),
 	}
 }
 
 // Describe returns the underlying node description from the docker client.
 func (e *executor) Describe(ctx context.Context) (*api.NodeDescription, error) {
-	info := e.backend.SystemInfo()
+	info, err := e.backend.SystemInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	plugins := map[api.PluginDescription]struct{}{}
 	addPlugins := func(typ string, names []string) {
@@ -160,8 +163,7 @@ func (e *executor) Configure(ctx context.Context, node *api.Node) error {
 		if na == nil || na.Network == nil || len(na.Addresses) == 0 {
 			// this should not happen, but we got a panic here and don't have a
 			// good idea about what the underlying data structure looks like.
-			logrus.WithField("NetworkAttachment", fmt.Sprintf("%#v", na)).
-				Warnf("skipping nil or malformed node network attachment entry")
+			swarmlog.G(ctx).WithField("NetworkAttachment", fmt.Sprintf("%#v", na)).Warn("skipping nil or malformed node network attachment entry")
 			continue
 		}
 
@@ -192,8 +194,7 @@ func (e *executor) Configure(ctx context.Context, node *api.Node) error {
 			// same thing as above, check sanity of the attachments so we don't
 			// get a panic.
 			if na == nil || na.Network == nil || len(na.Addresses) == 0 {
-				logrus.WithField("NetworkAttachment", fmt.Sprintf("%#v", na)).
-					Warnf("skipping nil or malformed node network attachment entry")
+				swarmlog.G(ctx).WithField("NetworkAttachment", fmt.Sprintf("%#v", na)).Warn("skipping nil or malformed node network attachment entry")
 				continue
 			}
 
@@ -221,9 +222,8 @@ func (e *executor) Configure(ctx context.Context, node *api.Node) error {
 		IPAM: &network.IPAM{
 			Driver: ingressNA.Network.IPAM.Driver.Name,
 		},
-		Options:        ingressNA.Network.DriverState.Options,
-		Ingress:        true,
-		CheckDuplicate: true,
+		Options: ingressNA.Network.DriverState.Options,
+		Ingress: true,
 	}
 
 	for _, ic := range ingressNA.Network.IPAM.Configs {
@@ -262,19 +262,16 @@ func (e *executor) Configure(ctx context.Context, node *api.Node) error {
 			// just to log an appropriate, informative error. i'm unsure if
 			// this can ever actually occur, but we need to know if it does.
 			if gone {
-				log.G(ctx).Warnf("network %s should be removed, but still has active attachments", nw)
+				swarmlog.G(ctx).Warnf("network %s should be removed, but still has active attachments", nw)
 			} else {
-				log.G(ctx).Warnf(
-					"network %s should have its node LB IP changed, but cannot be removed because of active attachments",
-					nw,
-				)
+				swarmlog.G(ctx).Warnf("network %s should have its node LB IP changed, but cannot be removed because of active attachments", nw)
 			}
 			continue
 		case errors.As(err, &errNoSuchNetwork):
 			// NoSuchNetworkError indicates the network is already gone.
 			continue
 		default:
-			log.G(ctx).Errorf("network %s remove failed: %v", nw, err)
+			swarmlog.G(ctx).Errorf("network %s remove failed: %v", nw, err)
 		}
 	}
 
@@ -301,7 +298,7 @@ func (e *executor) Controller(t *api.Task) (exec.Controller, error) {
 	var ctlr exec.Controller
 	switch r := t.Spec.GetRuntime().(type) {
 	case *api.TaskSpec_Generic:
-		logrus.WithFields(logrus.Fields{
+		swarmlog.G(context.TODO()).WithFields(log.Fields{
 			"kind":     r.Generic.Kind,
 			"type_url": r.Generic.Payload.TypeUrl,
 		}).Debug("custom runtime requested")

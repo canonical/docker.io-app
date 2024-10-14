@@ -7,24 +7,18 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/diff"
 	containerderrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
-	"github.com/containerd/containerd/platforms"
-	"github.com/containerd/containerd/reference"
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/session"
-	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/errdefs"
-	"github.com/moby/buildkit/source"
-	srctypes "github.com/moby/buildkit/source/types"
 	"github.com/moby/buildkit/util/estargz"
 	"github.com/moby/buildkit/util/flightcontrol"
 	"github.com/moby/buildkit/util/imageutil"
@@ -39,173 +33,21 @@ import (
 	"github.com/pkg/errors"
 )
 
-// TODO: break apart containerd specifics like contentstore so the resolver
-// code can be used with any implementation
-
-type ResolverType int
-
-const (
-	ResolverTypeRegistry ResolverType = iota
-	ResolverTypeOCILayout
-)
-
-type SourceOpt struct {
-	Snapshotter   snapshot.Snapshotter
-	ContentStore  content.Store
-	Applier       diff.Applier
-	CacheAccessor cache.Accessor
-	ImageStore    images.Store // optional
-	RegistryHosts docker.RegistryHosts
-	ResolverType
-	LeaseManager leases.Manager
-}
-
-type Source struct {
-	SourceOpt
-	g flightcontrol.Group
-}
-
-var _ source.Source = &Source{}
-
-func NewSource(opt SourceOpt) (*Source, error) {
-	is := &Source{
-		SourceOpt: opt,
-	}
-
-	return is, nil
-}
-
-func (is *Source) ID() string {
-	if is.ResolverType == ResolverTypeOCILayout {
-		return srctypes.OCIScheme
-	}
-	return srctypes.DockerImageScheme
-}
-
-func (is *Source) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt, sm *session.Manager, g session.Group) (digest.Digest, []byte, error) {
-	type t struct {
-		dgst digest.Digest
-		dt   []byte
-	}
-	var typed *t
-	key := ref
-	if platform := opt.Platform; platform != nil {
-		key += platforms.Format(*platform)
-	}
-	var (
-		rm    source.ResolveMode
-		rslvr remotes.Resolver
-		err   error
-	)
-
-	switch is.ResolverType {
-	case ResolverTypeRegistry:
-		rm, err = source.ParseImageResolveMode(opt.ResolveMode)
-		if err != nil {
-			return "", nil, err
-		}
-		rslvr = resolver.DefaultPool.GetResolver(is.RegistryHosts, ref, "pull", sm, g).WithImageStore(is.ImageStore, rm)
-	case ResolverTypeOCILayout:
-		rm = source.ResolveModeForcePull
-		rslvr = getOCILayoutResolver(opt.Store, sm, g)
-	}
-	key += rm.String()
-	res, err := is.g.Do(ctx, key, func(ctx context.Context) (interface{}, error) {
-		dgst, dt, err := imageutil.Config(ctx, ref, rslvr, is.ContentStore, is.LeaseManager, opt.Platform)
-		if err != nil {
-			return nil, err
-		}
-		return &t{dgst: dgst, dt: dt}, nil
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	typed = res.(*t)
-	return typed.dgst, typed.dt, nil
-}
-
-func (is *Source) Resolve(ctx context.Context, id source.Identifier, sm *session.Manager, vtx solver.Vertex) (source.SourceInstance, error) {
-	var (
-		p          *puller
-		platform   = platforms.DefaultSpec()
-		pullerUtil *pull.Puller
-		mode       source.ResolveMode
-		recordType client.UsageRecordType
-		ref        reference.Spec
-		store      llb.ResolveImageConfigOptStore
-		layerLimit *int
-	)
-	switch is.ResolverType {
-	case ResolverTypeRegistry:
-		imageIdentifier, ok := id.(*source.ImageIdentifier)
-		if !ok {
-			return nil, errors.Errorf("invalid image identifier %v", id)
-		}
-
-		if imageIdentifier.Platform != nil {
-			platform = *imageIdentifier.Platform
-		}
-		mode = imageIdentifier.ResolveMode
-		recordType = imageIdentifier.RecordType
-		ref = imageIdentifier.Reference
-		layerLimit = imageIdentifier.LayerLimit
-	case ResolverTypeOCILayout:
-		ociIdentifier, ok := id.(*source.OCIIdentifier)
-		if !ok {
-			return nil, errors.Errorf("invalid OCI layout identifier %v", id)
-		}
-
-		if ociIdentifier.Platform != nil {
-			platform = *ociIdentifier.Platform
-		}
-		mode = source.ResolveModeForcePull // with OCI layout, we always just "pull"
-		store = llb.ResolveImageConfigOptStore{
-			SessionID: ociIdentifier.SessionID,
-			StoreID:   ociIdentifier.StoreID,
-		}
-		ref = ociIdentifier.Reference
-		layerLimit = ociIdentifier.LayerLimit
-	default:
-		return nil, errors.Errorf("unknown resolver type: %v", is.ResolverType)
-	}
-	pullerUtil = &pull.Puller{
-		ContentStore: is.ContentStore,
-		Platform:     platform,
-		Src:          ref,
-	}
-	p = &puller{
-		CacheAccessor:  is.CacheAccessor,
-		LeaseManager:   is.LeaseManager,
-		Puller:         pullerUtil,
-		RegistryHosts:  is.RegistryHosts,
-		ResolverType:   is.ResolverType,
-		ImageStore:     is.ImageStore,
-		Mode:           mode,
-		RecordType:     recordType,
-		Ref:            ref.String(),
-		SessionManager: sm,
-		vtx:            vtx,
-		store:          store,
-		layerLimit:     layerLimit,
-	}
-	return p, nil
-}
-
 type puller struct {
 	CacheAccessor  cache.Accessor
 	LeaseManager   leases.Manager
 	RegistryHosts  docker.RegistryHosts
 	ImageStore     images.Store
-	Mode           source.ResolveMode
+	Mode           resolver.ResolveMode
 	RecordType     client.UsageRecordType
 	Ref            string
 	SessionManager *session.Manager
 	layerLimit     *int
 	vtx            solver.Vertex
 	ResolverType
-	store llb.ResolveImageConfigOptStore
+	store sourceresolver.ResolveImageConfigOptStore
 
-	g                flightcontrol.Group
+	g                flightcontrol.Group[struct{}]
 	cacheKeyErr      error
 	cacheKeyDone     bool
 	releaseTmpLeases func(context.Context) error
@@ -218,17 +60,21 @@ type puller struct {
 
 func mainManifestKey(ctx context.Context, desc ocispecs.Descriptor, platform ocispecs.Platform, layerLimit *int) (digest.Digest, error) {
 	dt, err := json.Marshal(struct {
-		Digest  digest.Digest
-		OS      string
-		Arch    string
-		Variant string `json:",omitempty"`
-		Limit   *int   `json:",omitempty"`
+		Digest     digest.Digest
+		OS         string
+		Arch       string
+		Variant    string   `json:",omitempty"`
+		OSVersion  string   `json:",omitempty"`
+		OSFeatures []string `json:",omitempty"`
+		Limit      *int     `json:",omitempty"`
 	}{
-		Digest:  desc.Digest,
-		OS:      platform.OS,
-		Arch:    platform.Architecture,
-		Variant: platform.Variant,
-		Limit:   layerLimit,
+		Digest:     desc.Digest,
+		OS:         platform.OS,
+		Arch:       platform.Architecture,
+		Variant:    platform.Variant,
+		OSVersion:  platform.OSVersion,
+		OSFeatures: platform.OSFeatures,
+		Limit:      layerLimit,
 	})
 	if err != nil {
 		return "", err
@@ -255,9 +101,9 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 	// be canceled before the progress output is complete
 	progressFactory := progress.FromContext(ctx)
 
-	_, err = p.g.Do(ctx, "", func(ctx context.Context) (_ interface{}, err error) {
+	_, err = p.g.Do(ctx, "", func(ctx context.Context) (_ struct{}, err error) {
 		if p.cacheKeyErr != nil || p.cacheKeyDone {
-			return nil, p.cacheKeyErr
+			return struct{}{}, p.cacheKeyErr
 		}
 		defer func() {
 			if !errdefs.IsCanceled(ctx, err) {
@@ -266,7 +112,7 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 		}()
 		ctx, done, err := leaseutil.WithLease(ctx, p.LeaseManager, leases.WithExpiration(5*time.Minute), leaseutil.MakeTemporary)
 		if err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		p.releaseTmpLeases = done
 		defer imageutil.AddLease(done)
@@ -278,12 +124,12 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 
 		p.manifest, err = p.PullManifests(ctx, getResolver)
 		if err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 
 		if ll := p.layerLimit; ll != nil {
 			if *ll > len(p.manifest.Descriptors) {
-				return nil, errors.Errorf("layer limit %d is greater than the number of layers in the image %d", *ll, len(p.manifest.Descriptors))
+				return struct{}{}, errors.Errorf("layer limit %d is greater than the number of layers in the image %d", *ll, len(p.manifest.Descriptors))
 			}
 			p.manifest.Descriptors = p.manifest.Descriptors[:*ll]
 		}
@@ -320,21 +166,21 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 		desc := p.manifest.MainManifestDesc
 		k, err := mainManifestKey(ctx, desc, p.Platform, p.layerLimit)
 		if err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		p.manifestKey = k.String()
 
 		dt, err := content.ReadBlob(ctx, p.ContentStore, p.manifest.ConfigDesc)
 		if err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		ck, err := cacheKeyFromConfig(dt, p.layerLimit)
 		if err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		p.configKey = ck.String()
 		p.cacheKeyDone = true
-		return nil, nil
+		return struct{}{}, nil
 	})
 	if err != nil {
 		return "", "", nil, false, err

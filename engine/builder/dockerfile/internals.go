@@ -10,18 +10,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/log"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/stringid"
+	"github.com/docker/docker/runconfig"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 func (b *Builder) getArchiver() *archive.Archiver {
@@ -122,7 +125,7 @@ func (b *Builder) performCopy(ctx context.Context, req dispatchRequest, inst cop
 
 	var chownComment string
 	if inst.chownStr != "" {
-		chownComment = fmt.Sprintf("--chown=%s", inst.chownStr)
+		chownComment = fmt.Sprintf("--chown=%s ", inst.chownStr)
 	}
 	commentStr := fmt.Sprintf("%s %s%s in %s ", inst.cmdName, chownComment, srcHash, inst.dest)
 
@@ -328,7 +331,7 @@ func getShell(c *container.Config, os string) []string {
 }
 
 func (b *Builder) probeCache(dispatchState *dispatchState, runConfig *container.Config) (bool, error) {
-	cachedID, err := b.imageProber.Probe(dispatchState.imageID, runConfig)
+	cachedID, err := b.imageProber.Probe(dispatchState.imageID, runConfig, b.getPlatform(dispatchState))
 	if cachedID == "" || err != nil {
 		return false, err
 	}
@@ -348,7 +351,7 @@ func (b *Builder) probeAndCreate(ctx context.Context, dispatchState *dispatchSta
 }
 
 func (b *Builder) create(ctx context.Context, runConfig *container.Config) (string, error) {
-	logrus.Debugf("[BUILDER] Command to be executed: %v", runConfig.Cmd)
+	log.G(ctx).Debugf("[BUILDER] Command to be executed: %v", runConfig.Cmd)
 
 	hostConfig := hostConfigFromOptions(b.options)
 	container, err := b.containerManager.Create(ctx, runConfig, hostConfig)
@@ -376,15 +379,38 @@ func hostConfigFromOptions(options *types.ImageBuildOptions) *container.HostConf
 		Ulimits:      options.Ulimits,
 	}
 
+	// We need to make sure no empty string or "default" NetworkMode is
+	// provided to the daemon as it doesn't support them.
+	//
+	// This is in line with what the ContainerCreate API endpoint does.
+	networkMode := options.NetworkMode
+	if networkMode == "" || networkMode == network.NetworkDefault {
+		networkMode = runconfig.DefaultDaemonNetworkMode().NetworkName()
+	}
+
 	hc := &container.HostConfig{
 		SecurityOpt: options.SecurityOpt,
 		Isolation:   options.Isolation,
 		ShmSize:     options.ShmSize,
 		Resources:   resources,
-		NetworkMode: container.NetworkMode(options.NetworkMode),
+		NetworkMode: container.NetworkMode(networkMode),
 		// Set a log config to override any default value set on the daemon
 		LogConfig:  defaultLogConfig,
 		ExtraHosts: options.ExtraHosts,
 	}
 	return hc
+}
+
+func (b *Builder) getPlatform(state *dispatchState) ocispec.Platform {
+	// May be nil if not explicitly set in API/dockerfile
+	out := platforms.DefaultSpec()
+	if b.platform != nil {
+		out = *b.platform
+	}
+
+	if state.operatingSystem != "" {
+		out.OS = state.operatingSystem
+	}
+
+	return out
 }

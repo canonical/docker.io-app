@@ -6,15 +6,17 @@ import (
 
 	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
-	"github.com/docker/distribution/reference"
+	"github.com/containerd/log"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/compatcontext"
 	"github.com/hashicorp/go-multierror"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 var imagesAcceptedFilters = map[string]bool{
@@ -40,7 +42,7 @@ func (i *ImageService) ImagesPrune(ctx context.Context, fltrs filters.Args) (*ty
 		return nil, err
 	}
 
-	danglingOnly, err := fltrs.GetBoolOrDefault("dangling", false)
+	danglingOnly, err := fltrs.GetBoolOrDefault("dangling", true)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +54,7 @@ func (i *ImageService) ImagesPrune(ctx context.Context, fltrs filters.Args) (*ty
 		fltrs.Del("dangling", v)
 	}
 
-	_, filterFunc, err := i.setupFilters(ctx, fltrs)
+	filterFunc, err := i.setupFilters(ctx, fltrs)
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +64,8 @@ func (i *ImageService) ImagesPrune(ctx context.Context, fltrs filters.Args) (*ty
 
 func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFunc, danglingOnly bool) (*types.ImagesPruneReport, error) {
 	report := types.ImagesPruneReport{}
-	is := i.client.ImageService()
-	store := i.client.ContentStore()
 
-	allImages, err := i.client.ImageService().List(ctx)
+	allImages, err := i.images.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 
 		if !danglingOnly || isDanglingImage(img) {
 			canBePruned := filterFunc(img)
-			logrus.WithFields(logrus.Fields{
+			log.G(ctx).WithFields(log.Fields{
 				"image":       img.Name,
 				"canBePruned": canBePruned,
 			}).Debug("considering image for pruning")
@@ -115,7 +115,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 		}
 
 		ref, err := reference.ParseNormalizedNamed(ctr.Config.Image)
-		logrus.WithFields(logrus.Fields{
+		log.G(ctx).WithFields(log.Fields{
 			"ctr":          ctr.ID,
 			"image":        ref,
 			"nameParseErr": err,
@@ -147,13 +147,13 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 
 	// Workaround for https://github.com/moby/buildkit/issues/3797
 	defer func() {
-		if err := i.unleaseSnapshotsFromDeletedConfigs(context.Background(), possiblyDeletedConfigs); err != nil {
+		if err := i.unleaseSnapshotsFromDeletedConfigs(compatcontext.WithoutCancel(ctx), possiblyDeletedConfigs); err != nil {
 			errs = multierror.Append(errs, err)
 		}
 	}()
 
 	for _, img := range imagesToPrune {
-		logrus.WithField("image", img).Debug("pruning image")
+		log.G(ctx).WithField("image", img).Debug("pruning image")
 
 		blobs := []ocispec.Descriptor{}
 
@@ -171,7 +171,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 			}
 			continue
 		}
-		err = is.Delete(ctx, img.Name, containerdimages.SynchronousDelete())
+		err = i.images.Delete(ctx, img.Name, containerdimages.SynchronousDelete())
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			errs = multierror.Append(errs, err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -181,18 +181,18 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 		}
 
 		report.ImagesDeleted = append(report.ImagesDeleted,
-			types.ImageDeleteResponseItem{
-				Untagged: img.Name,
+			image.DeleteResponse{
+				Untagged: imageFamiliarName(img),
 			},
 		)
 
 		// Check which blobs have been deleted and sum their sizes
 		for _, blob := range blobs {
-			_, err := store.ReaderAt(ctx, blob)
+			_, err := i.content.ReaderAt(ctx, blob)
 
 			if cerrdefs.IsNotFound(err) {
 				report.ImagesDeleted = append(report.ImagesDeleted,
-					types.ImageDeleteResponseItem{
+					image.DeleteResponse{
 						Deleted: blob.Digest.String(),
 					},
 				)
@@ -209,10 +209,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 // This is a temporary solution to the rootfs snapshot not being deleted when there's a buildkit history
 // item referencing an image config.
 func (i *ImageService) unleaseSnapshotsFromDeletedConfigs(ctx context.Context, possiblyDeletedConfigs map[digest.Digest]struct{}) error {
-	is := i.client.ImageService()
-	store := i.client.ContentStore()
-
-	all, err := is.List(ctx)
+	all, err := i.images.List(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to list images during snapshot lease removal")
 	}
@@ -236,10 +233,10 @@ func (i *ImageService) unleaseSnapshotsFromDeletedConfigs(ctx context.Context, p
 
 	// At this point, all configs that are used by any image has been removed from the slice
 	for cfgDigest := range possiblyDeletedConfigs {
-		info, err := store.Info(ctx, cfgDigest)
+		info, err := i.content.Info(ctx, cfgDigest)
 		if err != nil {
 			if cerrdefs.IsNotFound(err) {
-				logrus.WithField("config", cfgDigest).Debug("config already gone")
+				log.G(ctx).WithField("config", cfgDigest).Debug("config already gone")
 			} else {
 				errs = multierror.Append(errs, err)
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -252,7 +249,7 @@ func (i *ImageService) unleaseSnapshotsFromDeletedConfigs(ctx context.Context, p
 		label := "containerd.io/gc.ref.snapshot." + i.StorageDriver()
 
 		delete(info.Labels, label)
-		_, err = store.Update(ctx, info, "labels."+label)
+		_, err = i.content.Update(ctx, info, "labels."+label)
 		if err != nil {
 			errs = multierror.Append(errs, errors.Wrapf(err, "failed to remove gc.ref.snapshot label from %s", cfgDigest))
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

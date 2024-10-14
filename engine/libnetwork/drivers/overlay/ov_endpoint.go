@@ -1,16 +1,16 @@
 //go:build linux
-// +build linux
 
 package overlay
 
 import (
+	"context"
 	"fmt"
 	"net"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/driverapi"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/ns"
-	"github.com/sirupsen/logrus"
 )
 
 type endpointTable map[string]*endpoint
@@ -42,10 +42,8 @@ func (n *network) deleteEndpoint(eid string) {
 	n.Unlock()
 }
 
-func (d *driver) CreateEndpoint(nid, eid string, ifInfo driverapi.InterfaceInfo,
-	epOptions map[string]interface{}) error {
+func (d *driver) CreateEndpoint(nid, eid string, ifInfo driverapi.InterfaceInfo, epOptions map[string]interface{}) error {
 	var err error
-
 	if err = validateID(nid, eid); err != nil {
 		return err
 	}
@@ -113,11 +111,11 @@ func (d *driver) DeleteEndpoint(nid, eid string) error {
 
 	link, err := nlh.LinkByName(ep.ifName)
 	if err != nil {
-		logrus.Debugf("Failed to retrieve interface (%s)'s link on endpoint (%s) delete: %v", ep.ifName, ep.id, err)
+		log.G(context.TODO()).Debugf("Failed to retrieve interface (%s)'s link on endpoint (%s) delete: %v", ep.ifName, ep.id, err)
 		return nil
 	}
 	if err := nlh.LinkDel(link); err != nil {
-		logrus.Debugf("Failed to delete interface (%s)'s link on endpoint (%s) delete: %v", ep.ifName, ep.id, err)
+		log.G(context.TODO()).Debugf("Failed to delete interface (%s)'s link on endpoint (%s) delete: %v", ep.ifName, ep.id, err)
 	}
 
 	return nil

@@ -9,17 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"sync"
 
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/docker/docker/daemon/names"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/quota"
 	"github.com/docker/docker/volume"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -56,7 +56,7 @@ func New(scope string, rootIdentity idtools.Identity) (*Root, error) {
 		rootIdentity: rootIdentity,
 	}
 
-	if err := idtools.MkdirAllAndChown(r.path, 0701, idtools.CurrentIdentity()); err != nil {
+	if err := idtools.MkdirAllAndChown(r.path, 0o701, idtools.CurrentIdentity()); err != nil {
 		return nil, err
 	}
 
@@ -66,7 +66,7 @@ func New(scope string, rootIdentity idtools.Identity) (*Root, error) {
 	}
 
 	if r.quotaCtl, err = quota.NewControl(r.path); err != nil {
-		logrus.Debugf("No quota support for local volumes in %s: %v", r.path, err)
+		log.G(context.TODO()).Debugf("No quota support for local volumes in %s: %v", r.path, err)
 	}
 
 	for _, d := range dirs {
@@ -156,12 +156,12 @@ func (r *Root) Create(name string, opts map[string]string) (volume.Volume, error
 	}
 
 	// Root dir does not need to be accessed by the remapped root
-	if err := idtools.MkdirAllAndChown(v.rootPath, 0701, idtools.CurrentIdentity()); err != nil {
+	if err := idtools.MkdirAllAndChown(v.rootPath, 0o701, idtools.CurrentIdentity()); err != nil {
 		return nil, errors.Wrapf(errdefs.System(err), "error while creating volume root path '%s'", v.rootPath)
 	}
 
 	// Remapped root does need access to the data path
-	if err := idtools.MkdirAllAndChown(v.path, 0755, r.rootIdentity); err != nil {
+	if err := idtools.MkdirAllAndChown(v.path, 0o755, r.rootIdentity); err != nil {
 		return nil, errors.Wrapf(errdefs.System(err), "error while creating volume data path '%s'", v.path)
 	}
 
@@ -335,8 +335,15 @@ func (v *localVolume) Unmount(id string) error {
 	// ultimately there's nothing that can be done. If we don't decrement the count
 	// this volume can never be removed until a daemon restart occurs.
 	if v.needsMount() {
-		v.active.count--
-		logger.WithField("active mounts", v.active).Debug("Decremented active mount count")
+		// TODO: Remove once the real bug is fixed: https://github.com/moby/moby/issues/46508
+		if v.active.count > 0 {
+			v.active.count--
+			logger.WithField("active mounts", v.active).Debug("Decremented active mount count")
+		} else {
+			logger.Error("An attempt to decrement a zero mount count")
+			logger.Error(string(debug.Stack()))
+			return nil
+		}
 	}
 
 	if v.active.count > 0 {
@@ -359,7 +366,7 @@ func (v *localVolume) loadOpts() error {
 	b, err := os.ReadFile(filepath.Join(v.rootPath, "opts.json"))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			logrus.WithError(err).Warnf("error while loading volume options for volume: %s", v.name)
+			log.G(context.TODO()).WithError(err).Warnf("error while loading volume options for volume: %s", v.name)
 		}
 		return nil
 	}
@@ -381,7 +388,7 @@ func (v *localVolume) saveOpts() error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(filepath.Join(v.rootPath, "opts.json"), b, 0600)
+	err = os.WriteFile(filepath.Join(v.rootPath, "opts.json"), b, 0o600)
 	if err != nil {
 		return errdefs.System(errors.Wrap(err, "error while persisting volume options"))
 	}
@@ -399,7 +406,7 @@ func (v *localVolume) LiveRestoreVolume(ctx context.Context, _ string) error {
 	}
 	v.active.count++
 	v.active.mounted = true
-	log.G(ctx).WithFields(logrus.Fields{
+	log.G(ctx).WithFields(log.Fields{
 		"volume":        v.name,
 		"active mounts": v.active,
 	}).Debugf("Live restored volume")

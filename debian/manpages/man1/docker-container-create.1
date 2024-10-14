@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -286,6 +286,10 @@ apply to bind mounts..
 	Consecutive failures needed to report unhealthy
 
 .PP
+\fB--health-start-interval\fP=0s
+	Time between running the check during the start period (ms|s|m|h) (default 0s)
+
+.PP
 \fB--health-start-period\fP=0s
 	Start period for the container to initialize before starting health-retries countdown (ms|s|m|h) (default 0s)
 
@@ -551,7 +555,7 @@ any number of minor number (added as new devices appear), the
 following rule would be added:
 
 ```console
-$ docker create --device-cgroup-rule='c 42:* rmw' -name my-container my-image
+$ docker create --device-cgroup-rule='c 42:* rmw' --name my-container my-image
 
 .EE
 

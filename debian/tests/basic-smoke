@@ -7,16 +7,7 @@ defer 'journalctl -u docker | tail'
 # make sure Docker itself is working before we go too deep down the rabbit hole
 docker version
 
-# Fetch GPG key for Debian stable
-TEMPDIR=$(mktemp -d)
-pushd ${TEMPDIR}
-DEBIAN_STABLE_KEY=$(wget -q -A 'release-*.asc' https://ftp-master.debian.org/keys/ -O- | sed -n 's@.*>\(release-.*\.asc\)<.*@\1@p' | sort -t - -k 2 -n | tail -1)
-wget https://ftp-master.debian.org/keys/${DEBIAN_STABLE_KEY}
-gpg --no-default-keyring --keyring ./keyring.gpg --import ${DEBIAN_STABLE_KEY}
-popd
-
 debootstrap \
-	--keyring=${TEMPDIR}/keyring.gpg \
 	--variant=minbase \
 	stable \
 	"$tempDir" \
@@ -27,5 +18,3 @@ defer 'docker rmi debian'
 
 docker run --name test debian true
 defer 'docker rm -f test'
-
-rm -rf ${TEMPDIR}

@@ -269,12 +269,27 @@ init() {
 	# - sysctl: "net.ipv4.ip_unprivileged_port_start"
 	# - external binary: slirp4netns
 	# - external binary: fuse-overlayfs
+
+	# check RootlessKit functionality. RootlessKit will print hints if something is still unsatisfied.
+	# (e.g., `kernel.apparmor_restrict_unprivileged_userns` constraint)
+	if ! rootlesskit true; then
+		ERROR "RootlessKit failed, see the error messages and https://rootlesscontaine.rs/getting-started/common/ ."
+		exit 1
+	fi
 }
 
 # CLI subcommand: "check"
 cmd_entrypoint_check() {
+	init
 	# requirements are already checked in init()
 	INFO "Requirements are satisfied"
+}
+
+# CLI subcommand: "nsenter"
+cmd_entrypoint_nsenter() {
+	# No need to call init()
+	pid=$(cat "$XDG_RUNTIME_DIR/dockerd-rootless/child_pid")
+	exec nsenter --no-fork --wd="$(pwd)" --preserve-credentials -m -n -U -t "$pid" -- "$@"
 }
 
 show_systemd_error() {
@@ -383,6 +398,7 @@ cli_ctx_rm() {
 
 # CLI subcommand: "install"
 cmd_entrypoint_install() {
+	init
 	# requirements are already checked in init()
 	if [ -z "$SYSTEMD" ]; then
 		install_nonsystemd
@@ -416,6 +432,7 @@ cmd_entrypoint_install() {
 
 # CLI subcommand: "uninstall"
 cmd_entrypoint_uninstall() {
+	init
 	# requirements are already checked in init()
 	if [ -z "$SYSTEMD" ]; then
 		INFO "systemd not detected, ${DOCKERD_ROOTLESS_SH} needs to be stopped manually:"
@@ -461,6 +478,7 @@ usage() {
 	echo
 	echo "Commands:"
 	echo "  check        Check prerequisites"
+	echo "  nsenter      Enter into RootlessKit namespaces (mostly for debugging)"
 	echo "  install      Install systemd unit (if systemd is available) and show how to manage the service"
 	echo "  uninstall    Uninstall systemd unit"
 }
@@ -508,5 +526,4 @@ if ! command -v "cmd_entrypoint_${command}" > /dev/null 2>&1; then
 fi
 
 # main
-init
-"cmd_entrypoint_${command}"
+"cmd_entrypoint_${command}" "$@"

@@ -6,27 +6,12 @@ import (
 	"testing"
 )
 
-func Setup(t *testing.T) (string, func(), LocalRegistry) {
-	tmpdir, err := os.MkdirTemp("", "docker-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	backup := socketsPath
-	socketsPath = tmpdir
-
-	return tmpdir, func() {
-			socketsPath = backup
-			os.RemoveAll(tmpdir)
-		}, LocalRegistry{
-			func() []string {
-				return []string{tmpdir}
-			},
-		}
-}
-
 func TestFileSpecPlugin(t *testing.T) {
-	tmpdir, unregister, r := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	r := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	cases := []struct {
 		path string
@@ -43,10 +28,10 @@ func TestFileSpecPlugin(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		if err := os.MkdirAll(filepath.Dir(c.path), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(c.path, []byte(c.addr), 0644); err != nil {
+		if err := os.WriteFile(c.path, []byte(c.addr), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -74,8 +59,11 @@ func TestFileSpecPlugin(t *testing.T) {
 }
 
 func TestFileJSONSpecPlugin(t *testing.T) {
-	tmpdir, unregister, r := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	r := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	p := filepath.Join(tmpdir, "example.json")
 	spec := `{
@@ -88,7 +76,7 @@ func TestFileJSONSpecPlugin(t *testing.T) {
 	}
 }`
 
-	if err := os.WriteFile(p, []byte(spec), 0644); err != nil {
+	if err := os.WriteFile(p, []byte(spec), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,8 +107,11 @@ func TestFileJSONSpecPlugin(t *testing.T) {
 }
 
 func TestFileJSONSpecPluginWithoutTLSConfig(t *testing.T) {
-	tmpdir, unregister, r := Setup(t)
-	defer unregister()
+	tmpdir := t.TempDir()
+	r := LocalRegistry{
+		socketsPath: tmpdir,
+		specsPaths:  []string{tmpdir},
+	}
 
 	p := filepath.Join(tmpdir, "example.json")
 	spec := `{
@@ -128,7 +119,7 @@ func TestFileJSONSpecPluginWithoutTLSConfig(t *testing.T) {
   "Addr": "https://example.com/docker/plugin"
 }`
 
-	if err := os.WriteFile(p, []byte(spec), 0644); err != nil {
+	if err := os.WriteFile(p, []byte(spec), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -7,12 +7,13 @@ import (
 	"syscall"
 )
 
-func DetectDefaultGCCap(root string) int64 {
+var DiskSpacePercentage int64 = 10
+
+func getDiskSize(root string) (int64, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(root, &st); err != nil {
-		return defaultCap
+		return 0, err
 	}
 	diskSize := int64(st.Bsize) * int64(st.Blocks)
-	avail := diskSize / 10
-	return (avail/(1<<30) + 1) * 1e9 // round up
+	return diskSize, nil
 }

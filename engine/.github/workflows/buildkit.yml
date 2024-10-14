@@ -13,7 +13,7 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: "1.20.10"
+  GO_VERSION: "1.21.10"
   DESTDIR: ./build
 
 jobs:
@@ -27,18 +27,18 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       -
         name: Build
-        uses: docker/bake-action@v2
+        uses: docker/bake-action@v4
         with:
           targets: binary
       -
         name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binary
           path: ${{ env.DESTDIR }}
@@ -50,6 +50,9 @@ jobs:
     timeout-minutes: 120
     needs:
       - build
+    env:
+      TEST_IMAGE_BUILD: "0"
+      TEST_IMAGE_ID: "buildkit-tests"
     strategy:
       fail-fast: false
       matrix:
@@ -73,9 +76,15 @@ jobs:
             disabledFeatures="${disabledFeatures},merge_diff"
           fi
           echo "BUILDKIT_TEST_DISABLE_FEATURES=${disabledFeatures}" >> $GITHUB_ENV
+      # Expose `ACTIONS_RUNTIME_TOKEN` and `ACTIONS_CACHE_URL`, which is used
+      # in BuildKit's test suite to skip/unskip cache exporters:
+      # https://github.com/moby/buildkit/blob/567a99433ca23402d5e9b9f9124005d2e59b8861/client/client_test.go#L5407-L5411
+      -
+        name: Expose GitHub Runtime
+        uses: crazy-max/ghaction-github-runtime@v3
       -
         name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: moby
       -
@@ -85,20 +94,20 @@ jobs:
         working-directory: moby
       -
         name: Checkout BuildKit ${{ env.BUILDKIT_REF }}
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.BUILDKIT_REPO }}
           ref: ${{ env.BUILDKIT_REF }}
           path: buildkit
       -
         name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       -
         name: Download binary artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binary
           path: ./buildkit/build/moby/
@@ -110,6 +119,14 @@ jobs:
           docker version
           docker info
       -
+        name: Build test image
+        uses: docker/bake-action@v4
+        with:
+          workdir: ./buildkit
+          targets: integration-tests
+          set: |
+            *.output=type=docker,name=${{ env.TEST_IMAGE_ID }}
+      -
         name: Test
         run: |
           ./hack/test ${{ matrix.typ }}
@@ -118,6 +135,5 @@ jobs:
           TEST_DOCKERD: "1"
           TEST_DOCKERD_BINARY: "./build/moby/dockerd"
           TESTPKGS: "./${{ matrix.pkg }}"
-          # Skip buildkit tests checking the digest (see https://github.com/moby/buildkit/pull/3736)
-          TESTFLAGS: "-v --parallel=1 --timeout=30m --run=/^Test([^R]|.[^e]|..[^p]|...[^r]|....[^o]|.....[^S])/worker=${{ matrix.worker }}$"
+          TESTFLAGS: "-v --parallel=1 --timeout=30m --run=//worker=${{ matrix.worker }}$"
         working-directory: buildkit

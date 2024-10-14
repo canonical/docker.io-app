@@ -9,20 +9,21 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/rootfs"
-	"github.com/docker/docker/builder/builder-next/adapters/containerimage"
+	"github.com/containerd/log"
+	imageadapter "github.com/docker/docker/builder/builder-next/adapters/containerimage"
 	mobyexporter "github.com/docker/docker/builder/builder-next/exporter"
 	distmetadata "github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
+	"github.com/docker/docker/internal/mod"
 	"github.com/docker/docker/layer"
 	pkgprogress "github.com/docker/docker/pkg/progress"
 	"github.com/moby/buildkit/cache"
 	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/client"
-	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/executor"
 	"github.com/moby/buildkit/exporter"
 	localexporter "github.com/moby/buildkit/exporter/local"
@@ -30,27 +31,31 @@ import (
 	"github.com/moby/buildkit/frontend"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
+	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver/mounts"
 	"github.com/moby/buildkit/solver/llbsolver/ops"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/source"
+	"github.com/moby/buildkit/source/containerimage"
 	"github.com/moby/buildkit/source/git"
 	"github.com/moby/buildkit/source/http"
 	"github.com/moby/buildkit/source/local"
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/contentutil"
+	"github.com/moby/buildkit/util/leaseutil"
 	"github.com/moby/buildkit/util/progress"
 	"github.com/moby/buildkit/version"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"
 )
 
 func init() {
-	version.Version = "v0.11.7+d3e6c1360f6e"
+	if v := mod.Version("github.com/moby/buildkit"); v != "" {
+		version.Version = v
+	}
 }
 
 const labelCreatedAt = "buildkit/createdat"
@@ -68,10 +73,10 @@ type Opt struct {
 	GCPolicy          []client.PruneInfo
 	Executor          executor.Executor
 	Snapshotter       snapshot.Snapshotter
-	ContentStore      content.Store
+	ContentStore      *containerdsnapshot.Store
 	CacheManager      cache.Manager
-	LeaseManager      leases.Manager
-	ImageSource       *containerimage.Source
+	LeaseManager      *leaseutil.Manager
+	ImageSource       *imageadapter.Source
 	DownloadManager   *xfer.LayerDownloadManager
 	V2MetadataService distmetadata.V2MetadataService
 	Transport         nethttp.RoundTripper
@@ -107,7 +112,7 @@ func NewWorker(opt Opt) (*Worker, error) {
 	if err == nil {
 		sm.Register(gs)
 	} else {
-		logrus.Warnf("Could not register builder git source: %s", err)
+		log.G(context.TODO()).Warnf("Could not register builder git source: %s", err)
 	}
 
 	hs, err := http.NewSource(http.Opt{
@@ -117,7 +122,7 @@ func NewWorker(opt Opt) (*Worker, error) {
 	if err == nil {
 		sm.Register(hs)
 	} else {
-		logrus.Warnf("Could not register builder http source: %s", err)
+		log.G(context.TODO()).Warnf("Could not register builder http source: %s", err)
 	}
 
 	ss, err := local.NewSource(local.Opt{
@@ -126,7 +131,7 @@ func NewWorker(opt Opt) (*Worker, error) {
 	if err == nil {
 		sm.Register(ss)
 	} else {
-		logrus.Warnf("Could not register builder local source: %s", err)
+		log.G(context.TODO()).Warnf("Could not register builder local source: %s", err)
 	}
 
 	return &Worker{
@@ -183,13 +188,13 @@ func (w *Worker) Close() error {
 	return nil
 }
 
-// ContentStore returns content store
-func (w *Worker) ContentStore() content.Store {
+// ContentStore returns the wrapped content store
+func (w *Worker) ContentStore() *containerdsnapshot.Store {
 	return w.Opt.ContentStore
 }
 
-// LeaseManager returns leases.Manager for the worker
-func (w *Worker) LeaseManager() leases.Manager {
+// LeaseManager returns the wrapped lease manager
+func (w *Worker) LeaseManager() *leaseutil.Manager {
 	return w.Opt.LeaseManager
 }
 
@@ -206,6 +211,49 @@ func (w *Worker) LoadRef(ctx context.Context, id string, hidden bool) (cache.Imm
 	}
 
 	return w.CacheManager().Get(ctx, id, nil, opts...)
+}
+
+func (w *Worker) ResolveSourceMetadata(ctx context.Context, op *pb.SourceOp, opt sourceresolver.Opt, sm *session.Manager, g session.Group) (*sourceresolver.MetaResponse, error) {
+	if opt.SourcePolicies != nil {
+		return nil, errors.New("source policies can not be set for worker")
+	}
+
+	var platform *pb.Platform
+	if p := opt.Platform; p != nil {
+		platform = &pb.Platform{
+			Architecture: p.Architecture,
+			OS:           p.OS,
+			Variant:      p.Variant,
+			OSVersion:    p.OSVersion,
+		}
+	}
+
+	id, err := w.SourceManager.Identifier(&pb.Op_Source{Source: op}, platform)
+	if err != nil {
+		return nil, err
+	}
+
+	switch idt := id.(type) {
+	case *containerimage.ImageIdentifier:
+		if opt.ImageOpt == nil {
+			opt.ImageOpt = &sourceresolver.ResolveImageOpt{}
+		}
+		dgst, config, err := w.ImageSource.ResolveImageConfig(ctx, idt.Reference.String(), opt, sm, g)
+		if err != nil {
+			return nil, err
+		}
+		return &sourceresolver.MetaResponse{
+			Op: op,
+			Image: &sourceresolver.ResolveImageResponse{
+				Digest: dgst,
+				Config: config,
+			},
+		}, nil
+	}
+
+	return &sourceresolver.MetaResponse{
+		Op: op,
+	}, nil
 }
 
 // ResolveOp converts a LLB vertex into a LLB operation
@@ -232,7 +280,7 @@ func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *se
 }
 
 // ResolveImageConfig returns image config for an image
-func (w *Worker) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt, sm *session.Manager, g session.Group) (digest.Digest, []byte, error) {
+func (w *Worker) ResolveImageConfig(ctx context.Context, ref string, opt sourceresolver.Opt, sm *session.Manager, g session.Group) (digest.Digest, []byte, error) {
 	return w.ImageSource.ResolveImageConfig(ctx, ref, opt, sm, g)
 }
 
@@ -517,9 +565,12 @@ func oneOffProgress(ctx context.Context, id string) func(err error) error {
 	}
 }
 
-type emptyProvider struct {
-}
+type emptyProvider struct{}
 
 func (p *emptyProvider) ReaderAt(ctx context.Context, dec ocispec.Descriptor) (content.ReaderAt, error) {
 	return nil, errors.Errorf("ReaderAt not implemented for empty provider")
+}
+
+func (p *emptyProvider) Info(ctx context.Context, d digest.Digest) (content.Info, error) {
+	return content.Info{}, errors.Errorf("Info not implemented for empty provider")
 }

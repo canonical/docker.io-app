@@ -3,9 +3,9 @@
 package platform // import "github.com/docker/docker/pkg/platform"
 
 import (
-	"runtime"
+	"context"
 
-	"github.com/sirupsen/logrus"
+	"github.com/containerd/log"
 )
 
 // Architecture holds the runtime architecture of the process.
@@ -17,16 +17,10 @@ import (
 // when running a "linux/386" compiled binary on "linux/amd64" hardware.
 var Architecture string
 
-// OSType holds the runtime operating system type of the process. It is
-// an alias for [runtime.GOOS].
-//
-// Deprecated: use [runtime.GOOS] instead.
-const OSType = runtime.GOOS
-
 func init() {
 	var err error
 	Architecture, err = runtimeArchitecture()
 	if err != nil {
-		logrus.WithError(err).Error("Could not read system architecture info")
+		log.G(context.TODO()).WithError(err).Error("Could not read system architecture info")
 	}
 }

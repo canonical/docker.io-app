@@ -3,9 +3,11 @@ package image
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path"
+	"strings"
 	"testing"
 
 	"github.com/containerd/containerd"
@@ -13,27 +15,26 @@ import (
 	"github.com/containerd/containerd/content/local"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/platforms"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/versions"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/testutil/registry"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
 
 func TestImagePullPlatformInvalid(t *testing.T) {
-	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.40"), "experimental in older versions")
-	defer setupTest(t)()
-	client := testEnv.APIClient()
-	ctx := context.Background()
+	ctx := setupTest(t)
 
-	_, err := client.ImagePull(ctx, "docker.io/library/hello-world:latest", types.ImagePullOptions{Platform: "foobar"})
+	client := testEnv.APIClient()
+
+	_, err := client.ImagePull(ctx, "docker.io/library/hello-world:latest", image.PullOptions{Platform: "foobar"})
 	assert.Assert(t, err != nil)
-	assert.ErrorContains(t, err, "unknown operating system or architecture")
-	assert.Assert(t, errdefs.IsInvalidParameter(err))
+	assert.Check(t, is.ErrorContains(err, "unknown operating system or architecture"))
+	assert.Check(t, is.ErrorType(err, errdefs.IsInvalidParameter))
 }
 
 func createTestImage(ctx context.Context, t testing.TB, store content.Store) ocispec.Descriptor {
@@ -51,7 +52,7 @@ func createTestImage(ctx context.Context, t testing.TB, store content.Store) oci
 	assert.NilError(t, err)
 
 	layerDigest := w.Digest()
-	w.Close()
+	assert.Check(t, w.Close())
 
 	img := ocispec.Image{
 		Platform: platforms.DefaultSpec(),
@@ -69,7 +70,7 @@ func createTestImage(ctx context.Context, t testing.TB, store content.Store) oci
 	assert.NilError(t, w.Commit(ctx, int64(len(imgJSON)), digest.FromBytes(imgJSON)))
 
 	configDigest := w.Digest()
-	w.Close()
+	assert.Check(t, w.Close())
 
 	info, err := store.Info(ctx, layerDigest)
 	assert.NilError(t, err)
@@ -102,7 +103,7 @@ func createTestImage(ctx context.Context, t testing.TB, store content.Store) oci
 	assert.NilError(t, w.Commit(ctx, int64(len(manifestJSON)), digest.FromBytes(manifestJSON)))
 
 	manifestDigest := w.Digest()
-	w.Close()
+	assert.Check(t, w.Close())
 
 	return ocispec.Descriptor{
 		MediaType: images.MediaTypeDockerSchema2Manifest,
@@ -113,17 +114,15 @@ func createTestImage(ctx context.Context, t testing.TB, store content.Store) oci
 
 // Make sure that pulling by an already cached digest but for a different ref (that should not have that digest)
 // verifies with the remote that the digest exists in that repo.
-func TestImagePullStoredfDigestForOtherRepo(t *testing.T) {
+func TestImagePullStoredDigestForOtherRepo(t *testing.T) {
 	skip.If(t, testEnv.IsRemoteDaemon, "cannot run daemon when remote daemon")
-	skip.If(t, testEnv.OSType == "windows", "We don't run a test registry on Windows")
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "We don't run a test registry on Windows")
 	skip.If(t, testEnv.IsRootless, "Rootless has a different view of localhost (needed for test registry access)")
-	defer setupTest(t)()
+	ctx := setupTest(t)
 
 	reg := registry.NewV2(t, registry.WithStdout(os.Stdout), registry.WithStderr(os.Stderr))
 	defer reg.Close()
 	reg.WaitReady(t)
-
-	ctx := context.Background()
 
 	// First create an image and upload it to our local registry
 	// Then we'll download it so that we can make sure the content is available in dockerd's manifest cache.
@@ -144,16 +143,55 @@ func TestImagePullStoredfDigestForOtherRepo(t *testing.T) {
 	assert.NilError(t, err)
 
 	client := testEnv.APIClient()
-	rdr, err := client.ImagePull(ctx, remote, types.ImagePullOptions{})
+	rdr, err := client.ImagePull(ctx, remote, image.PullOptions{})
 	assert.NilError(t, err)
 	defer rdr.Close()
-	io.Copy(io.Discard, rdr)
+	_, err = io.Copy(io.Discard, rdr)
+	assert.Check(t, err)
 
 	// Now, pull a totally different repo with a the same digest
-	rdr, err = client.ImagePull(ctx, path.Join(registry.DefaultURL, "other:image@"+desc.Digest.String()), types.ImagePullOptions{})
+	rdr, err = client.ImagePull(ctx, path.Join(registry.DefaultURL, "other:image@"+desc.Digest.String()), image.PullOptions{})
 	if rdr != nil {
-		rdr.Close()
+		assert.Check(t, rdr.Close())
 	}
 	assert.Assert(t, err != nil, "Expected error, got none: %v", err)
 	assert.Assert(t, errdefs.IsNotFound(err), err)
+	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+}
+
+// TestImagePullNonExisting pulls non-existing images from the central registry, with different
+// combinations of implicit tag and library prefix.
+func TestImagePullNonExisting(t *testing.T) {
+	ctx := setupTest(t)
+
+	for _, ref := range []string{
+		"asdfasdf:foobar",
+		"library/asdfasdf:foobar",
+		"asdfasdf",
+		"asdfasdf:latest",
+		"library/asdfasdf",
+		"library/asdfasdf:latest",
+	} {
+		ref := ref
+		all := strings.Contains(ref, ":")
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+
+			client := testEnv.APIClient()
+			rdr, err := client.ImagePull(ctx, ref, image.PullOptions{
+				All: all,
+			})
+			if err == nil {
+				rdr.Close()
+			}
+
+			expectedMsg := fmt.Sprintf("pull access denied for %s, repository does not exist or may require 'docker login'", "asdfasdf")
+			assert.Check(t, is.ErrorContains(err, expectedMsg))
+			assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+			if all {
+				// pull -a on a nonexistent registry should fall back as well
+				assert.Check(t, !strings.Contains(err.Error(), "unauthorized"), `message should not contain "unauthorized"`)
+			}
+		})
+	}
 }

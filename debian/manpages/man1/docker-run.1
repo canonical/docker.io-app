@@ -131,11 +131,11 @@ each of stdin, stdout, and stderr.
 
 .PP
 \fB--add-host\fP=[]
-   Add a custom host-to-IP mapping (host:ip)
+   Add a custom host-to-IP mapping (host=ip, or host:ip)
 
 .PP
-Add a line to /etc/hosts. The format is hostname:ip.  The \fB--add-host\fP
-option can be set multiple times.
+Add a line to /etc/hosts. The format is hostname=ip, or hostname:ip.
+   The \fB--add-host\fP option can be set multiple times.
 
 .PP
 \fB--annotation\fP=[]
@@ -599,8 +599,8 @@ Common Options:
 .RE
 
 .PP
-\fBNote\fP: setting \fBreadonly\fR for a bind mount does not make its submounts
-   read-only on the current Linux implementation. See also \fBbind-nonrecursive\fR\&.
+\fBNote\fP: setting \fBreadonly\fR for a bind mount may not make its submounts
+   read-only depending on the kernel version. See also \fBbind-recursive\fR\&.
 
 .PP
 Options specific to \fBbind\fR:
@@ -611,9 +611,14 @@ Options specific to \fBbind\fR:
 .IP \(bu 2
 \fBconsistency\fR: \fBconsistent\fR(default), \fBcached\fR, or \fBdelegated\fR\&. Currently, only effective for Docker for Mac.
 .IP \(bu 2
-\fBbind-nonrecursive\fR: \fBtrue\fR or \fBfalse\fR (default). If set to \fBtrue\fR,
-submounts are not recursively bind-mounted. This option is useful for
-\fBreadonly\fR bind mount.
+\fBbind-recursive\fR: \fBenabled\fR (default), \fBdisabled\fR, \fBwritable\fR, or \fBreadonly\fR:
+  If set to \fBenabled\fR, submounts are recursively bind-mounted and attempted to be made recursively read-only.
+  If set to \fBdisabled\fR, submounts are not recursively bind-mounted.
+  If set to \fBwritable\fR, submounts are recursively bind-mounted but not made recursively read-only.
+  If set to \fBreadonly\fR, submounts are recursively bind-mounted and forcibly made recursively read-only.
+.IP \(bu 2
+\fBbind-nonrecursive\fR (Deprecated): \fBtrue\fR or \fBfalse\fR (default). Setting \fBtrue\fR equates to \fBbind-recursive=disabled\fR\&.
+ Setting \fBfalse\fR equates to \fBbind-recursive=enabled\fR\&.
 
 .RE
 
@@ -839,8 +844,8 @@ $ docker run -it --storage-opt size=120G fedora /bin/bash
 
 .PP
 This (size) will allow to set the container rootfs size to 120G at creation time.
-   This option is only available for the \fBdevicemapper\fR, \fBbtrfs\fR, \fBoverlay2\fR  and \fBzfs\fR graph drivers.
-   For the \fBdevicemapper\fR, \fBbtrfs\fR and \fBzfs\fR storage drivers, user cannot pass a size less than the Default BaseFS Size.
+   This option is only available for the \fBbtrfs\fR, \fBoverlay2\fR  and \fBzfs\fR graph drivers.
+   For the \fBbtrfs\fR and \fBzfs\fR storage drivers, user cannot pass a size less than the Default BaseFS Size.
    For the \fBoverlay2\fR storage driver, the size option is only available if the backing fs is \fBxfs\fR and mounted with the \fBpquota\fR mount option.
    Under these conditions, user can pass any size less than the backing fs size.
 
@@ -1022,10 +1027,10 @@ Only the current container can use a private volume.
 
 .PP
 By default bind mounted volumes are \fBprivate\fR\&. That means any mounts done
-inside container will not be visible on host and vice-a-versa. One can change
+inside container will not be visible on host and vice versa. One can change
 this behavior by specifying a volume mount propagation property. Making a
 volume \fBshared\fR mounts done under that volume inside container will be
-visible on host and vice-a-versa. Making a volume \fBslave\fR enables only one
+visible on host and vice versa. Making a volume \fBslave\fR enables only one
 way mount propagation and that is mounts done on host under that volume
 will be visible inside container but not the other way around.
 

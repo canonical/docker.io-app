@@ -9,12 +9,12 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
+	"github.com/containerd/log"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // ExitHandler represents an object that is called when the exit event is received from containerd
@@ -53,7 +53,7 @@ type Executor struct {
 }
 
 type c8dPlugin struct {
-	log *logrus.Entry
+	log *log.Entry
 	ctr libcontainerdtypes.Container
 	tsk libcontainerdtypes.Task
 }
@@ -75,15 +75,18 @@ func (p c8dPlugin) deleteTaskAndContainer(ctx context.Context) {
 // Create creates a new container
 func (e *Executor) Create(id string, spec specs.Spec, stdout, stderr io.WriteCloser) error {
 	ctx := context.Background()
-	log := logrus.WithField("plugin", id)
 	ctr, err := libcontainerd.ReplaceContainer(ctx, e.client, id, &spec, e.shim, e.shimOpts)
 	if err != nil {
 		return errors.Wrap(err, "error creating containerd container for plugin")
 	}
 
-	p := c8dPlugin{log: log, ctr: ctr}
-	p.tsk, err = ctr.Start(ctx, "", false, attachStreamsFunc(stdout, stderr))
+	p := c8dPlugin{log: log.G(ctx).WithField("plugin", id), ctr: ctr}
+	p.tsk, err = ctr.NewTask(ctx, "", false, attachStreamsFunc(stdout, stderr))
 	if err != nil {
+		p.deleteTaskAndContainer(ctx)
+		return err
+	}
+	if err := p.tsk.Start(ctx); err != nil {
 		p.deleteTaskAndContainer(ctx)
 		return err
 	}
@@ -96,7 +99,7 @@ func (e *Executor) Create(id string, spec specs.Spec, stdout, stderr io.WriteClo
 // Restore restores a container
 func (e *Executor) Restore(id string, stdout, stderr io.WriteCloser) (bool, error) {
 	ctx := context.Background()
-	p := c8dPlugin{log: logrus.WithField("plugin", id)}
+	p := c8dPlugin{log: log.G(ctx).WithField("plugin", id)}
 	ctr, err := e.client.LoadContainer(ctx, id)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
@@ -164,7 +167,7 @@ func (e *Executor) ProcessEvent(id string, et libcontainerdtypes.EventType, ei l
 		p := e.plugins[id]
 		e.mu.Unlock()
 		if p == nil {
-			logrus.WithField("id", id).Warn("Received exit event for an unknown plugin")
+			log.G(context.TODO()).WithField("id", id).Warn("Received exit event for an unknown plugin")
 		} else {
 			p.deleteTaskAndContainer(context.Background())
 		}

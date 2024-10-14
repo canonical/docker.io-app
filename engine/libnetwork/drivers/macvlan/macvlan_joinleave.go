@@ -1,16 +1,16 @@
 //go:build linux
-// +build linux
 
 package macvlan
 
 import (
+	"context"
 	"fmt"
 	"net"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/driverapi"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/ns"
-	"github.com/sirupsen/logrus"
 )
 
 // Join method is invoked when a Sandbox is attached to an endpoint.
@@ -54,7 +54,7 @@ func (d *driver) Join(nid, eid string, sboxKey string, jinfo driverapi.JoinInfo,
 			if err != nil {
 				return err
 			}
-			logrus.Debugf("Macvlan Endpoint Joined with IPv4_Addr: %s, Gateway: %s, MacVlan_Mode: %s, Parent: %s",
+			log.G(context.TODO()).Debugf("Macvlan Endpoint Joined with IPv4_Addr: %s, Gateway: %s, MacVlan_Mode: %s, Parent: %s",
 				ep.addr.IP.String(), v4gw.String(), n.config.MacvlanMode, n.config.Parent)
 		}
 		// parse and match the endpoint address with the available v6 subnets
@@ -71,18 +71,22 @@ func (d *driver) Join(nid, eid string, sboxKey string, jinfo driverapi.JoinInfo,
 			if err != nil {
 				return err
 			}
-			logrus.Debugf("Macvlan Endpoint Joined with IPv6_Addr: %s Gateway: %s MacVlan_Mode: %s, Parent: %s",
+			log.G(context.TODO()).Debugf("Macvlan Endpoint Joined with IPv6_Addr: %s Gateway: %s MacVlan_Mode: %s, Parent: %s",
 				ep.addrv6.IP.String(), v6gw.String(), n.config.MacvlanMode, n.config.Parent)
 		}
 	} else {
 		if len(n.config.Ipv4Subnets) > 0 {
-			logrus.Debugf("Macvlan Endpoint Joined with IPv4_Addr: %s, MacVlan_Mode: %s, Parent: %s",
+			log.G(context.TODO()).Debugf("Macvlan Endpoint Joined with IPv4_Addr: %s, MacVlan_Mode: %s, Parent: %s",
 				ep.addr.IP.String(), n.config.MacvlanMode, n.config.Parent)
 		}
 		if len(n.config.Ipv6Subnets) > 0 {
-			logrus.Debugf("Macvlan Endpoint Joined with IPv6_Addr: %s MacVlan_Mode: %s, Parent: %s",
+			log.G(context.TODO()).Debugf("Macvlan Endpoint Joined with IPv6_Addr: %s MacVlan_Mode: %s, Parent: %s",
 				ep.addrv6.IP.String(), n.config.MacvlanMode, n.config.Parent)
 		}
+		// If n.config.Internal was set locally by the driver because there's no parent
+		// interface, libnetwork doesn't know the network is internal. So, stop it from
+		// adding a gateway endpoint.
+		jinfo.DisableGatewayService()
 	}
 	iNames := jinfo.InterfaceName()
 	err = iNames.SetNames(vethName, containerVethPrefix)

@@ -1,17 +1,18 @@
-package registry
+package inline
 
 import (
 	"context"
 	"encoding/json"
 
+	"github.com/containerd/containerd/labels"
 	"github.com/moby/buildkit/cache/remotecache"
 	v1 "github.com/moby/buildkit/cache/remotecache/v1"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/compression"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 func ResolveCacheExporterFunc() remotecache.ResolveCacheExporterFunc {
@@ -67,7 +68,7 @@ func (ce *exporter) ExportForLayers(ctx context.Context, layers []digest.Digest)
 		}
 		// fallback for uncompressed digests
 		for _, v := range descs {
-			if uc := v.Descriptor.Annotations["containerd.io/uncompressed"]; uc == string(k) {
+			if uc := v.Descriptor.Annotations[labels.LabelUncompressed]; uc == string(k) {
 				descs2[v.Descriptor.Digest] = v
 				layerBlobDigests[i] = v.Descriptor.Digest
 			}
@@ -85,7 +86,7 @@ func (ce *exporter) ExportForLayers(ctx context.Context, layers []digest.Digest)
 	}
 
 	if len(cfg.Layers) == 0 {
-		logrus.Warn("failed to match any cache with layers")
+		bklog.G(ctx).Warn("failed to match any cache with layers")
 		return nil, nil
 	}
 

@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jan 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 .PP
@@ -22,12 +22,20 @@ Deploy a new stack or update an existing stack
 	Path to a Compose file, or "-" to read from stdin
 
 .PP
+\fB-d\fP, \fB--detach\fP[=true]
+	Exit immediately instead of waiting for the stack services to converge
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for deploy
 
 .PP
 \fB--prune\fP[=false]
 	Prune services that are no longer referenced
+
+.PP
+\fB-q\fP, \fB--quiet\fP[=false]
+	Suppress progress output
 
 .PP
 \fB--resolve-image\fP="always"

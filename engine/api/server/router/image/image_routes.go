@@ -2,6 +2,7 @@ package image // import "github.com/docker/docker/api/server/router/image"
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,11 +11,13 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/platforms"
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
+	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/filters"
-	opts "github.com/docker/docker/api/types/image"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/builder/remotecontext"
@@ -24,6 +27,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
@@ -66,10 +70,39 @@ func (ir *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrit
 			}
 		}
 
+		// Special case: "pull -a" may send an image name with a
+		// trailing :. This is ugly, but let's not break API
+		// compatibility.
+		imgName := strings.TrimSuffix(img, ":")
+
+		ref, err := reference.ParseNormalizedNamed(imgName)
+		if err != nil {
+			return errdefs.InvalidParameter(err)
+		}
+
+		// TODO(thaJeztah) this could use a WithTagOrDigest() utility
+		if tag != "" {
+			// The "tag" could actually be a digest.
+			var dgst digest.Digest
+			dgst, err = digest.Parse(tag)
+			if err == nil {
+				ref, err = reference.WithDigest(reference.TrimNamed(ref), dgst)
+			} else {
+				ref, err = reference.WithTag(ref, tag)
+			}
+			if err != nil {
+				return errdefs.InvalidParameter(err)
+			}
+		}
+
+		if err := validateRepoName(ref); err != nil {
+			return errdefs.Forbidden(err)
+		}
+
 		// For a pull it is not an error if no auth was given. Ignore invalid
 		// AuthConfig to increase compatibility with the existing API.
 		authConfig, _ := registry.DecodeAuthConfig(r.Header.Get(registry.AuthHeader))
-		progressErr = ir.backend.PullImage(ctx, img, tag, platform, metaHeaders, authConfig, output)
+		progressErr = ir.backend.PullImage(ctx, ref, platform, metaHeaders, authConfig, output)
 	} else { // import
 		src := r.Form.Get("fromSrc")
 
@@ -157,7 +190,7 @@ func (ir *imageRouter) postImagesPush(ctx context.Context, w http.ResponseWriter
 
 	var ref reference.Named
 
-	// Tag is empty only in case ImagePushOptions.All is true.
+	// Tag is empty only in case PushOptions.All is true.
 	if tag != "" {
 		r, err := httputils.RepoTagReference(img, tag)
 		if err != nil {
@@ -253,7 +286,7 @@ func (ir *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (ir *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	img, err := ir.backend.GetImage(ctx, vars["name"], opts.GetImageOpts{Details: true})
+	img, err := ir.backend.GetImage(ctx, vars["name"], backend.GetImageOpts{Details: true})
 	if err != nil {
 		return err
 	}
@@ -263,6 +296,20 @@ func (ir *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWrite
 		return err
 	}
 
+	version := httputils.VersionFromContext(ctx)
+	if versions.LessThan(version, "1.44") {
+		imageInspect.VirtualSize = imageInspect.Size //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.44.
+
+		if imageInspect.Created == "" {
+			// backwards compatibility for Created not existing returning "0001-01-01T00:00:00Z"
+			// https://github.com/moby/moby/issues/47368
+			imageInspect.Created = time.Time{}.Format(time.RFC3339Nano)
+		}
+	}
+	if versions.GreaterThanOrEqualTo(version, "1.45") {
+		imageInspect.Container = ""        //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
+		imageInspect.ContainerConfig = nil //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
+	}
 	return httputils.WriteJSON(w, http.StatusOK, imageInspect)
 }
 
@@ -290,15 +337,20 @@ func (ir *imageRouter) toImageInspect(img *image.Image) (*types.ImageInspect, er
 		repoDigests = []string{}
 	}
 
+	var created string
+	if img.Created != nil {
+		created = img.Created.Format(time.RFC3339Nano)
+	}
+
 	return &types.ImageInspect{
 		ID:              img.ID().String(),
 		RepoTags:        repoTags,
 		RepoDigests:     repoDigests,
 		Parent:          img.Parent.String(),
 		Comment:         comment,
-		Created:         img.Created.Format(time.RFC3339Nano),
-		Container:       img.Container,
-		ContainerConfig: &img.ContainerConfig,
+		Created:         created,
+		Container:       img.Container,        //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
+		ContainerConfig: &img.ContainerConfig, //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
 		DockerVersion:   img.DockerVersion,
 		Author:          img.Author,
 		Config:          img.Config,
@@ -307,13 +359,12 @@ func (ir *imageRouter) toImageInspect(img *image.Image) (*types.ImageInspect, er
 		Os:              img.OperatingSystem(),
 		OsVersion:       img.OSVersion,
 		Size:            img.Details.Size,
-		VirtualSize:     img.Details.Size, //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.44.
 		GraphDriver: types.GraphDriverData{
 			Name: img.Details.Driver,
 			Data: img.Details.Metadata,
 		},
 		RootFS: rootFSToAPIType(img.RootFS),
-		Metadata: types.ImageMetadata{
+		Metadata: imagetypes.Metadata{
 			LastTagTime: img.Details.LastUpdated,
 		},
 	}, nil
@@ -355,7 +406,7 @@ func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter,
 		sharedSize = httputils.BoolValue(r, "shared-size")
 	}
 
-	images, err := ir.backend.Images(ctx, types.ImageListOptions{
+	images, err := ir.backend.Images(ctx, imagetypes.ListOptions{
 		All:        httputils.BoolValue(r, "all"),
 		Filters:    imageFilters,
 		SharedSize: sharedSize,
@@ -365,6 +416,7 @@ func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter,
 	}
 
 	useNone := versions.LessThan(version, "1.43")
+	withVirtualSize := versions.LessThan(version, "1.44")
 	for _, img := range images {
 		if useNone {
 			if len(img.RepoTags) == 0 && len(img.RepoDigests) == 0 {
@@ -378,6 +430,9 @@ func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter,
 			if img.RepoDigests == nil {
 				img.RepoDigests = []string{}
 			}
+		}
+		if withVirtualSize {
+			img.VirtualSize = img.Size //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.44.
 		}
 	}
 
@@ -403,7 +458,12 @@ func (ir *imageRouter) postImagesTag(ctx context.Context, w http.ResponseWriter,
 		return errdefs.InvalidParameter(err)
 	}
 
-	img, err := ir.backend.GetImage(ctx, vars["name"], opts.GetImageOpts{})
+	refName := reference.FamiliarName(ref)
+	if refName == string(digest.Canonical) {
+		return errdefs.InvalidParameter(errors.New("refusing to create an ambiguous tag using digest algorithm as name"))
+	}
+
+	img, err := ir.backend.GetImage(ctx, vars["name"], backend.GetImageOpts{})
 	if err != nil {
 		return errdefs.NotFound(err)
 	}
@@ -437,7 +497,7 @@ func (ir *imageRouter) getImagesSearch(ctx context.Context, w http.ResponseWrite
 	// AuthConfig to increase compatibility with the existing API.
 	authConfig, _ := registry.DecodeAuthConfig(r.Header.Get(registry.AuthHeader))
 
-	var headers = http.Header{}
+	headers := http.Header{}
 	for k, v := range r.Header {
 		k = http.CanonicalHeaderKey(k)
 		if strings.HasPrefix(k, "X-Meta-") {
@@ -467,4 +527,13 @@ func (ir *imageRouter) postImagesPrune(ctx context.Context, w http.ResponseWrite
 		return err
 	}
 	return httputils.WriteJSON(w, http.StatusOK, pruneReport)
+}
+
+// validateRepoName validates the name of a repository.
+func validateRepoName(name reference.Named) error {
+	familiarName := reference.FamiliarName(name)
+	if familiarName == api.NoBaseImageSpecifier {
+		return fmt.Errorf("'%s' is a reserved name", familiarName)
+	}
+	return nil
 }

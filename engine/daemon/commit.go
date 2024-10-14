@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/errdefs"
 	"github.com/pkg/errors"
@@ -91,6 +92,9 @@ func merge(userConf, imageConf *containertypes.Config) error {
 			}
 			if userConf.Healthcheck.StartPeriod == 0 {
 				userConf.Healthcheck.StartPeriod = imageConf.Healthcheck.StartPeriod
+			}
+			if userConf.Healthcheck.StartInterval == 0 {
+				userConf.Healthcheck.StartInterval = imageConf.Healthcheck.StartInterval
 			}
 			if userConf.Healthcheck.Retries == 0 {
 				userConf.Healthcheck.Retries = imageConf.Healthcheck.Retries
@@ -177,7 +181,7 @@ func (daemon *Daemon) CreateImageFromContainer(ctx context.Context, name string,
 		}
 		imageRef = reference.FamiliarString(c.Tag)
 	}
-	daemon.LogContainerEventWithAttributes(container, "commit", map[string]string{
+	daemon.LogContainerEventWithAttributes(container, events.ActionCommit, map[string]string{
 		"comment":  c.Comment,
 		"imageID":  id.String(),
 		"imageRef": imageRef,

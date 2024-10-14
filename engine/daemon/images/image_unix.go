@@ -1,18 +1,17 @@
 //go:build linux || freebsd
-// +build linux freebsd
 
 package images // import "github.com/docker/docker/daemon/images"
 
 import (
 	"context"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/sirupsen/logrus"
 )
 
 // GetLayerFolders returns the layer folders from an image RootFS
-func (i *ImageService) GetLayerFolders(img *image.Image, rwLayer layer.RWLayer) ([]string, error) {
+func (i *ImageService) GetLayerFolders(img *image.Image, rwLayer layer.RWLayer, containerID string) ([]string, error) {
 	// Windows specific
 	panic("not implemented")
 }
@@ -28,14 +27,14 @@ func (i *ImageService) GetContainerLayerSize(ctx context.Context, containerID st
 	// container operating systems.
 	rwlayer, err := i.layerStore.GetRWLayer(containerID)
 	if err != nil {
-		logrus.Errorf("Failed to compute size of container rootfs %v: %v", containerID, err)
+		log.G(ctx).Errorf("Failed to compute size of container rootfs %v: %v", containerID, err)
 		return sizeRw, sizeRootfs, nil
 	}
 	defer i.layerStore.ReleaseRWLayer(rwlayer)
 
 	sizeRw, err = rwlayer.Size()
 	if err != nil {
-		logrus.Errorf("Driver %s couldn't return diff size of container %s: %s",
+		log.G(ctx).Errorf("Driver %s couldn't return diff size of container %s: %s",
 			i.layerStore.DriverName(), containerID, err)
 		// FIXME: GetSize should return an error. Not changing it now in case
 		// there is a side-effect.

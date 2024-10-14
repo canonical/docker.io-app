@@ -1,12 +1,13 @@
 package libnetwork
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/types"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -46,7 +47,7 @@ func (sb *Sandbox) setupDefaultGW() error {
 		}
 	}
 
-	createOptions := []EndpointOption{CreateOptionAnonymous()}
+	createOptions := []EndpointOption{}
 
 	var gwName string
 	if len(sb.containerID) <= gwEPlen {
@@ -78,7 +79,7 @@ func (sb *Sandbox) setupDefaultGW() error {
 	defer func() {
 		if err != nil {
 			if err2 := newEp.Delete(true); err2 != nil {
-				logrus.Warnf("Failed to remove gw endpoint for container %s after failing to join the gateway network: %v",
+				log.G(context.TODO()).Warnf("Failed to remove gw endpoint for container %s after failing to join the gateway network: %v",
 					sb.containerID, err2)
 			}
 		}
@@ -161,7 +162,7 @@ func (ep *Endpoint) endpointInGWNetwork() bool {
 
 // Looks for the default gw network and creates it if not there.
 // Parallel executions are serialized.
-func (c *Controller) defaultGwNetwork() (Network, error) {
+func (c *Controller) defaultGwNetwork() (*Network, error) {
 	procGwNetwork <- true
 	defer func() { <-procGwNetwork }()
 
