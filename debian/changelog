@@ -1,3 +1,12 @@
+docker.io-app (26.1.3-0ubuntu1~20.04.1) focal; urgency=medium
+
+  * Backport from oracular to focal. (LP: #2040461)
+    - d/t/basic-smoke: import GPG key from Debian stable. The
+      debian-archive-keyring package is out-dated after the release of Debian
+      12. Now, the key is downloaded from the ftp-master keyring directly.
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Mon, 14 Oct 2024 19:06:01 -0300
+
 docker.io-app (26.1.3-0ubuntu1) oracular; urgency=medium
 
   * New upstream release.
