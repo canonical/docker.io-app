@@ -1,6 +1,9 @@
 docker.io-app (26.1.3-0ubuntu1~24.04.1) noble; urgency=medium
 
   * Backport from oracular to noble. (LP: #2040461)
+    - d/t/docker-in-lxd: workaround Apparmor/kernel bug. (LP #2067900)
+    - Update AppArmor template to allow confined runc to kill containers
+      (LP: #2065423).
 
  -- Athos Ribeiro <athos.ribeiro@canonical.com>  Mon, 14 Oct 2024 11:29:26 -0300
 
