@@ -206,6 +206,15 @@ case ${arch} in
         exit 2;;
 esac
 
+# Based on https://github.com/canonical/lxd-ci/pull/178/files
+# Workaround Apparmor/kernel bug: https://bugs.launchpad.net/bugs/2067900
+# as suggested in https://github.com/canonical/lxd/issues/13389
+cat <<EOF | lxc file push - docker/etc/apparmor.d/local/runc
+# Workaround https://bugs.launchpad.net/bugs/2067900
+  pivot_root,
+EOF
+lxc exec docker -- apparmor_parser -rTW /etc/apparmor.d/runc
+
 lxc exec docker -- docker run "${image_hello_world}"
 
 ubuntu_devel_suite=$(lxc exec docker -- docker run --rm "${image_ubuntu}" \
