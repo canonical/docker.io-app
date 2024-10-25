@@ -12,6 +12,13 @@ case "$1" in
 			fi
 		fi
 
+		if dpkg --compare-versions "$2" le-nl '24.0.7-0ubuntu4.1'; then
+		# A reboot is required to allow gracefully stopping containers (reload AppArmor profile) LP: #2065423
+			if [ -x /usr/share/update-notifier/notify-reboot-required ]; then
+				/usr/share/update-notifier/notify-reboot-required || true
+			fi
+		fi
+
 		# ZFS handling: create a dedicated ZFS docker dataset to handle all children containers in a single,
 		# persistent, place.
 		# Also check if zfs executable exists and if it is in $PATH.
