@@ -1,3 +1,14 @@
+docker.io-app (26.1.3-0ubuntu2) plucky; urgency=medium
+
+  * SECURITY UPDATE: authz plugin bypass causes privilege escalation
+    - debian/patches/CVE-2024-41110-1.patch: Authz plugin security fixes
+      for 0-length content and path validation
+    - debian/patches/CVE-2024-41110-2.patch: If url includes scheme,
+      urlPath will drop hostname, which would not match the auth check
+    - CVE-2024-41110
+
+ -- Vyom Yadav <vyom.yadav@canonical.com>  Thu, 12 Dec 2024 17:32:57 +0530
+
 docker.io-app (26.1.3-0ubuntu1) oracular; urgency=medium
 
   * New upstream release.
