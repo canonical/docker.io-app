@@ -21,8 +21,6 @@ import (
 	timetypes "github.com/docker/docker/api/types/time"
 	"github.com/docker/docker/daemon/cluster/convert"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/compatcontext"
-	runconfigopts "github.com/docker/docker/runconfig/opts"
 	gogotypes "github.com/gogo/protobuf/types"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/opencontainers/go-digest"
@@ -63,12 +61,12 @@ func (c *Cluster) GetServices(options types.ServiceListOptions) ([]swarm.Service
 	filters := &swarmapi.ListServicesRequest_Filters{
 		NamePrefixes: options.Filters.Get("name"),
 		IDPrefixes:   options.Filters.Get("id"),
-		Labels:       runconfigopts.ConvertKVStringsToMap(options.Filters.Get("label")),
+		Labels:       convertKVStringsToMap(options.Filters.Get("label")),
 		Runtimes:     options.Filters.Get("runtime"),
 	}
 
 	ctx := context.TODO()
-	ctx, cancel := c.getRequestContext(ctx)
+	ctx, cancel := context.WithTimeout(ctx, swarmRequestTimeout)
 	defer cancel()
 
 	r, err := state.controlClient.ListServices(
@@ -266,8 +264,8 @@ func (c *Cluster) CreateService(s swarm.ServiceSpec, encodedAuth string, queryRe
 				// "ctx" could make it impossible to create a service
 				// if the registry is slow or unresponsive.
 				var cancel func()
-				ctx = compatcontext.WithoutCancel(ctx)
-				ctx, cancel = c.getRequestContext(ctx)
+				ctx = context.WithoutCancel(ctx)
+				ctx, cancel = context.WithTimeout(ctx, swarmRequestTimeout)
 				defer cancel()
 			}
 
@@ -382,8 +380,8 @@ func (c *Cluster) UpdateService(serviceIDOrName string, version uint64, spec swa
 				// "ctx" could make it impossible to update a service
 				// if the registry is slow or unresponsive.
 				var cancel func()
-				ctx = compatcontext.WithoutCancel(ctx)
-				ctx, cancel = c.getRequestContext(ctx)
+				ctx = context.WithoutCancel(ctx)
+				ctx, cancel = context.WithTimeout(ctx, swarmRequestTimeout)
 				defer cancel()
 			}
 		}

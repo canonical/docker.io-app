@@ -18,7 +18,7 @@ type notFound struct {
 }
 
 func (n notFound) Error() string {
-	return fmt.Sprintf("Error: No such image: %s", n.imageID)
+	return "Error: No such image: " + n.imageID
 }
 
 func (n notFound) NotFound() {}
@@ -62,11 +62,13 @@ func TestNewRemoveCommandErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewRemoveCommand(test.NewFakeCli(&fakeClient{
 				imageRemoveFunc: tc.imageRemoveFunc,
 			}))
 			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
 			assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
 		})
@@ -119,10 +121,12 @@ func TestNewRemoveCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imageRemoveFunc: tc.imageRemoveFunc})
 			cmd := NewRemoveCommand(cli)
 			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
 			assert.NilError(t, cmd.Execute())
 			assert.Check(t, is.Equal(tc.expectedStderr, cli.ErrBuffer().String()))

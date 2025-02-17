@@ -7,7 +7,7 @@ import (
 
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/reexec"
+	"github.com/moby/sys/reexec"
 	"github.com/pkg/errors"
 	"gotest.tools/v3/skip"
 )
@@ -33,7 +33,6 @@ func TestCloseRootDirectory(t *testing.T) {
 
 	src := makeTestArchiveContext(t, contextDir)
 	err = src.Close()
-
 	if err != nil {
 		t.Fatalf("Error while executing Close: %s", err)
 	}

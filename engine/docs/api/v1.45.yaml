@@ -393,7 +393,7 @@ definitions:
                Make the mount non-recursively read-only, but still leave the mount recursive
                (unless NonRecursive is set to `true` in conjunction).
 
-               Addded in v1.44, before that version all read-only mounts were
+               Added in v1.44, before that version all read-only mounts were
                non-recursive by default. To match the previous behaviour this
                will default to `true` for clients on versions prior to v1.44.
             type: "boolean"
@@ -1180,6 +1180,7 @@ definitions:
               - "default"
               - "process"
               - "hyperv"
+              - ""
           MaskedPaths:
             type: "array"
             description: |
@@ -1198,13 +1199,6 @@ definitions:
   ContainerConfig:
     description: |
       Configuration for a container that is portable between hosts.
-
-      When used as `ContainerConfig` field in an image, `ContainerConfig` is an
-      optional field containing the configuration of the container that was last
-      committed when creating the image.
-
-      Previous versions of Docker builder used this field to store build cache,
-      and it is not in active use anymore.
     type: "object"
     properties:
       Hostname:
@@ -1362,6 +1356,277 @@ definitions:
         items:
           type: "string"
         example: ["/bin/sh", "-c"]
+
+  ImageConfig:
+    description: |
+      Configuration of the image. These fields are used as defaults
+      when starting a container from the image.
+    type: "object"
+    properties:
+      Hostname:
+        description: |
+          The hostname to use for the container, as a valid RFC 1123 hostname.
+
+          <p><br /></p>
+
+          > **Note**: this field is always empty and must not be used.
+        type: "string"
+        example: ""
+      Domainname:
+        description: |
+          The domain name to use for the container.
+
+          <p><br /></p>
+
+          > **Note**: this field is always empty and must not be used.
+        type: "string"
+        example: ""
+      User:
+        description: "The user that commands are run as inside the container."
+        type: "string"
+        example: "web:web"
+      AttachStdin:
+        description: |
+          Whether to attach to `stdin`.
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      AttachStdout:
+        description: |
+          Whether to attach to `stdout`.
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      AttachStderr:
+        description: |
+          Whether to attach to `stderr`.
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      ExposedPorts:
+        description: |
+          An object mapping ports to an empty object in the form:
+
+          `{"<port>/<tcp|udp|sctp>": {}}`
+        type: "object"
+        x-nullable: true
+        additionalProperties:
+          type: "object"
+          enum:
+            - {}
+          default: {}
+        example: {
+          "80/tcp": {},
+          "443/tcp": {}
+        }
+      Tty:
+        description: |
+          Attach standard streams to a TTY, including `stdin` if it is not closed.
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      OpenStdin:
+        description: |
+          Open `stdin`
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      StdinOnce:
+        description: |
+          Close `stdin` after one attached client disconnects.
+
+          <p><br /></p>
+
+          > **Note**: this field is always false and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+      Env:
+        description: |
+          A list of environment variables to set inside the container in the
+          form `["VAR=value", ...]`. A variable without `=` is removed from the
+          environment, rather than to have an empty value.
+        type: "array"
+        items:
+          type: "string"
+        example:
+          - "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      Cmd:
+        description: |
+          Command to run specified as a string or an array of strings.
+        type: "array"
+        items:
+          type: "string"
+        example: ["/bin/sh"]
+      Healthcheck:
+        $ref: "#/definitions/HealthConfig"
+      ArgsEscaped:
+        description: "Command is already escaped (Windows only)"
+        type: "boolean"
+        default: false
+        example: false
+        x-nullable: true
+      Image:
+        description: |
+          The name (or reference) of the image to use when creating the container,
+          or which was used when the container was created.
+
+          <p><br /></p>
+
+          > **Note**: this field is always empty and must not be used.
+        type: "string"
+        default: ""
+        example: ""
+      Volumes:
+        description: |
+          An object mapping mount point paths inside the container to empty
+          objects.
+        type: "object"
+        additionalProperties:
+          type: "object"
+          enum:
+            - {}
+          default: {}
+        example:
+          "/app/data": {}
+          "/app/config": {}
+      WorkingDir:
+        description: "The working directory for commands to run in."
+        type: "string"
+        example: "/public/"
+      Entrypoint:
+        description: |
+          The entry point for the container as a string or an array of strings.
+
+          If the array consists of exactly one empty string (`[""]`) then the
+          entry point is reset to system default (i.e., the entry point used by
+          docker when there is no `ENTRYPOINT` instruction in the `Dockerfile`).
+        type: "array"
+        items:
+          type: "string"
+        example: []
+      NetworkDisabled:
+        description: |
+          Disable networking for the container.
+
+          <p><br /></p>
+
+          > **Note**: this field is always omitted and must not be used.
+        type: "boolean"
+        default: false
+        example: false
+        x-nullable: true
+      MacAddress:
+        description: |
+          MAC address of the container.
+
+          <p><br /></p>
+
+          > **Deprecated**: this field is deprecated in API v1.44 and up. It is always omitted.
+        type: "string"
+        default: ""
+        example: ""
+        x-nullable: true
+      OnBuild:
+        description: |
+          `ONBUILD` metadata that were defined in the image's `Dockerfile`.
+        type: "array"
+        x-nullable: true
+        items:
+          type: "string"
+        example: []
+      Labels:
+        description: "User-defined key/value metadata."
+        type: "object"
+        additionalProperties:
+          type: "string"
+        example:
+          com.example.some-label: "some-value"
+          com.example.some-other-label: "some-other-value"
+      StopSignal:
+        description: |
+          Signal to stop a container as a string or unsigned integer.
+        type: "string"
+        example: "SIGTERM"
+        x-nullable: true
+      StopTimeout:
+        description: |
+          Timeout to stop a container in seconds.
+
+          <p><br /></p>
+
+          > **Note**: this field is always omitted and must not be used.
+        type: "integer"
+        default: 10
+        x-nullable: true
+      Shell:
+        description: |
+          Shell for when `RUN`, `CMD`, and `ENTRYPOINT` uses a shell.
+        type: "array"
+        x-nullable: true
+        items:
+          type: "string"
+        example: ["/bin/sh", "-c"]
+    # FIXME(thaJeztah): temporarily using a full example to remove some "omitempty" fields. Remove once the fields are removed.
+    example:
+      "Hostname": ""
+      "Domainname": ""
+      "User": "web:web"
+      "AttachStdin": false
+      "AttachStdout": false
+      "AttachStderr": false
+      "ExposedPorts": {
+        "80/tcp": {},
+        "443/tcp": {}
+      }
+      "Tty": false
+      "OpenStdin": false
+      "StdinOnce": false
+      "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
+      "Cmd": ["/bin/sh"]
+      "Healthcheck": {
+        "Test": ["string"],
+        "Interval": 0,
+        "Timeout": 0,
+        "Retries": 0,
+        "StartPeriod": 0,
+        "StartInterval": 0
+      }
+      "ArgsEscaped": true
+      "Image": ""
+      "Volumes": {
+        "/app/data": {},
+        "/app/config": {}
+      }
+      "WorkingDir": "/public/"
+      "Entrypoint": []
+      "OnBuild": []
+      "Labels": {
+        "com.example.some-label": "some-value",
+        "com.example.some-other-label": "some-other-value"
+      }
+      "StopSignal": "SIGTERM"
+      "Shell": ["/bin/sh", "-c"]
 
   NetworkingConfig:
     description: |
@@ -1758,21 +2023,6 @@ definitions:
         format: "dateTime"
         x-nullable: true
         example: "2022-02-04T21:20:12.497794809Z"
-      Container:
-        description: |
-          The ID of the container that was used to create the image.
-
-          Depending on how the image was created, this field may be empty.
-
-          **Deprecated**: this field is kept for backward compatibility, but
-          will be removed in API v1.45.
-        type: "string"
-        example: "65974bc86f1770ae4bff79f651ebdbce166ae9aada632ee3fa9af3a264911735"
-      ContainerConfig:
-        description: |
-          **Deprecated**: this field is kept for backward compatibility, but
-          will be removed in API v1.45.
-        $ref: "#/definitions/ContainerConfig"
       DockerVersion:
         description: |
           The version of Docker that was used to build the image.
@@ -1789,7 +2039,7 @@ definitions:
         x-nullable: false
         example: ""
       Config:
-        $ref: "#/definitions/ContainerConfig"
+        $ref: "#/definitions/ImageConfig"
       Architecture:
         description: |
           Hardware CPU architecture that the image runs on.
@@ -1939,7 +2189,7 @@ definitions:
       Created:
         description: |
           Date and time at which the image was created as a Unix timestamp
-          (number of seconds sinds EPOCH).
+          (number of seconds since EPOCH).
         type: "integer"
         x-nullable: false
         example: "1644009612"
@@ -2179,72 +2429,129 @@ definitions:
     type: "object"
     properties:
       Name:
+        description: |
+          Name of the network.
         type: "string"
+        example: "my_network"
       Id:
+        description: |
+          ID that uniquely identifies a network on a single machine.
         type: "string"
+        example: "7d86d31b1478e7cca9ebed7e73aa0fdeec46c5ca29497431d3007d2d9e15ed99"
       Created:
+        description: |
+          Date and time at which the network was created in
+          [RFC 3339](https://www.ietf.org/rfc/rfc3339.txt) format with nano-seconds.
         type: "string"
         format: "dateTime"
+        example: "2016-10-19T04:33:30.360899459Z"
       Scope:
+        description: |
+          The level at which the network exists (e.g. `swarm` for cluster-wide
+          or `local` for machine level)
         type: "string"
+        example: "local"
       Driver:
+        description: |
+          The name of the driver used to create the network (e.g. `bridge`,
+          `overlay`).
         type: "string"
+        example: "overlay"
       EnableIPv6:
+        description: |
+          Whether the network was created with IPv6 enabled.
         type: "boolean"
+        example: false
       IPAM:
         $ref: "#/definitions/IPAM"
       Internal:
+        description: |
+          Whether the network is created to only allow internal networking
+          connectivity.
         type: "boolean"
+        default: false
+        example: false
       Attachable:
+        description: |
+          Whether a global / swarm scope network is manually attachable by regular
+          containers from workers in swarm mode.
         type: "boolean"
+        default: false
+        example: false
       Ingress:
+        description: |
+          Whether the network is providing the routing-mesh for the swarm cluster.
         type: "boolean"
+        default: false
+        example: false
+      ConfigFrom:
+        $ref: "#/definitions/ConfigReference"
+      ConfigOnly:
+        description: |
+          Whether the network is a config-only network. Config-only networks are
+          placeholder networks for network configurations to be used by other
+          networks. Config-only networks cannot be used directly to run containers
+          or services.
+        type: "boolean"
+        default: false
       Containers:
+        description: |
+          Contains endpoints attached to the network.
         type: "object"
         additionalProperties:
           $ref: "#/definitions/NetworkContainer"
+        example:
+          19a4d5d687db25203351ed79d478946f861258f018fe384f229f2efa4b23513c:
+            Name: "test"
+            EndpointID: "628cadb8bcb92de107b2a1e516cbffe463e321f548feb37697cce00ad694f21a"
+            MacAddress: "02:42:ac:13:00:02"
+            IPv4Address: "172.19.0.2/16"
+            IPv6Address: ""
       Options:
+        description: |
+          Network-specific options uses when creating the network.
         type: "object"
         additionalProperties:
           type: "string"
+        example:
+          com.docker.network.bridge.default_bridge: "true"
+          com.docker.network.bridge.enable_icc: "true"
+          com.docker.network.bridge.enable_ip_masquerade: "true"
+          com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
+          com.docker.network.bridge.name: "docker0"
+          com.docker.network.driver.mtu: "1500"
       Labels:
+        description: "User-defined key/value metadata."
         type: "object"
         additionalProperties:
           type: "string"
-    example:
-      Name: "net01"
-      Id: "7d86d31b1478e7cca9ebed7e73aa0fdeec46c5ca29497431d3007d2d9e15ed99"
-      Created: "2016-10-19T04:33:30.360899459Z"
-      Scope: "local"
-      Driver: "bridge"
-      EnableIPv6: false
-      IPAM:
-        Driver: "default"
-        Config:
-          - Subnet: "172.19.0.0/16"
-            Gateway: "172.19.0.1"
-        Options:
-          foo: "bar"
-      Internal: false
-      Attachable: false
-      Ingress: false
-      Containers:
-        19a4d5d687db25203351ed79d478946f861258f018fe384f229f2efa4b23513c:
-          Name: "test"
-          EndpointID: "628cadb8bcb92de107b2a1e516cbffe463e321f548feb37697cce00ad694f21a"
-          MacAddress: "02:42:ac:13:00:02"
-          IPv4Address: "172.19.0.2/16"
-          IPv6Address: ""
-      Options:
-        com.docker.network.bridge.default_bridge: "true"
-        com.docker.network.bridge.enable_icc: "true"
-        com.docker.network.bridge.enable_ip_masquerade: "true"
-        com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
-        com.docker.network.bridge.name: "docker0"
-        com.docker.network.driver.mtu: "1500"
-      Labels:
-        com.example.some-label: "some-value"
-        com.example.some-other-label: "some-other-value"
+        example:
+          com.example.some-label: "some-value"
+          com.example.some-other-label: "some-other-value"
+      Peers:
+        description: |
+          List of peer nodes for an overlay network. This field is only present
+          for overlay networks, and omitted for other network types.
+        type: "array"
+        items:
+          $ref: "#/definitions/PeerInfo"
+        x-nullable: true
+      # TODO: Add Services (only present when "verbose" is set).
+
+  ConfigReference:
+    description: |
+      The config-only network source to provide the configuration for
+      this network.
+    type: "object"
+    properties:
+      Network:
+        description: |
+          The name of the config-only network that provides the network's
+          configuration. The specified network must be an existing config-only
+          network. Only network names are allowed, not network IDs.
+        type: "string"
+        example: "config_only_network_01"
+
   IPAM:
     type: "object"
     properties:
@@ -2252,6 +2559,7 @@ definitions:
         description: "Name of the IPAM driver to use."
         type: "string"
         default: "default"
+        example: "default"
       Config:
         description: |
           List of IPAM configuration options, specified as a map:
@@ -2267,16 +2575,21 @@ definitions:
         type: "object"
         additionalProperties:
           type: "string"
+        example:
+          foo: "bar"
 
   IPAMConfig:
     type: "object"
     properties:
       Subnet:
         type: "string"
+        example: "172.20.0.0/16"
       IPRange:
         type: "string"
+        example: "172.20.10.0/24"
       Gateway:
         type: "string"
+        example: "172.20.10.11"
       AuxiliaryAddresses:
         type: "object"
         additionalProperties:
@@ -2287,14 +2600,35 @@ definitions:
     properties:
       Name:
         type: "string"
+        example: "container_1"
       EndpointID:
         type: "string"
+        example: "628cadb8bcb92de107b2a1e516cbffe463e321f548feb37697cce00ad694f21a"
       MacAddress:
         type: "string"
+        example: "02:42:ac:13:00:02"
       IPv4Address:
         type: "string"
+        example: "172.19.0.2/16"
       IPv6Address:
         type: "string"
+        example: ""
+
+  PeerInfo:
+    description: |
+      PeerInfo represents one peer of an overlay network.
+    type: "object"
+    properties:
+      Name:
+        description:
+          ID of the peer-node in the Swarm cluster.
+        type: "string"
+        example: "6869d7c1732b"
+      IP:
+        description:
+          IP-address of the peer-node in the Swarm cluster.
+        type: "string"
+        example: "10.133.77.91"
 
   BuildInfo:
     type: "object"
@@ -3344,7 +3678,7 @@ definitions:
                 example: "json-file"
               Options:
                 description: |
-                  Driver-specific options for the selectd log driver, specified
+                  Driver-specific options for the selected log driver, specified
                   as key/value pairs.
                 type: "object"
                 additionalProperties:
@@ -3781,6 +4115,7 @@ definitions:
               - "default"
               - "process"
               - "hyperv"
+              - ""
           Init:
             description: |
               Run an init inside the container that forwards signals and reaps
@@ -5345,6 +5680,7 @@ definitions:
           - "default"
           - "hyperv"
           - "process"
+          - ""
       InitBinary:
         description: |
           Name and, optional, path of the `docker-init` binary.
@@ -5415,8 +5751,6 @@ definitions:
           type: "string"
         example:
           - "WARNING: No memory limit support"
-          - "WARNING: bridge-nf-call-iptables is disabled"
-          - "WARNING: bridge-nf-call-ip6tables is disabled"
       CDISpecDirs:
         description: |
           List of directories where (Container Device Interface) CDI
@@ -7131,7 +7465,7 @@ paths:
         * Memory usage % = `(used_memory / available_memory) * 100.0`
         * cpu_delta = `cpu_stats.cpu_usage.total_usage - precpu_stats.cpu_usage.total_usage`
         * system_cpu_delta = `cpu_stats.system_cpu_usage - precpu_stats.system_cpu_usage`
-        * number_cpus = `lenght(cpu_stats.cpu_usage.percpu_usage)` or `cpu_stats.online_cpus`
+        * number_cpus = `length(cpu_stats.cpu_usage.percpu_usage)` or `cpu_stats.online_cpus`
         * CPU usage % = `(cpu_delta / system_cpu_delta) * number_cpus * 100.0`
       operationId: "ContainerStats"
       produces: ["application/json"]
@@ -7295,10 +7629,12 @@ paths:
           type: "string"
         - name: "h"
           in: "query"
+          required: true
           description: "Height of the TTY session in characters"
           type: "integer"
         - name: "w"
           in: "query"
+          required: true
           description: "Width of the TTY session in characters"
           type: "integer"
       tags: ["Container"]
@@ -8640,12 +8976,23 @@ paths:
       parameters:
         - name: "name"
           in: "path"
-          description: "Image name or ID."
+          description: |
+            Name of the image to push. For example, `registry.example.com/myimage`.
+            The image must be present in the local image store with the same name.
+
+            The name should be provided without tag; if a tag is provided, it
+            is ignored. For example, `registry.example.com/myimage:latest` is
+            considered equivalent to `registry.example.com/myimage`.
+
+            Use the `tag` parameter to specify the tag to push.
           type: "string"
           required: true
         - name: "tag"
           in: "query"
-          description: "The tag to associate with the image on the registry."
+          description: |
+            Tag of the image to push. For example, `latest`. If no tag is provided,
+            all tags of the given image that are present in the local image store
+            are pushed.
           type: "string"
         - name: "X-Registry-Auth"
           in: "header"
@@ -8951,7 +9298,7 @@ paths:
             type: "string"
             example: "OK"
           headers:
-            API-Version:
+            Api-Version:
               type: "string"
               description: "Max API Version the server supports"
             Builder-Version:
@@ -9007,7 +9354,7 @@ paths:
             type: "string"
             example: "(empty)"
           headers:
-            API-Version:
+            Api-Version:
               type: "string"
               description: "Max API Version the server supports"
             Builder-Version:
@@ -9601,10 +9948,12 @@ paths:
           type: "string"
         - name: "h"
           in: "query"
+          required: true
           description: "Height of the TTY session in characters"
           type: "integer"
         - name: "w"
           in: "query"
+          required: true
           description: "Width of the TTY session in characters"
           type: "integer"
       tags: ["Exec"]
@@ -10104,14 +10453,22 @@ paths:
               Name:
                 description: "The network's name."
                 type: "string"
+                example: "my_network"
               CheckDuplicate:
                 description: |
                   Deprecated: CheckDuplicate is now always enabled.
                 type: "boolean"
+                example: true
               Driver:
                 description: "Name of the network driver plugin to use."
                 type: "string"
                 default: "bridge"
+                example: "bridge"
+              Scope:
+                description: |
+                  The level at which the network exists (e.g. `swarm` for cluster-wide
+                  or `local` for machine level).
+                type: "string"
               Internal:
                 description: "Restrict external access to the network."
                 type: "boolean"
@@ -10120,55 +10477,55 @@ paths:
                   Globally scoped network is manually attachable by regular
                   containers from workers in swarm mode.
                 type: "boolean"
+                example: true
               Ingress:
                 description: |
                   Ingress network is the network which provides the routing-mesh
                   in swarm mode.
                 type: "boolean"
+                example: false
+              ConfigOnly:
+                description: |
+                  Creates a config-only network. Config-only networks are placeholder
+                  networks for network configurations to be used by other networks.
+                  Config-only networks cannot be used directly to run containers
+                  or services.
+                type: "boolean"
+                default: false
+                example: false
+              ConfigFrom:
+                description: |
+                  Specifies the source which will provide the configuration for
+                  this network. The specified network must be an existing
+                  config-only network; see ConfigOnly.
+                $ref: "#/definitions/ConfigReference"
               IPAM:
                 description: "Optional custom IP scheme for the network."
                 $ref: "#/definitions/IPAM"
               EnableIPv6:
                 description: "Enable IPv6 on the network."
                 type: "boolean"
+                example: true
               Options:
                 description: "Network specific options to be used by the drivers."
                 type: "object"
                 additionalProperties:
                   type: "string"
+                example:
+                  com.docker.network.bridge.default_bridge: "true"
+                  com.docker.network.bridge.enable_icc: "true"
+                  com.docker.network.bridge.enable_ip_masquerade: "true"
+                  com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
+                  com.docker.network.bridge.name: "docker0"
+                  com.docker.network.driver.mtu: "1500"
               Labels:
                 description: "User-defined key/value metadata."
                 type: "object"
                 additionalProperties:
                   type: "string"
-            example:
-              Name: "isolated_nw"
-              CheckDuplicate: false
-              Driver: "bridge"
-              EnableIPv6: true
-              IPAM:
-                Driver: "default"
-                Config:
-                  - Subnet: "172.20.0.0/16"
-                    IPRange: "172.20.10.0/24"
-                    Gateway: "172.20.10.11"
-                  - Subnet: "2001:db8:abcd::/64"
-                    Gateway: "2001:db8:abcd::1011"
-                Options:
-                  foo: "bar"
-              Internal: true
-              Attachable: false
-              Ingress: false
-              Options:
-                com.docker.network.bridge.default_bridge: "true"
-                com.docker.network.bridge.enable_icc: "true"
-                com.docker.network.bridge.enable_ip_masquerade: "true"
-                com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
-                com.docker.network.bridge.name: "docker0"
-                com.docker.network.driver.mtu: "1500"
-              Labels:
-                com.example.some-label: "some-value"
-                com.example.some-other-label: "some-other-value"
+                example:
+                  com.example.some-label: "some-value"
+                  com.example.some-other-label: "some-other-value"
       tags: ["Network"]
 
   /networks/{id}/connect:
@@ -11027,6 +11384,7 @@ paths:
             example:
               ListenAddr: "0.0.0.0:2377"
               AdvertiseAddr: "192.168.1.1:2377"
+              DataPathAddr: "192.168.1.1"
               RemoteAddrs:
                 - "node1:2377"
               JoinToken: "SWMTKN-1-3pu6hszjas19xyp7ghgosyx9k8atbfcr8p2is99znpy26u2lkl-7p73s1dx5in4tatdymyhg9hu2"

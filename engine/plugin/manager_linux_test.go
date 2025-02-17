@@ -11,7 +11,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/pkg/containerfs"
+	"github.com/docker/docker/internal/containerfs"
 	"github.com/docker/docker/pkg/stringid"
 	v2 "github.com/docker/docker/plugin/v2"
 	"github.com/moby/sys/mount"
@@ -239,7 +239,8 @@ func TestPluginAlreadyRunningOnStartup(t *testing.T) {
 			defer m.Shutdown()
 
 			p = s.GetAll()[p.GetID()] // refresh `p` with what the manager knows
-			if p.Client() == nil {
+
+			if p.Client() == nil { //nolint:staticcheck // FIXME(thaJeztah): p.Client is deprecated: use p.Addr() and manually create the client
 				t.Fatal("plugin client should not be nil")
 			}
 		})

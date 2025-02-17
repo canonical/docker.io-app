@@ -11,6 +11,7 @@ import (
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/pkg/apparmor"
 	cdseccomp "github.com/containerd/containerd/pkg/seccomp"
 	"github.com/containerd/continuity/fs"
 	"github.com/docker/docker/pkg/idtools"
@@ -38,14 +39,14 @@ func withProcessArgs(args ...string) oci.SpecOpts {
 	return oci.WithProcessArgs(args...)
 }
 
-func generateMountOpts(resolvConf, hostsFile string) ([]oci.SpecOpts, error) {
+func generateMountOpts(resolvConf, hostsFile string) []oci.SpecOpts {
 	return []oci.SpecOpts{
 		// https://github.com/moby/buildkit/issues/429
 		withRemovedMount("/run"),
 		withROBind(resolvConf, "/etc/resolv.conf"),
 		withROBind(hostsFile, "/etc/hosts"),
 		withCGroup(),
-	}, nil
+	}
 }
 
 // generateSecurityOpts may affect mounts, so must be called after generateMountOpts
@@ -72,6 +73,11 @@ func generateSecurityOpts(mode pb.SecurityMode, apparmorProfile string, selinuxB
 			opts = append(opts, withDefaultProfile())
 		}
 		if apparmorProfile != "" {
+			// If AppArmor is not supported but a profile was specified, return an error
+			if !apparmor.HostSupports() {
+				return nil, errors.New("AppArmor is not supported on this host, but the profile '" + apparmorProfile + "' was specified")
+			}
+
 			opts = append(opts, oci.WithApparmorProfile(apparmorProfile))
 		}
 		opts = append(opts, func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
@@ -260,13 +266,13 @@ func sub(m mount.Mount, subPath string) (mount.Mount, func() error, error) {
 		// similar to runc.WithProcfd
 		fh, err := os.OpenFile(src, unix.O_PATH|unix.O_CLOEXEC, 0)
 		if err != nil {
-			return mount.Mount{}, nil, err
+			return mount.Mount{}, nil, errors.WithStack(err)
 		}
 
 		fdPath := "/proc/self/fd/" + strconv.Itoa(int(fh.Fd()))
 		if resolved, err := os.Readlink(fdPath); err != nil {
 			fh.Close()
-			return mount.Mount{}, nil, err
+			return mount.Mount{}, nil, errors.WithStack(err)
 		} else if resolved != src {
 			retries--
 			if retries <= 0 {

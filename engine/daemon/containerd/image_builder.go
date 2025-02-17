@@ -13,21 +13,22 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/content"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/rootfs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/image"
 	dimage "github.com/docker/docker/image"
-	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/progress"
@@ -105,10 +106,11 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 		}
 	}
 
-	ctx, _, err := i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+	ctx, release, err := i.withLease(ctx, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create lease for commit: %w", err)
 	}
+	defer release()
 
 	// TODO(laurazard): do we really need a new method here to pull the image?
 	imgDesc, err := i.pullForBuilder(ctx, refOrID, opts.AuthConfig, opts.Output, opts.Platform)
@@ -233,9 +235,9 @@ func newROLayerForImage(ctx context.Context, imgDesc *ocispec.Descriptor, i *Ima
 
 func createLease(ctx context.Context, lm leases.Manager) (context.Context, leases.Lease, error) {
 	lease, err := lm.Create(ctx,
-		leases.WithExpiration(time.Hour*24),
+		leases.WithExpiration(leaseExpireDuration),
 		leases.WithLabels(map[string]string{
-			"org.mobyproject.lease.classicbuilder": "true",
+			pruneLeaseLabel: "true",
 		}),
 	)
 	if err != nil {
@@ -492,17 +494,11 @@ func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec
 	parentDigest digest.Digest, layers []ocispec.Descriptor,
 	containerConfig container.Config,
 ) (dimage.ID, error) {
-	// Necessary to prevent the contents from being GC'd
-	// between writing them here and creating an image
-	ctx, release, err := i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+	ctx, release, err := i.withLease(ctx, false)
 	if err != nil {
 		return "", err
 	}
-	defer func() {
-		if err := release(compatcontext.WithoutCancel(ctx)); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to release lease created for create")
-		}
-	}()
+	defer release()
 
 	manifestDesc, ccDesc, err := writeContentsForImage(ctx, i.snapshotter, i.content, imgToCreate, layers, containerConfig)
 	if err != nil {
@@ -534,11 +530,14 @@ func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec
 		}
 	}
 
+	id := image.ID(createdImage.Target.Digest)
+	i.LogImageEvent(id.String(), id.String(), events.ActionCreate)
+
 	if err := i.unpackImage(ctx, i.StorageDriver(), img, manifestDesc); err != nil {
 		return "", err
 	}
 
-	return dimage.ID(createdImage.Target.Digest), nil
+	return id, nil
 }
 
 // writeContentsForImage will commit oci image config and manifest into containerd's content store.

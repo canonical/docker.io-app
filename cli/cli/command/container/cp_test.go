@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/archive"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -51,35 +51,39 @@ func TestRunCopyWithInvalidArguments(t *testing.T) {
 func TestRunCopyFromContainerToStdout(t *testing.T) {
 	tarContent := "the tar content"
 
-	fakeClient := &fakeClient{
-		containerCopyFromFunc: func(container, srcPath string) (io.ReadCloser, types.ContainerPathStat, error) {
-			assert.Check(t, is.Equal("container", container))
-			return io.NopCloser(strings.NewReader(tarContent)), types.ContainerPathStat{}, nil
+	cli := test.NewFakeCli(&fakeClient{
+		containerCopyFromFunc: func(ctr, srcPath string) (io.ReadCloser, container.PathStat, error) {
+			assert.Check(t, is.Equal("container", ctr))
+			return io.NopCloser(strings.NewReader(tarContent)), container.PathStat{}, nil
 		},
-	}
-	options := copyOptions{source: "container:/path", destination: "-"}
-	cli := test.NewFakeCli(fakeClient)
-	err := runCopy(context.TODO(), cli, options)
+	})
+	err := runCopy(context.TODO(), cli, copyOptions{
+		source:      "container:/path",
+		destination: "-",
+	})
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(tarContent, cli.OutBuffer().String()))
 	assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
 }
 
 func TestRunCopyFromContainerToFilesystem(t *testing.T) {
-	destDir := fs.NewDir(t, "cp-test",
+	srcDir := fs.NewDir(t, "cp-test",
 		fs.WithFile("file1", "content\n"))
-	defer destDir.Remove()
 
-	fakeClient := &fakeClient{
-		containerCopyFromFunc: func(container, srcPath string) (io.ReadCloser, types.ContainerPathStat, error) {
-			assert.Check(t, is.Equal("container", container))
-			readCloser, err := archive.TarWithOptions(destDir.Path(), &archive.TarOptions{})
-			return readCloser, types.ContainerPathStat{}, err
+	destDir := fs.NewDir(t, "cp-test")
+
+	cli := test.NewFakeCli(&fakeClient{
+		containerCopyFromFunc: func(ctr, srcPath string) (io.ReadCloser, container.PathStat, error) {
+			assert.Check(t, is.Equal("container", ctr))
+			readCloser, err := archive.Tar(srcDir.Path(), archive.Uncompressed)
+			return readCloser, container.PathStat{}, err
 		},
-	}
-	options := copyOptions{source: "container:/path", destination: destDir.Path(), quiet: true}
-	cli := test.NewFakeCli(fakeClient)
-	err := runCopy(context.TODO(), cli, options)
+	})
+	err := runCopy(context.TODO(), cli, copyOptions{
+		source:      "container:/path",
+		destination: destDir.Path(),
+		quiet:       true,
+	})
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal("", cli.OutBuffer().String()))
 	assert.Check(t, is.Equal("", cli.ErrBuffer().String()))
@@ -94,20 +98,17 @@ func TestRunCopyFromContainerToFilesystemMissingDestinationDirectory(t *testing.
 		fs.WithFile("file1", "content\n"))
 	defer destDir.Remove()
 
-	fakeClient := &fakeClient{
-		containerCopyFromFunc: func(container, srcPath string) (io.ReadCloser, types.ContainerPathStat, error) {
-			assert.Check(t, is.Equal("container", container))
+	cli := test.NewFakeCli(&fakeClient{
+		containerCopyFromFunc: func(ctr, srcPath string) (io.ReadCloser, container.PathStat, error) {
+			assert.Check(t, is.Equal("container", ctr))
 			readCloser, err := archive.TarWithOptions(destDir.Path(), &archive.TarOptions{})
-			return readCloser, types.ContainerPathStat{}, err
+			return readCloser, container.PathStat{}, err
 		},
-	}
-
-	options := copyOptions{
+	})
+	err := runCopy(context.TODO(), cli, copyOptions{
 		source:      "container:/path",
 		destination: destDir.Join("missing", "foo"),
-	}
-	cli := test.NewFakeCli(fakeClient)
-	err := runCopy(context.TODO(), cli, options)
+	})
 	assert.ErrorContains(t, err, destDir.Join("missing"))
 }
 
@@ -115,12 +116,11 @@ func TestRunCopyToContainerFromFileWithTrailingSlash(t *testing.T) {
 	srcFile := fs.NewFile(t, t.Name())
 	defer srcFile.Remove()
 
-	options := copyOptions{
+	cli := test.NewFakeCli(&fakeClient{})
+	err := runCopy(context.TODO(), cli, copyOptions{
 		source:      srcFile.Path() + string(os.PathSeparator),
 		destination: "container:/path",
-	}
-	cli := test.NewFakeCli(&fakeClient{})
-	err := runCopy(context.TODO(), cli, options)
+	})
 
 	expectedError := "not a directory"
 	if runtime.GOOS == "windows" {
@@ -130,12 +130,11 @@ func TestRunCopyToContainerFromFileWithTrailingSlash(t *testing.T) {
 }
 
 func TestRunCopyToContainerSourceDoesNotExist(t *testing.T) {
-	options := copyOptions{
+	cli := test.NewFakeCli(&fakeClient{})
+	err := runCopy(context.TODO(), cli, copyOptions{
 		source:      "/does/not/exist",
 		destination: "container:/path",
-	}
-	cli := test.NewFakeCli(&fakeClient{})
-	err := runCopy(context.TODO(), cli, options)
+	})
 	expected := "no such file or directory"
 	if runtime.GOOS == "windows" {
 		expected = "cannot find the file specified"
@@ -180,21 +179,24 @@ func TestSplitCpArg(t *testing.T) {
 			expectedContainer: "container",
 		},
 	}
-	for _, testcase := range testcases {
-		t.Run(testcase.doc, func(t *testing.T) {
-			skip.If(t, testcase.os != "" && testcase.os != runtime.GOOS)
+	for _, tc := range testcases {
+		tc := tc
+		t.Run(tc.doc, func(t *testing.T) {
+			skip.If(t, tc.os == "windows" && runtime.GOOS != "windows" || tc.os == "linux" && runtime.GOOS == "windows")
 
-			container, path := splitCpArg(testcase.path)
-			assert.Check(t, is.Equal(testcase.expectedContainer, container))
-			assert.Check(t, is.Equal(testcase.expectedPath, path))
+			ctr, path := splitCpArg(tc.path)
+			assert.Check(t, is.Equal(tc.expectedContainer, ctr))
+			assert.Check(t, is.Equal(tc.expectedPath, path))
 		})
 	}
 }
 
 func TestRunCopyFromContainerToFilesystemIrregularDestination(t *testing.T) {
-	options := copyOptions{source: "container:/dev/null", destination: "/dev/random"}
 	cli := test.NewFakeCli(nil)
-	err := runCopy(context.TODO(), cli, options)
+	err := runCopy(context.TODO(), cli, copyOptions{
+		source:      "container:/dev/null",
+		destination: "/dev/random",
+	})
 	assert.Assert(t, err != nil)
 	expected := `"/dev/random" must be a directory or a regular file`
 	assert.ErrorContains(t, err, expected)

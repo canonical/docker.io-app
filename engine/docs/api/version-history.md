@@ -13,9 +13,94 @@ keywords: "API, Docker, rcli, REST, documentation"
      will be rejected.
 -->
 
+## v1.47 API changes
+
+[Docker Engine API v1.47](https://docs.docker.com/reference/api/engine/version/v1.47/) documentation
+
+* `GET /images/json` response now includes `Manifests` field, which contains
+  information about the sub-manifests included in the image index. This
+  includes things like platform-specific manifests and build attestations.
+  The new field will only be populated if the request also sets the `manifests`
+  query parameter to `true`.
+  WARNING: This is experimental and may change at any time without any backward
+  compatibility.
+* `GET /info` no longer includes warnings when `bridge-nf-call-iptables` or
+  `bridge-nf-call-ip6tables` are disabled when the daemon was started. The
+  `br_netfilter` module is now attempted to be loaded when needed, making those
+  warnings inaccurate. This change is not versioned, and affects all API versions
+  if the daemon has this patch.
+
+## v1.46 API changes
+
+[Docker Engine API v1.46](https://docs.docker.com/reference/api/engine/version/v1.46/) documentation
+
+* `GET /info` now includes a `Containerd` field containing information about
+  the location of the containerd API socket and containerd namespaces used
+  by the daemon to run containers and plugins.
+* `POST /containers/create` field `NetworkingConfig.EndpointsConfig.DriverOpts`,
+  and `POST /networks/{id}/connect` field `EndpointsConfig.DriverOpts`, now
+  support label `com.docker.network.endpoint.sysctls` for setting per-interface
+  sysctls. The value is a comma separated list of sysctl assignments, the
+  interface name must be "IFNAME". For example, to set
+  `net.ipv4.config.eth0.log_martians=1`, use
+  `net.ipv4.config.IFNAME.log_martians=1`. In API versions up-to 1.46, top level
+  `--sysctl` settings for `eth0` will be migrated to `DriverOpts` when possible. 
+  This automatic migration will be removed in a future release.
+* `GET /containers/json` now returns the annotations of containers.
+* `POST /images/{name}/push` now supports a `platform` parameter (JSON encoded
+  OCI Platform type) that allows selecting a specific platform manifest from
+  the multi-platform image.
+* `POST /containers/create` now takes `Options` as part of `HostConfig.Mounts.TmpfsOptions` to set options for tmpfs mounts.
+* `POST /services/create` now takes `Options` as part of `ContainerSpec.Mounts.TmpfsOptions`, to set options for tmpfs mounts.
+* `GET /events` now supports image `create` event that is emitted when a new
+  image is built regardless if it was tagged or not.
+
+### Deprecated Config fields in `GET /images/{name}/json` response
+
+The `Config` field returned by this endpoint (used for "image inspect") returns
+additional fields that are not part of the image's configuration and not part of
+the [Docker Image Spec] and the [OCI Image Spec].
+
+These additional fields are included in the response, due to an
+implementation detail, where the [api/types.ImageInspec] type used
+for the response is using the [container.Config] type.
+
+The [container.Config] type is a superset of the image config, and while the
+image's Config is used as a _template_ for containers created from the image,
+the additional fields are set at runtime (from options passed when creating
+the container) and not taken from the image Config.
+
+These fields are never set (and always return the default value for the type),
+but are not omitted in the response when left empty. As these fields were not
+intended to be part of the image configuration response, they are deprecated,
+and will be removed from the API.
+
+The following fields are currently included in the API response, but
+are not part of the underlying image's Config, and deprecated:
+
+- `Hostname`
+- `Domainname`
+- `AttachStdin`
+- `AttachStdout`
+- `AttachStderr`
+- `Tty`
+- `OpenStdin`
+- `StdinOnce`
+- `Image`
+- `NetworkDisabled` (already omitted unless set)
+- `MacAddress` (already omitted unless set)
+- `StopTimeout` (already omitted unless set)
+
+[Docker image spec]: https://github.com/moby/docker-image-spec/blob/v1.3.1/specs-go/v1/image.go#L19-L32
+[OCI Image Spec]: https://github.com/opencontainers/image-spec/blob/v1.1.0/specs-go/v1/config.go#L24-L62
+[api/types.ImageInspec]: https://github.com/moby/moby/blob/v26.1.4/api/types/types.go#L87-L104
+[container.Config]: https://github.com/moby/moby/blob/v26.1.4/api/types/container/config.go#L47-L82
+
+* `POST /services/create` and `POST /services/{id}/update` now support OomScoreAdj
+
 ## v1.45 API changes
 
-[Docker Engine API v1.45](https://docs.docker.com/engine/api/v1.45/) documentation
+[Docker Engine API v1.45](https://docs.docker.com/reference/api/engine/version/v1.45/) documentation
 
 * `POST /containers/create` now supports `VolumeOptions.Subpath` which allows a
   subpath of a named volume to be mounted.
@@ -33,7 +118,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.44 API changes
 
-[Docker Engine API v1.44](https://docs.docker.com/engine/api/v1.44/) documentation
+[Docker Engine API v1.44](https://docs.docker.com/reference/api/engine/version/v1.44/) documentation
 
 * GET `/images/json` now accepts an `until` filter. This accepts a timestamp and
   lists all images created before it. The `<timestamp>` can be Unix timestamps,
@@ -59,7 +144,7 @@ keywords: "API, Docker, rcli, REST, documentation"
   interval for health checks during the start period.
 * `GET /info` now includes a `CDISpecDirs` field indicating the configured CDI
   specifications directories. The use of the applied setting requires the daemon
-  to have expermental enabled, and for non-experimental daemons an empty list is
+  to have experimental enabled, and for non-experimental daemons an empty list is
   always returned.
 * `POST /networks/create` now returns a 400 if the `IPAMConfig` has invalid
   values. Note that this change is _unversioned_ and applied to all API
@@ -102,7 +187,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.43 API changes
 
-[Docker Engine API v1.43](https://docs.docker.com/engine/api/v1.43/) documentation
+[Docker Engine API v1.43](https://docs.docker.com/reference/api/engine/version/v1.43/) documentation
 
 * `POST /containers/create` now accepts `Annotations` as part of `HostConfig`.
   Can be used to attach arbitrary metadata to the container, which will also be
@@ -119,7 +204,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.42 API changes
 
-[Docker Engine API v1.42](https://docs.docker.com/engine/api/v1.42/) documentation
+[Docker Engine API v1.42](https://docs.docker.com/reference/api/engine/version/v1.42/) documentation
 
 * Removed the `BuilderSize` field on the `GET /system/df` endpoint. This field
   was introduced in API 1.31 as part of an experimental feature, and no longer
@@ -227,7 +312,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.41 API changes
 
-[Docker Engine API v1.41](https://docs.docker.com/engine/api/v1.41/) documentation
+[Docker Engine API v1.41](https://docs.docker.com/reference/api/engine/version/v1.41/) documentation
 
 * `GET /events` now returns `prune` events after pruning resources have completed.
   Prune events are returned for `container`, `network`, `volume`, `image`, and
@@ -315,7 +400,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.40 API changes
 
-[Docker Engine API v1.40](https://docs.docker.com/engine/api/v1.40/) documentation
+[Docker Engine API v1.40](https://docs.docker.com/reference/api/engine/version/v1.40/) documentation
 
 * The `/_ping` endpoint can now be accessed both using `GET` or `HEAD` requests.
   when accessed using a `HEAD` request, all headers are returned, but the body
@@ -345,7 +430,7 @@ keywords: "API, Docker, rcli, REST, documentation"
   to return those without the specified labels.
 * `POST /containers/create` now accepts a `fluentd-async` option in `HostConfig.LogConfig.Config`
   when using the Fluentd logging driver. This option deprecates the `fluentd-async-connect`
-  option, which remains funtional, but will be removed in a future release. Users
+  option, which remains functional, but will be removed in a future release. Users
   are encouraged to use the `fluentd-async` option going forward. This change is
   not versioned, and affects all API versions if the daemon has this patch.
 * `POST /containers/create` now accepts a `fluentd-request-ack` option in
@@ -382,7 +467,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## V1.39 API changes
 
-[Docker Engine API v1.39](https://docs.docker.com/engine/api/v1.39/) documentation
+[Docker Engine API v1.39](https://docs.docker.com/reference/api/engine/version/v1.39/) documentation
 
 * `GET /info` now returns an empty string, instead of `<unknown>` for `KernelVersion`
   and `OperatingSystem` if the daemon was unable to obtain this information.
@@ -399,7 +484,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## V1.38 API changes
 
-[Docker Engine API v1.38](https://docs.docker.com/engine/api/v1.38/) documentation
+[Docker Engine API v1.38](https://docs.docker.com/reference/api/engine/version/v1.38/) documentation
 
 
 * `GET /tasks` and `GET /tasks/{id}` now return a `NetworkAttachmentSpec` field,
@@ -408,7 +493,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.37 API changes
 
-[Docker Engine API v1.37](https://docs.docker.com/engine/api/v1.37/) documentation
+[Docker Engine API v1.37](https://docs.docker.com/reference/api/engine/version/v1.37/) documentation
 
 * `POST /containers/create` and `POST /services/create` now supports exposing SCTP ports.
 * `POST /configs/create` and `POST /configs/{id}/create` now accept a `Templating` driver.
@@ -418,14 +503,14 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.36 API changes
 
-[Docker Engine API v1.36](https://docs.docker.com/engine/api/v1.36/) documentation
+[Docker Engine API v1.36](https://docs.docker.com/reference/api/engine/version/v1.36/) documentation
 
 * `Get /events` now return `exec_die` event when an exec process terminates.
 
 
 ## v1.35 API changes
 
-[Docker Engine API v1.35](https://docs.docker.com/engine/api/v1.35/) documentation
+[Docker Engine API v1.35](https://docs.docker.com/reference/api/engine/version/v1.35/) documentation
 
 * `POST /services/create` and `POST /services/(id)/update` now accepts an
   `Isolation` field on container spec to set the Isolation technology of the
@@ -448,7 +533,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.34 API changes
 
-[Docker Engine API v1.34](https://docs.docker.com/engine/api/v1.34/) documentation
+[Docker Engine API v1.34](https://docs.docker.com/reference/api/engine/version/v1.34/) documentation
 
 * `POST /containers/(name)/wait?condition=removed` now also also returns
   in case of container removal failure. A pointer to a structure named
@@ -459,14 +544,14 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.33 API changes
 
-[Docker Engine API v1.33](https://docs.docker.com/engine/api/v1.33/) documentation
+[Docker Engine API v1.33](https://docs.docker.com/reference/api/engine/version/v1.33/) documentation
 
 * `GET /events` now supports filtering 4 more kinds of events: `config`, `node`,
 `secret` and `service`.
 
 ## v1.32 API changes
 
-[Docker Engine API v1.32](https://docs.docker.com/engine/api/v1.32/) documentation
+[Docker Engine API v1.32](https://docs.docker.com/reference/api/engine/version/v1.32/) documentation
 
 * `POST /images/create` now accepts a `platform` parameter in the form of `os[/arch[/variant]]`.
 * `POST /containers/create` now accepts additional values for the
@@ -480,7 +565,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.31 API changes
 
-[Docker Engine API v1.31](https://docs.docker.com/engine/api/v1.31/) documentation
+[Docker Engine API v1.31](https://docs.docker.com/reference/api/engine/version/v1.31/) documentation
 
 * `DELETE /secrets/(name)` now returns status code 404 instead of 500 when the secret does not exist.
 * `POST /secrets/create` now returns status code 409 instead of 500 when creating an already existing secret.
@@ -511,7 +596,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.30 API changes
 
-[Docker Engine API v1.30](https://docs.docker.com/engine/api/v1.30/) documentation
+[Docker Engine API v1.30](https://docs.docker.com/reference/api/engine/version/v1.30/) documentation
 
 * `GET /info` now returns the list of supported logging drivers, including plugins.
 * `GET /info` and `GET /swarm` now returns the cluster-wide swarm CA info if the node is in a swarm: the cluster root CA certificate, and the cluster TLS
@@ -534,7 +619,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.29 API changes
 
-[Docker Engine API v1.29](https://docs.docker.com/engine/api/v1.29/) documentation
+[Docker Engine API v1.29](https://docs.docker.com/reference/api/engine/version/v1.29/) documentation
 
 * `DELETE /networks/(name)` now allows to remove the ingress network, the one used to provide the routing-mesh.
 * `POST /networks/create` now supports creating the ingress network, by specifying an `Ingress` boolean field. As of now this is supported only when using the overlay network driver.
@@ -548,7 +633,7 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.28 API changes
 
-[Docker Engine API v1.28](https://docs.docker.com/engine/api/v1.28/) documentation
+[Docker Engine API v1.28](https://docs.docker.com/reference/api/engine/version/v1.28/) documentation
 
 * `POST /containers/create` now includes a `Consistency` field to specify the consistency level for each `Mount`, with possible values `default`, `consistent`, `cached`, or `delegated`.
 * `GET /containers/create` now takes a `DeviceCgroupRules` field in `HostConfig` allowing to set custom device cgroup rules for the created container.
@@ -566,19 +651,19 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.27 API changes
 
-[Docker Engine API v1.27](https://docs.docker.com/engine/api/v1.27/) documentation
+[Docker Engine API v1.27](https://docs.docker.com/reference/api/engine/version/v1.27/) documentation
 
 * `GET /containers/(id or name)/stats` now includes an `online_cpus` field in both `precpu_stats` and `cpu_stats`. If this field is `nil` then for compatibility with older daemons the length of the corresponding `cpu_usage.percpu_usage` array should be used.
 
 ## v1.26 API changes
 
-[Docker Engine API v1.26](https://docs.docker.com/engine/api/v1.26/) documentation
+[Docker Engine API v1.26](https://docs.docker.com/reference/api/engine/version/v1.26/) documentation
 
 * `POST /plugins/(plugin name)/upgrade` upgrade a plugin.
 
 ## v1.25 API changes
 
-[Docker Engine API v1.25](https://docs.docker.com/engine/api/v1.25/) documentation
+[Docker Engine API v1.25](https://docs.docker.com/reference/api/engine/version/v1.25/) documentation
 
 * The API version is now required in all API calls. Instead of just requesting, for example, the URL `/containers/json`, you must now request `/v1.25/containers/json`.
 * `GET /version` now returns `MinAPIVersion`.

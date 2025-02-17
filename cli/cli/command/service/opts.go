@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.19
+//go:build go1.22
 
 package service
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	gogotypes "github.com/gogo/protobuf/types"
@@ -131,7 +131,7 @@ func (s *ShlexOpt) Set(value string) error {
 	return nil
 }
 
-// Type returns the tyep of the value
+// Type returns the type of the value
 func (s *ShlexOpt) Type() string {
 	return "command"
 }
@@ -376,7 +376,7 @@ func (c *credentialSpecOpt) Value() *swarm.CredentialSpec {
 }
 
 func resolveNetworkID(ctx context.Context, apiClient client.NetworkAPIClient, networkIDOrName string) (string, error) {
-	nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, types.NetworkInspectOptions{Scope: "swarm"})
+	nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, network.InspectOptions{Scope: "swarm"})
 	return nw.ID, err
 }
 
@@ -529,6 +529,7 @@ type serviceOptions struct {
 	capAdd          opts.ListOpts
 	capDrop         opts.ListOpts
 	ulimits         opts.UlimitOpt
+	oomScoreAdj     int64
 
 	resources resourceOptions
 	stopGrace opts.DurationOpt
@@ -747,6 +748,7 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 				CapabilityAdd:   capAdd,
 				CapabilityDrop:  capDrop,
 				Ulimits:         options.ulimits.GetList(),
+				OomScoreAdj:     options.oomScoreAdj,
 			},
 			Networks:      networks,
 			Resources:     resources,
@@ -1043,6 +1045,7 @@ const (
 	flagUlimit                  = "ulimit"
 	flagUlimitAdd               = "ulimit-add"
 	flagUlimitRemove            = "ulimit-rm"
+	flagOomScoreAdj             = "oom-score-adj"
 )
 
 func validateAPIVersion(c swarm.ServiceSpec, serverAPIVersion string) error {

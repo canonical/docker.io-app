@@ -10,6 +10,7 @@ import (
 
 	"github.com/containerd/log"
 	containertypes "github.com/docker/docker/api/types/container"
+	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/config"
@@ -19,7 +20,6 @@ import (
 	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/runconfig"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/go-connections/nat"
 	"github.com/moby/sys/signal"
@@ -70,12 +70,16 @@ func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, e
 
 // Exists returns a true if a container of the specified ID or name exists,
 // false otherwise.
+//
+// Deprecated: use [Daemon.GetContainer] to look up a container by ID, Name, or ID-prefix. This function will be removed in the next release.
 func (daemon *Daemon) Exists(id string) bool {
 	c, _ := daemon.GetContainer(id)
 	return c != nil
 }
 
 // IsPaused returns a bool indicating if the specified container is paused.
+//
+// Deprecated: use [Daemon.GetContainer] to look up a container by ID, Name, or ID-prefix, and use [container.State.IsPaused]. This function will be removed in the next release.
 func (daemon *Daemon) IsPaused(id string) bool {
 	c, _ := daemon.GetContainer(id)
 	return c.State.IsPaused()
@@ -117,7 +121,7 @@ func (daemon *Daemon) Register(c *container.Container) error {
 	defer c.Unlock()
 
 	daemon.containers.Add(c.ID, c)
-	return c.CheckpointTo(daemon.containersReplica)
+	return c.CheckpointTo(context.TODO(), daemon.containersReplica)
 }
 
 func (daemon *Daemon) newContainer(name string, operatingSystem string, config *containertypes.Config, hostConfig *containertypes.HostConfig, imgID image.ID, managed bool) (*container.Container, error) {
@@ -218,7 +222,9 @@ func (daemon *Daemon) setHostConfig(container *container.Container, hostConfig *
 		return err
 	}
 
-	runconfig.SetDefaultNetModeIfBlank(hostConfig)
+	if hostConfig != nil && hostConfig.NetworkMode == "" {
+		hostConfig.NetworkMode = networktypes.NetworkDefault
+	}
 	container.HostConfig = hostConfig
 	return nil
 }

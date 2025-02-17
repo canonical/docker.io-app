@@ -11,9 +11,9 @@ import (
 	ctd "github.com/containerd/containerd"
 	"github.com/containerd/containerd/content/local"
 	ctdmetadata "github.com/containerd/containerd/metadata"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/builder/builder-next/adapters/containerimage"
@@ -25,7 +25,7 @@ import (
 	wlabel "github.com/docker/docker/builder/builder-next/worker/label"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/graphdriver"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/cache/metadata"
 	"github.com/moby/buildkit/cache/remotecache"
@@ -43,9 +43,12 @@ import (
 	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/bboltcachestorage"
+	"github.com/moby/buildkit/solver/pb"
+	"github.com/moby/buildkit/util/apicaps"
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/entitlements"
 	"github.com/moby/buildkit/util/network/netproviders"
+	"github.com/moby/buildkit/util/tracing"
 	"github.com/moby/buildkit/util/tracing/detect"
 	"github.com/moby/buildkit/worker"
 	"github.com/moby/buildkit/worker/containerd"
@@ -54,9 +57,6 @@ import (
 	"go.etcd.io/bbolt"
 	bolt "go.etcd.io/bbolt"
 	"go.opentelemetry.io/otel/sdk/trace"
-
-	"github.com/moby/buildkit/solver/pb"
-	"github.com/moby/buildkit/util/apicaps"
 )
 
 func newController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
@@ -67,11 +67,17 @@ func newController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control
 }
 
 func getTraceExporter(ctx context.Context) trace.SpanExporter {
-	span, _, err := detect.Exporter()
-	if err != nil {
-		log.G(ctx).WithError(err).Error("Failed to detect trace exporter for buildkit controller")
+	tc := make(tracing.MultiSpanExporter, 0, 2)
+	if detect.Recorder != nil {
+		tc = append(tc, detect.Recorder)
 	}
-	return span
+
+	if exp, err := detect.NewSpanExporter(ctx); err != nil {
+		log.G(ctx).WithError(err).Error("Failed to detect trace exporter for buildkit controller")
+	} else if !detect.IsNoneSpanExporter(exp) {
+		tc = append(tc, exp)
+	}
+	return tc
 }
 
 func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
@@ -79,7 +85,7 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 
-	historyDB, historyConf, err := openHistoryDB(opt.Root, opt.BuilderConfig.History)
+	historyDB, historyConf, err := openHistoryDB(opt.Root, "history_c8d.db", opt.BuilderConfig.History)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +108,22 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 
 	dns := getDNSConfig(opt.DNSConfig)
 
-	wo, err := containerd.NewWorkerOpt(opt.Root, opt.ContainerdAddress, opt.Snapshotter, opt.ContainerdNamespace,
-		opt.Rootless, map[string]string{
+	workerOpts := containerd.WorkerOptions{
+		Root:            opt.Root,
+		Address:         opt.ContainerdAddress,
+		SnapshotterName: opt.Snapshotter,
+		Namespace:       opt.ContainerdNamespace,
+		Rootless:        opt.Rootless,
+		Labels: map[string]string{
 			label.Snapshotter: opt.Snapshotter,
-		}, dns, nc, opt.ApparmorProfile, false, nil, "", nil, ctd.WithTimeout(60*time.Second),
-	)
+		},
+		DNS:             dns,
+		NetworkOpt:      nc,
+		ApparmorProfile: opt.ApparmorProfile,
+		Selinux:         false,
+	}
+
+	wo, err := containerd.NewWorkerOpt(workerOpts, ctd.WithTimeout(60*time.Second))
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +148,7 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	}
 	wo.Executor = exec
 
-	w, err := mobyworker.NewContainerdWorker(ctx, wo)
+	w, err := mobyworker.NewContainerdWorker(ctx, wo, opt.Callbacks, rt)
 	if err != nil {
 		return nil, err
 	}
@@ -142,9 +159,15 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
+
+	gwf, err := gateway.NewGatewayFrontend(wc.Infos(), nil)
+	if err != nil {
+		return nil, err
+	}
+
 	frontends := map[string]frontend.Frontend{
 		"dockerfile.v0": forwarder.NewGatewayForwarder(wc.Infos(), dockerfile.Build),
-		"gateway.v0":    gateway.NewGatewayFrontend(wc.Infos()),
+		"gateway.v0":    gwf,
 	}
 
 	return control.NewController(control.Opt{
@@ -170,11 +193,12 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 		LeaseManager:   wo.LeaseManager,
 		ContentStore:   wo.ContentStore,
 		TraceCollector: getTraceExporter(ctx),
+		GarbageCollect: w.GarbageCollect,
 	})
 }
 
-func openHistoryDB(root string, cfg *config.BuilderHistoryConfig) (*bolt.DB, *bkconfig.HistoryConfig, error) {
-	db, err := bbolt.Open(filepath.Join(root, "history.db"), 0o600, nil)
+func openHistoryDB(root string, fn string, cfg *config.BuilderHistoryConfig) (*bolt.DB, *bkconfig.HistoryConfig, error) {
+	db, err := bbolt.Open(filepath.Join(root, fn), 0o600, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -303,11 +327,13 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	}
 
 	exp, err := mobyexporter.New(mobyexporter.Opt{
-		ImageStore:   dist.ImageStore,
-		ContentStore: store,
-		Differ:       differ,
-		ImageTagger:  opt.ImageTagger,
-		LeaseManager: lm,
+		ImageStore:            dist.ImageStore,
+		ContentStore:          store,
+		Differ:                differ,
+		ImageTagger:           opt.ImageTagger,
+		LeaseManager:          lm,
+		ImageExportedCallback: opt.Callbacks.Exported,
+		// Callbacks.Named is not used here because the tag operation is handled directly by the image service.
 	})
 	if err != nil {
 		return nil, err
@@ -318,7 +344,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 
-	historyDB, historyConf, err := openHistoryDB(opt.Root, opt.BuilderConfig.History)
+	historyDB, historyConf, err := openHistoryDB(opt.Root, "history.db", opt.BuilderConfig.History)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +382,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		Layers:            layers,
 		Platforms:         archutil.SupportedPlatforms(true),
 		LeaseManager:      lm,
+		GarbageCollect:    mdb.GarbageCollect,
 		Labels:            getLabels(opt, nil),
 	}
 
@@ -366,9 +393,14 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	}
 	wc.Add(w)
 
+	gwf, err := gateway.NewGatewayFrontend(wc.Infos(), nil)
+	if err != nil {
+		return nil, err
+	}
+
 	frontends := map[string]frontend.Frontend{
 		"dockerfile.v0": forwarder.NewGatewayForwarder(wc.Infos(), dockerfile.Build),
-		"gateway.v0":    gateway.NewGatewayFrontend(wc.Infos()),
+		"gateway.v0":    gwf,
 	}
 
 	return control.NewController(control.Opt{
@@ -390,6 +422,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		HistoryDB:      historyDB,
 		HistoryConfig:  historyConf,
 		TraceCollector: getTraceExporter(ctx),
+		GarbageCollect: w.GarbageCollect,
 	})
 }
 
@@ -404,7 +437,7 @@ func getGCPolicy(conf config.BuilderConfig, root string) ([]client.PruneInfo, er
 		if conf.GC.DefaultKeepStorage != "" {
 			defaultKeepStorage, err = units.RAMInBytes(conf.GC.DefaultKeepStorage)
 			if err != nil {
-				return nil, errors.Wrapf(err, "could not parse '%s' as Builder.GC.DefaultKeepStorage config", conf.GC.DefaultKeepStorage)
+				return nil, errors.Wrapf(err, "failed to parse defaultKeepStorage")
 			}
 		}
 
@@ -413,13 +446,18 @@ func getGCPolicy(conf config.BuilderConfig, root string) ([]client.PruneInfo, er
 		} else {
 			gcPolicy = make([]client.PruneInfo, len(conf.GC.Policy))
 			for i, p := range conf.GC.Policy {
-				b, err := units.RAMInBytes(p.KeepStorage)
-				if err != nil {
-					return nil, err
+				var b int64
+				if p.KeepStorage != "" {
+					b, err = units.RAMInBytes(p.KeepStorage)
+					if err != nil {
+						return nil, errors.Wrapf(err, "failed to parse keepStorage")
+					}
 				}
 				if b == 0 {
 					b = defaultKeepStorage
 				}
+
+				// FIXME(thaJeztah): wire up new options https://github.com/moby/moby/issues/48639
 				gcPolicy[i], err = toBuildkitPruneInfo(types.BuildCachePruneOptions{
 					All:         p.All,
 					KeepStorage: b,
