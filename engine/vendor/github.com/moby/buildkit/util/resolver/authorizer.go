@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/remotes/docker/auth"
 	remoteserrors "github.com/containerd/containerd/remotes/errors"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/buildkit/session"
 	sessionauth "github.com/moby/buildkit/session/auth"
 	log "github.com/moby/buildkit/util/bklog"
@@ -96,11 +97,9 @@ func (a *authHandlerNS) set(host, session string, h *authHandler) {
 }
 
 func (a *authHandlerNS) delete(h *authHandler) {
-	for k, v := range a.handlers {
-		if v == h {
-			delete(a.handlers, k)
-		}
-	}
+	maps.DeleteFunc(a.handlers, func(_ string, v *authHandler) bool {
+		return v == h
+	})
 }
 
 type dockerAuthorizer struct {
@@ -219,7 +218,7 @@ func (a *dockerAuthorizer) AddResponses(ctx context.Context, responses []*http.R
 			}
 		}
 	}
-	return errors.Wrap(errdefs.ErrNotImplemented, "failed to find supported auth scheme")
+	return errors.Wrap(cerrdefs.ErrNotImplemented, "failed to find supported auth scheme")
 }
 
 // authResult is used to control limit rate.
@@ -267,15 +266,15 @@ func newAuthHandler(host string, client *http.Client, scheme auth.Authentication
 func (ah *authHandler) authorize(ctx context.Context, sm *session.Manager, g session.Group) (string, error) {
 	switch ah.scheme {
 	case auth.BasicAuth:
-		return ah.doBasicAuth(ctx)
+		return ah.doBasicAuth()
 	case auth.BearerAuth:
 		return ah.doBearerAuth(ctx, sm, g)
 	default:
-		return "", errors.Wrapf(errdefs.ErrNotImplemented, "failed to find supported auth scheme: %s", string(ah.scheme))
+		return "", errors.Wrapf(cerrdefs.ErrNotImplemented, "failed to find supported auth scheme: %s", string(ah.scheme))
 	}
 }
 
-func (ah *authHandler) doBasicAuth(ctx context.Context) (string, error) {
+func (ah *authHandler) doBasicAuth() (string, error) {
 	username, secret := ah.common.Username, ah.common.Secret
 
 	if username == "" || secret == "" {
@@ -451,6 +450,9 @@ func parseScopes(s []string) scopes {
 	// https://docs.docker.com/registry/spec/auth/scope/
 	m := map[string]map[string]struct{}{}
 	for _, scopeStr := range s {
+		if scopeStr == "" {
+			return nil
+		}
 		// The scopeStr may have strings that contain multiple scopes separated by a space.
 		for _, scope := range strings.Split(scopeStr, " ") {
 			parts := strings.SplitN(scope, ":", 3)

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/plugin"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration-cli/cli"
@@ -32,7 +32,7 @@ func OnlyDefaultNetworks(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	networks, err := apiClient.NetworkList(ctx, types.NetworkListOptions{})
+	networks, err := apiClient.NetworkList(ctx, network.ListOptions{})
 	if err != nil || len(networks) > 0 {
 		return false
 	}
@@ -79,9 +79,6 @@ func Network() bool {
 }
 
 func Apparmor() bool {
-	if strings.HasPrefix(testEnv.DaemonInfo.OperatingSystem, "SUSE Linux Enterprise Server ") {
-		return false
-	}
 	buf, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
 	return err == nil && len(buf) > 1 && buf[0] == 'Y'
 }
@@ -95,11 +92,6 @@ func containerdSnapshotterEnabled() bool {
 		}
 	}
 	return false
-}
-
-func IPv6() bool {
-	cmd := exec.Command("test", "-f", "/proc/net/if_inet6")
-	return cmd.Run() != nil
 }
 
 func UserNamespaceROMount() bool {

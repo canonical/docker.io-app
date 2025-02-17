@@ -5,7 +5,7 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/nydus-snapshotter/pkg/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -68,7 +68,12 @@ func (c *Store) ReaderAt(ctx context.Context, desc ocispecs.Descriptor) (content
 }
 
 func (c *Store) Writer(ctx context.Context, opts ...content.WriterOpt) (content.Writer, error) {
-	return c.writer(ctx, 3, opts...)
+	ctx = namespaces.WithNamespace(ctx, c.ns)
+	w, err := c.Store.Writer(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &nsWriter{Writer: w, ns: c.ns}, nil
 }
 
 func (c *Store) WithFallbackNS(ns string) content.Store {
@@ -76,15 +81,6 @@ func (c *Store) WithFallbackNS(ns string) content.Store {
 		main: c,
 		fb:   c.WithNamespace(ns),
 	}
-}
-
-func (c *Store) writer(ctx context.Context, retries int, opts ...content.WriterOpt) (content.Writer, error) {
-	ctx = namespaces.WithNamespace(ctx, c.ns)
-	w, err := c.Store.Writer(ctx, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &nsWriter{Writer: w, ns: c.ns}, nil
 }
 
 type nsWriter struct {
@@ -107,7 +103,7 @@ var _ content.Store = &nsFallbackStore{}
 func (c *nsFallbackStore) Info(ctx context.Context, dgst digest.Digest) (content.Info, error) {
 	info, err := c.main.Info(ctx, dgst)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return c.fb.Info(ctx, dgst)
 		}
 	}
@@ -141,7 +137,7 @@ func (c *nsFallbackStore) Abort(ctx context.Context, ref string) error {
 func (c *nsFallbackStore) ReaderAt(ctx context.Context, desc ocispecs.Descriptor) (content.ReaderAt, error) {
 	ra, err := c.main.ReaderAt(ctx, desc)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return c.fb.ReaderAt(ctx, desc)
 		}
 	}

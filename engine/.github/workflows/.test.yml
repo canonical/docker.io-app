@@ -3,6 +3,15 @@ name: .test
 
 # TODO: hide reusable workflow from the UI. Tracked in https://github.com/community/community/discussions/12025
 
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
 on:
   workflow_call:
     inputs:
@@ -12,19 +21,21 @@ on:
         default: "graphdriver"
 
 env:
-  GO_VERSION: "1.21.9"
+  GO_VERSION: "1.22.11"
   GOTESTLIST_VERSION: v0.3.1
   TESTSTAT_VERSION: v0.1.25
   ITG_CLI_MATRIX_SIZE: 6
   DOCKER_EXPERIMENTAL: 1
   DOCKER_GRAPHDRIVER: ${{ inputs.storage == 'snapshotter' && 'overlayfs' || 'overlay2' }}
   TEST_INTEGRATION_USE_SNAPSHOTTER: ${{ inputs.storage == 'snapshotter' && '1' || '' }}
+  SETUP_BUILDX_VERSION: latest
+  SETUP_BUILDKIT_IMAGE: moby/buildkit:latest
 
 jobs:
   unit:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     steps:
       -
         name: Checkout
@@ -35,9 +46,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build dev image
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: dev
           set: |
@@ -74,8 +89,8 @@ jobs:
 
   unit-report:
     runs-on: ubuntu-20.04
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     if: always()
     needs:
       - unit
@@ -102,8 +117,8 @@ jobs:
 
   docker-py:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     steps:
       -
         name: Checkout
@@ -117,9 +132,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build dev image
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: dev
           set: |
@@ -155,8 +174,8 @@ jobs:
 
   integration-flaky:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     steps:
       -
         name: Checkout
@@ -167,9 +186,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build dev image
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: dev
           set: |
@@ -183,8 +206,8 @@ jobs:
 
   integration:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -221,9 +244,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build dev image
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: dev
           set: |
@@ -277,8 +304,8 @@ jobs:
 
   integration-report:
     runs-on: ubuntu-20.04
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     if: always()
     needs:
       - integration
@@ -306,6 +333,7 @@ jobs:
 
   integration-cli-prepare:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
     outputs:
       matrix: ${{ steps.tests.outputs.matrix }}
@@ -341,8 +369,8 @@ jobs:
 
   integration-cli:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     needs:
       - integration-cli-prepare
     strategy:
@@ -362,9 +390,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build dev image
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: dev
           set: |
@@ -417,8 +449,8 @@ jobs:
 
   integration-cli-report:
     runs-on: ubuntu-20.04
-    continue-on-error: ${{ github.event_name != 'pull_request' }}
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
     if: always()
     needs:
       - integration-cli

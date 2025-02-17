@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/Microsoft/hcsshim/osversion"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/schema2"
@@ -143,7 +143,7 @@ func checkImageCompatibility(imageOS, imageOSVersion string) error {
 			if imageOSBuild, err := strconv.Atoi(splitImageOSVersion[2]); err == nil {
 				if imageOSBuild > int(hostOSV.Build) {
 					errMsg := fmt.Sprintf("a Windows version %s.%s.%s-based image is incompatible with a %s host", splitImageOSVersion[0], splitImageOSVersion[1], splitImageOSVersion[2], hostOSV.ToString())
-					log.G(context.TODO()).Debugf(errMsg)
+					log.G(context.TODO()).Debug(errMsg)
 					return errors.New(errMsg)
 				}
 			}

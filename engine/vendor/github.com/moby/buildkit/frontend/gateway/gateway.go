@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,12 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/containerd/mount"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/pkg/idtools"
-	"github.com/gogo/googleapis/google/rpc"
-	gogotypes "github.com/gogo/protobuf/types"
-	"github.com/golang/protobuf/ptypes/any"
 	apitypes "github.com/moby/buildkit/api/types"
 	"github.com/moby/buildkit/cache"
 	cacheutil "github.com/moby/buildkit/cache/util"
@@ -67,14 +66,26 @@ const (
 	keyDevel  = "gateway-devel"
 )
 
-func NewGatewayFrontend(w worker.Infos) frontend.Frontend {
-	return &gatewayFrontend{
-		workers: w,
+func NewGatewayFrontend(workers worker.Infos, allowedRepositories []string) (frontend.Frontend, error) {
+	var parsedAllowedRepositories []string
+
+	for _, allowedRepository := range allowedRepositories {
+		sourceRef, err := reference.ParseNormalizedNamed(allowedRepository)
+		if err != nil {
+			return nil, err
+		}
+		parsedAllowedRepositories = append(parsedAllowedRepositories, reference.TrimNamed(sourceRef).Name())
 	}
+
+	return &gatewayFrontend{
+		workers:             workers,
+		allowedRepositories: parsedAllowedRepositories,
+	}, nil
 }
 
 type gatewayFrontend struct {
-	workers worker.Infos
+	workers             worker.Infos
+	allowedRepositories []string
 }
 
 func filterPrefix(opts map[string]string, pfx string) map[string]string {
@@ -85,6 +96,30 @@ func filterPrefix(opts map[string]string, pfx string) map[string]string {
 		}
 	}
 	return m
+}
+
+func (gf *gatewayFrontend) checkSourceIsAllowed(source string) error {
+	// Returns nil if the source is allowed.
+	// Returns an error if the source is not allowed.
+	if len(gf.allowedRepositories) == 0 {
+		// No source restrictions in place
+		return nil
+	}
+
+	sourceRef, err := reference.ParseNormalizedNamed(source)
+	if err != nil {
+		return err
+	}
+
+	taglessSource := reference.TrimNamed(sourceRef).Name()
+
+	for _, allowedRepository := range gf.allowedRepositories {
+		if taglessSource == allowedRepository {
+			// Allowed
+			return nil
+		}
+	}
+	return errors.Errorf("'%s' is not an allowed gateway source", source)
 }
 
 func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*frontend.Result, error) {
@@ -101,6 +136,11 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 
 	var frontendDef *opspb.Definition
 
+	err := gf.checkSourceIsAllowed(source)
+	if err != nil {
+		return nil, err
+	}
+
 	if isDevel {
 		devRes, err := llbBridge.Solve(ctx,
 			frontend.SolveRequest{
@@ -112,8 +152,9 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 			return nil, err
 		}
 		defer func() {
+			ctx := context.WithoutCancel(ctx)
 			devRes.EachRef(func(ref solver.ResultProxy) error {
-				return ref.Release(context.TODO())
+				return ref.Release(ctx)
 			})
 		}()
 		if devRes.Ref == nil {
@@ -205,8 +246,9 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 			return nil, err
 		}
 		defer func() {
+			ctx := context.WithoutCancel(ctx)
 			res.EachRef(func(ref solver.ResultProxy) error {
-				return ref.Release(context.TODO())
+				return ref.Release(ctx)
 			})
 		}()
 		if res.Ref == nil {
@@ -283,11 +325,8 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		}
 	}
 
-	lbf, ctx, err := serveLLBBridgeForwarder(ctx, llbBridge, exec, gf.workers, inputs, sid, sm)
-	defer lbf.conn.Close() //nolint
-	if err != nil {
-		return nil, err
-	}
+	lbf, ctx := serveLLBBridgeForwarder(ctx, llbBridge, exec, gf.workers, inputs, sid, sm)
+	defer lbf.conn.Close()
 	defer lbf.Discard()
 
 	mdmnt, release, err := metadataMount(frontendDef)
@@ -322,7 +361,7 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 }
 
 func metadataMount(def *opspb.Definition) (*executor.Mount, func(), error) {
-	dt, err := def.Marshal()
+	dt, err := def.MarshalVT()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -364,6 +403,7 @@ func (b *bindMount) Mount() ([]mount.Mount, func() error, error) {
 		Options: []string{"bind", "ro", "nosuid", "nodev", "noexec"},
 	}}, func() error { return nil }, nil
 }
+
 func (b *bindMount) IdentityMapping() *idtools.IdentityMapping {
 	return nil
 }
@@ -453,10 +493,16 @@ func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridg
 	return lbf
 }
 
-func serveLLBBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*llbBridgeForwarder, context.Context, error) {
+func serveLLBBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, workers worker.Infos, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*llbBridgeForwarder, context.Context) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	lbf := newBridgeForwarder(ctx, llbBridge, exec, workers, inputs, sid, sm)
-	server := grpc.NewServer(grpc.UnaryInterceptor(grpcerrors.UnaryServerInterceptor), grpc.StreamInterceptor(grpcerrors.StreamServerInterceptor))
+	serverOpt := []grpc.ServerOption{
+		grpc.UnaryInterceptor(grpcerrors.UnaryServerInterceptor),
+		grpc.StreamInterceptor(grpcerrors.StreamServerInterceptor),
+		grpc.MaxRecvMsgSize(defaults.DefaultMaxRecvMsgSize),
+		grpc.MaxSendMsgSize(defaults.DefaultMaxSendMsgSize),
+	}
+	server := grpc.NewServer(serverOpt...)
 	grpc_health_v1.RegisterHealthServer(server, health.NewServer())
 	pb.RegisterLLBBridgeServer(server, lbf)
 
@@ -470,7 +516,7 @@ func serveLLBBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLB
 		cancel(errors.WithStack(context.Canceled))
 	}()
 
-	return lbf, ctx, nil
+	return lbf, ctx
 }
 
 type pipe struct {
@@ -502,21 +548,24 @@ type conn struct {
 func (s *conn) LocalAddr() net.Addr {
 	return dummyAddr{}
 }
+
 func (s *conn) RemoteAddr() net.Addr {
 	return dummyAddr{}
 }
+
 func (s *conn) SetDeadline(t time.Time) error {
 	return nil
 }
+
 func (s *conn) SetReadDeadline(t time.Time) error {
 	return nil
 }
+
 func (s *conn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-type dummyAddr struct {
-}
+type dummyAddr struct{}
 
 func (d dummyAddr) Network() string {
 	return "pipe"
@@ -591,7 +640,7 @@ func (lbf *llbBridgeForwarder) ResolveSourceMeta(ctx context.Context, req *pb.Re
 
 	if resp.Image != nil {
 		r.Image = &pb.ResolveSourceImageResponse{
-			Digest: resp.Image.Digest,
+			Digest: string(resp.Image.Digest),
 			Config: resp.Image.Config,
 		}
 	}
@@ -635,7 +684,7 @@ func (lbf *llbBridgeForwarder) ResolveImageConfig(ctx context.Context, req *pb.R
 	}
 	return &pb.ResolveImageConfigResponse{
 		Ref:    ref,
-		Digest: dgst,
+		Digest: string(dgst),
 		Config: dt,
 	}, nil
 }
@@ -811,10 +860,7 @@ func (lbf *llbBridgeForwarder) Solve(ctx context.Context, req *pb.SolveRequest) 
 		if err := json.Unmarshal(req.ExporterAttr, &exp); err != nil {
 			return nil, err
 		}
-
-		for k, v := range res.Metadata {
-			exp[k] = v
-		}
+		maps.Copy(exp, res.Metadata)
 
 		lbf.mu.Lock()
 		lbf.result = &frontend.Result{
@@ -975,7 +1021,7 @@ func (lbf *llbBridgeForwarder) Return(ctx context.Context, in *pb.ReturnRequest)
 		return lbf.setResult(nil, grpcerrors.FromGRPC(status.ErrorProto(&spb.Status{
 			Code:    in.Error.Code,
 			Message: in.Error.Message,
-			Details: convertGogoAny(in.Error.Details),
+			Details: in.Error.Details,
 		})))
 	}
 	r := &frontend.Result{
@@ -1107,7 +1153,7 @@ func (lbf *llbBridgeForwarder) NewContainer(ctx context.Context, in *pb.NewConta
 	}
 	defer func() {
 		if err != nil {
-			ctr.Release(ctx) // ensure release on error
+			ctr.Release(context.WithoutCancel(ctx)) // ensure release on error
 		}
 	}()
 
@@ -1141,7 +1187,7 @@ func (lbf *llbBridgeForwarder) Warn(ctx context.Context, in *pb.WarnRequest) (*p
 			return nil, status.Errorf(codes.InvalidArgument, "invalid source range")
 		}
 	}
-	err := lbf.llbBridge.Warn(ctx, in.Digest, string(in.Short), frontend.WarnOpts{
+	err := lbf.llbBridge.Warn(ctx, digest.Digest(in.Digest), string(in.Short), frontend.WarnOpts{
 		Level:      int(in.Level),
 		SourceInfo: in.Info,
 		Range:      in.Ranges,
@@ -1443,15 +1489,15 @@ func (lbf *llbBridgeForwarder) ExecProcess(srv pb.LLBBridge_ExecProcessServer) e
 
 					var statusCode uint32
 					var exitError *pb.ExitError
-					var statusError *rpc.Status
+					var statusError *spb.Status
 					if err != nil {
 						statusCode = pb.UnknownExitStatus
 						st, _ := status.FromError(grpcerrors.ToGRPC(ctx, err))
 						stp := st.Proto()
-						statusError = &rpc.Status{
+						statusError = &spb.Status{
 							Code:    stp.Code,
 							Message: stp.Message,
-							Details: convertToGogoAny(stp.Details),
+							Details: stp.Details,
 						}
 					}
 					if errors.As(err, &exitError) {
@@ -1588,22 +1634,6 @@ type markTypeFrontend struct{}
 
 func (*markTypeFrontend) SetImageOption(ii *llb.ImageInfo) {
 	ii.RecordType = string(client.UsageRecordTypeFrontend)
-}
-
-func convertGogoAny(in []*gogotypes.Any) []*any.Any {
-	out := make([]*any.Any, len(in))
-	for i := range in {
-		out[i] = &any.Any{TypeUrl: in[i].TypeUrl, Value: in[i].Value}
-	}
-	return out
-}
-
-func convertToGogoAny(in []*any.Any) []*gogotypes.Any {
-	out := make([]*gogotypes.Any, len(in))
-	for i := range in {
-		out[i] = &gogotypes.Any{TypeUrl: in[i].TypeUrl, Value: in[i].Value}
-	}
-	return out
 }
 
 func getCaps(label string) map[string]struct{} {

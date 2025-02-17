@@ -11,7 +11,6 @@ import (
 	"github.com/containerd/log"
 	distref "github.com/distribution/reference"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/layer"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/containerimage"
@@ -33,11 +32,12 @@ type ImageTagger interface {
 
 // Opt defines a struct for creating new exporter
 type Opt struct {
-	ImageStore   image.Store
-	Differ       Differ
-	ImageTagger  ImageTagger
-	ContentStore content.Store
-	LeaseManager leases.Manager
+	ImageStore            image.Store
+	Differ                Differ
+	ImageTagger           ImageTagger
+	ContentStore          content.Store
+	LeaseManager          leases.Manager
+	ImageExportedCallback func(ctx context.Context, id string, desc ocispec.Descriptor)
 }
 
 type imageExporter struct {
@@ -50,12 +50,13 @@ func New(opt Opt) (exporter.Exporter, error) {
 	return im, nil
 }
 
-func (e *imageExporter) Resolve(ctx context.Context, id int, opt map[string]string) (exporter.ExporterInstance, error) {
+func (e *imageExporter) Resolve(ctx context.Context, id int, attrs map[string]string) (exporter.ExporterInstance, error) {
 	i := &imageExporterInstance{
 		imageExporter: e,
 		id:            id,
+		attrs:         attrs,
 	}
-	for k, v := range opt {
+	for k, v := range attrs {
 		switch exptypes.ImageExporterOptKey(k) {
 		case exptypes.OptKeyName:
 			for _, v := range strings.Split(v, ",") {
@@ -80,10 +81,15 @@ type imageExporterInstance struct {
 	id          int
 	targetNames []distref.Named
 	meta        map[string][]byte
+	attrs       map[string]string
 }
 
 func (e *imageExporterInstance) ID() int {
 	return e.id
+}
+
+func (e *imageExporterInstance) Type() string {
+	return "image"
 }
 
 func (e *imageExporterInstance) Name() string {
@@ -92,6 +98,10 @@ func (e *imageExporterInstance) Name() string {
 
 func (e *imageExporterInstance) Config() *exporter.Config {
 	return exporter.NewConfig()
+}
+
+func (e *imageExporterInstance) Attrs() map[string]string {
+	return e.attrs
 }
 
 func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source, inlineCache exptypes.InlineCache, sessionID string) (map[string]string, exporter.DescriptorReference, error) {
@@ -217,6 +227,10 @@ func (e *imageExporterInstance) Export(ctx context.Context, inp *exporter.Source
 		return nil, nil, fmt.Errorf("failed to create a temporary descriptor reference: %w", err)
 	}
 
+	if e.opt.ImageExportedCallback != nil {
+		e.opt.ImageExportedCallback(ctx, id.String(), descRef.Descriptor())
+	}
+
 	return resp, descRef, nil
 }
 
@@ -230,7 +244,7 @@ func (e *imageExporterInstance) newTempReference(ctx context.Context, config []b
 	}
 
 	unlease := func(ctx context.Context) error {
-		err := done(compatcontext.WithoutCancel(ctx))
+		err := done(context.WithoutCancel(ctx))
 		if err != nil {
 			log.G(ctx).WithError(err).Error("failed to delete descriptor reference lease")
 		}

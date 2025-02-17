@@ -3,20 +3,29 @@ package networking
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
+	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/integration/internal/network"
+	"github.com/docker/docker/libnetwork/drivers/bridge"
+	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/daemon"
+	"github.com/docker/go-connections/nat"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 	"gotest.tools/v3/skip"
 )
 
@@ -29,7 +38,7 @@ func TestBridgeICC(t *testing.T) {
 	ctx := setupTest(t)
 
 	d := daemon.New(t)
-	d.StartWithBusybox(ctx, t, "-D", "--experimental", "--ip6tables")
+	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
@@ -37,7 +46,7 @@ func TestBridgeICC(t *testing.T) {
 
 	testcases := []struct {
 		name           string
-		bridgeOpts     []func(*types.NetworkCreate)
+		bridgeOpts     []func(*networktypes.CreateOptions)
 		ctr1MacAddress string
 		isIPv6         bool
 		isLinkLocal    bool
@@ -45,17 +54,17 @@ func TestBridgeICC(t *testing.T) {
 	}{
 		{
 			name:       "IPv4 non-internal network",
-			bridgeOpts: []func(*types.NetworkCreate){},
+			bridgeOpts: []func(*networktypes.CreateOptions){},
 		},
 		{
 			name: "IPv4 internal network",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithInternal(),
 			},
 		},
 		{
 			name: "IPv6 ULA on non-internal network",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithIPAM("fdf1:a844:380c:b200::/64", "fdf1:a844:380c:b200::1"),
 			},
@@ -63,7 +72,7 @@ func TestBridgeICC(t *testing.T) {
 		},
 		{
 			name: "IPv6 ULA on internal network",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithInternal(),
 				network.WithIPAM("fdf1:a844:380c:b247::/64", "fdf1:a844:380c:b247::1"),
@@ -72,7 +81,7 @@ func TestBridgeICC(t *testing.T) {
 		},
 		{
 			name: "IPv6 link-local address on non-internal network",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				// There's no real way to specify an IPv6 network is only used with SLAAC link-local IPv6 addresses.
 				// What we can do instead, is to tell the IPAM driver to assign addresses from the link-local prefix.
@@ -85,7 +94,7 @@ func TestBridgeICC(t *testing.T) {
 		},
 		{
 			name: "IPv6 link-local address on internal network",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithInternal(),
 				// See the note above about link-local addresses.
@@ -103,7 +112,7 @@ func TestBridgeICC(t *testing.T) {
 			//   addresses need not be qualified with a zone index."
 			// So, for this common case, LL addresses should be included in DNS config.
 			name: "IPv6 link-local address on non-internal network ping by name",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithIPAM("fe80::/64", "fe80::1"),
 			},
@@ -116,7 +125,7 @@ func TestBridgeICC(t *testing.T) {
 			// configure two networks with the same LL subnet, although perhaps it should
 			// be). So, again, no zone index is required and the LL address should be
 			// included in DNS config.
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithIPAM("fe80:1234::/64", "fe80:1234::1"),
 			},
@@ -124,7 +133,7 @@ func TestBridgeICC(t *testing.T) {
 		},
 		{
 			name: "IPv6 non-internal network with SLAAC LL address",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithIPAM("fdf1:a844:380c:b247::/64", "fdf1:a844:380c:b247::1"),
 			},
@@ -136,7 +145,7 @@ func TestBridgeICC(t *testing.T) {
 		},
 		{
 			name: "IPv6 internal network with SLAAC LL address",
-			bridgeOpts: []func(*types.NetworkCreate){
+			bridgeOpts: []func(*networktypes.CreateOptions){
 				network.WithIPv6(),
 				network.WithIPAM("fdf1:a844:380c:b247::/64", "fdf1:a844:380c:b247::1"),
 			},
@@ -275,15 +284,15 @@ func TestBridgeINC(t *testing.T) {
 	ctx := setupTest(t)
 
 	d := daemon.New(t)
-	d.StartWithBusybox(ctx, t, "-D", "--experimental", "--ip6tables")
+	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
 	defer c.Close()
 
 	type bridgesOpts struct {
-		bridge1Opts []func(*types.NetworkCreate)
-		bridge2Opts []func(*types.NetworkCreate)
+		bridge1Opts []func(*networktypes.CreateOptions)
+		bridge2Opts []func(*networktypes.CreateOptions)
 	}
 
 	testcases := []struct {
@@ -296,27 +305,27 @@ func TestBridgeINC(t *testing.T) {
 		{
 			name: "IPv4 non-internal network",
 			bridges: bridgesOpts{
-				bridge1Opts: []func(*types.NetworkCreate){},
-				bridge2Opts: []func(*types.NetworkCreate){},
+				bridge1Opts: []func(*networktypes.CreateOptions){},
+				bridge2Opts: []func(*networktypes.CreateOptions){},
 			},
 			stdout: "1 packets transmitted, 0 packets received",
 		},
 		{
 			name: "IPv4 internal network",
 			bridges: bridgesOpts{
-				bridge1Opts: []func(*types.NetworkCreate){network.WithInternal()},
-				bridge2Opts: []func(*types.NetworkCreate){network.WithInternal()},
+				bridge1Opts: []func(*networktypes.CreateOptions){network.WithInternal()},
+				bridge2Opts: []func(*networktypes.CreateOptions){network.WithInternal()},
 			},
 			stderr: "sendto: Network is unreachable",
 		},
 		{
 			name: "IPv6 ULA on non-internal network",
 			bridges: bridgesOpts{
-				bridge1Opts: []func(*types.NetworkCreate){
+				bridge1Opts: []func(*networktypes.CreateOptions){
 					network.WithIPv6(),
 					network.WithIPAM("fdf1:a844:380c:b200::/64", "fdf1:a844:380c:b200::1"),
 				},
-				bridge2Opts: []func(*types.NetworkCreate){
+				bridge2Opts: []func(*networktypes.CreateOptions){
 					network.WithIPv6(),
 					network.WithIPAM("fdf1:a844:380c:b247::/64", "fdf1:a844:380c:b247::1"),
 				},
@@ -327,12 +336,12 @@ func TestBridgeINC(t *testing.T) {
 		{
 			name: "IPv6 ULA on internal network",
 			bridges: bridgesOpts{
-				bridge1Opts: []func(*types.NetworkCreate){
+				bridge1Opts: []func(*networktypes.CreateOptions){
 					network.WithIPv6(),
 					network.WithInternal(),
 					network.WithIPAM("fdf1:a844:390c:b200::/64", "fdf1:a844:390c:b200::1"),
 				},
-				bridge2Opts: []func(*types.NetworkCreate){
+				bridge2Opts: []func(*networktypes.CreateOptions){
 					network.WithIPv6(),
 					network.WithInternal(),
 					network.WithIPAM("fdf1:a844:390c:b247::/64", "fdf1:a844:390c:b247::1"),
@@ -425,8 +434,6 @@ func TestDefaultBridgeIPv6(t *testing.T) {
 
 			d := daemon.New(t)
 			d.StartWithBusybox(ctx, t,
-				"--experimental",
-				"--ip6tables",
 				"--ipv6",
 				"--fixed-cidr-v6", tc.fixed_cidr_v6,
 			)
@@ -531,41 +538,35 @@ func TestDefaultBridgeAddresses(t *testing.T) {
 		},
 	}
 
-	for _, preserveKernelLL := range []bool{false, true} {
-		var dopts []daemon.Option
-		if preserveKernelLL {
-			dopts = append(dopts, daemon.WithEnvVars("DOCKER_BRIDGE_PRESERVE_KERNEL_LL=1"))
-		}
-		d := daemon.New(t, dopts...)
-		c := d.NewClientT(t)
+	d := daemon.New(t)
+	defer d.Stop(t)
+	c := d.NewClientT(t)
 
-		for _, tc := range testcases {
-			for _, step := range tc.steps {
-				tcName := fmt.Sprintf("kernel_ll_%v/%s/%s", preserveKernelLL, tc.name, step.stepName)
-				t.Run(tcName, func(t *testing.T) {
-					ctx := testutil.StartSpan(ctx, t)
-					// Check that the daemon starts - regression test for:
-					//   https://github.com/moby/moby/issues/46829
-					d.StartWithBusybox(ctx, t, "--experimental", "--ipv6", "--ip6tables", "--fixed-cidr-v6="+step.fixedCIDRV6)
+	for _, tc := range testcases {
+		for _, step := range tc.steps {
+			t.Run(tc.name+"/"+step.stepName, func(t *testing.T) {
+				ctx := testutil.StartSpan(ctx, t)
+				// Check that the daemon starts - regression test for:
+				//   https://github.com/moby/moby/issues/46829
+				d.StartWithBusybox(ctx, t, "--ipv6", "--fixed-cidr-v6="+step.fixedCIDRV6)
 
-					// Start a container, so that the bridge is set "up" and gets a kernel_ll address.
-					cID := container.Run(ctx, t, c)
-					defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+				// Start a container, so that the bridge is set "up" and gets a kernel_ll address.
+				cID := container.Run(ctx, t, c)
+				defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
 
-					d.Stop(t)
+				d.Stop(t)
 
-					// Check that the expected addresses have been applied to the bridge. (Skip in
-					// rootless mode, because the bridge is in a different network namespace.)
-					if !testEnv.IsRootless() {
-						res := testutil.RunCommand(ctx, "ip", "-6", "addr", "show", "docker0")
-						assert.Equal(t, res.ExitCode, 0, step.stepName)
-						stdout := res.Stdout()
-						for _, expAddr := range step.expAddrs {
-							assert.Check(t, is.Contains(stdout, expAddr))
-						}
+				// Check that the expected addresses have been applied to the bridge. (Skip in
+				// rootless mode, because the bridge is in a different network namespace.)
+				if !testEnv.IsRootless() {
+					res := testutil.RunCommand(ctx, "ip", "-6", "addr", "show", "docker0")
+					assert.Equal(t, res.ExitCode, 0, step.stepName)
+					stdout := res.Stdout()
+					for _, expAddr := range step.expAddrs {
+						assert.Check(t, is.Contains(stdout, expAddr))
 					}
-				})
-			}
+				}
+			})
 		}
 	}
 }
@@ -580,7 +581,7 @@ func TestInternalNwConnectivity(t *testing.T) {
 	ctx := setupTest(t)
 
 	d := daemon.New(t)
-	d.StartWithBusybox(ctx, t, "-D", "--experimental", "--ip6tables")
+	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
@@ -726,7 +727,72 @@ func TestNonIPv6Network(t *testing.T) {
 	assert.Check(t, is.Equal(strings.TrimSpace(sysctlRes.Combined()), "1"))
 }
 
-// Test that it's possible to set a sysctl on an interface in the container.
+// Check that starting the daemon with '--ip6tables=false' means no ip6tables
+// rules get set up for an IPv6 bridge network.
+func TestNoIP6Tables(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
+	skip.If(t, testEnv.IsRootless)
+
+	ctx := setupTest(t)
+
+	testcases := []struct {
+		name        string
+		option      string
+		expIPTables bool
+	}{
+		{
+			name:        "ip6tables on",
+			option:      "--ip6tables=true",
+			expIPTables: true,
+		},
+		{
+			name:   "ip6tables off",
+			option: "--ip6tables=false",
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutil.StartSpan(ctx, t)
+
+			d := daemon.New(t)
+			d.StartWithBusybox(ctx, t, tc.option)
+			defer d.Stop(t)
+
+			c := d.NewClientT(t)
+			defer c.Close()
+
+			const netName = "testnet"
+			const bridgeName = "testbr"
+			const subnet = "fdb3:2511:e851:34a9::/64"
+			network.CreateNoError(ctx, t, c, netName,
+				network.WithIPv6(),
+				network.WithOption("com.docker.network.bridge.name", bridgeName),
+				network.WithIPAM(subnet, "fdb3:2511:e851:34a9::1"),
+			)
+			defer network.RemoveNoError(ctx, t, c, netName)
+
+			id := container.Run(ctx, t, c, container.WithNetworkMode(netName))
+			defer c.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+
+			res, err := exec.Command("/usr/sbin/ip6tables-save").CombinedOutput()
+			assert.NilError(t, err)
+			if tc.expIPTables {
+				assert.Check(t, is.Contains(string(res), subnet))
+				assert.Check(t, is.Contains(string(res), bridgeName))
+			} else {
+				assert.Check(t, !strings.Contains(string(res), subnet),
+					fmt.Sprintf("Didn't expect to find '%s' in '%s'", subnet, string(res)))
+				assert.Check(t, !strings.Contains(string(res), bridgeName),
+					fmt.Sprintf("Didn't expect to find '%s' in '%s'", bridgeName, string(res)))
+			}
+		})
+	}
+}
+
+// Test that it's possible to set a sysctl on an interface in the container
+// when using API 1.46 (in later versions of the API, per-interface sysctls
+// must be set using driver option 'com.docker.network.endpoint.sysctls').
 // Regression test for https://github.com/moby/moby/issues/47619
 func TestSetInterfaceSysctl(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "no sysctl on Windows")
@@ -736,7 +802,7 @@ func TestSetInterfaceSysctl(t *testing.T) {
 	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
-	c := d.NewClientT(t)
+	c := d.NewClientT(t, client.WithVersion("1.46"))
 	defer c.Close()
 
 	const scName = "net.ipv4.conf.eth0.forwarding"
@@ -756,8 +822,7 @@ func TestSetInterfaceSysctl(t *testing.T) {
 
 // With a read-only "/proc/sys/net" filesystem (simulated using env var
 // DOCKER_TEST_RO_DISABLE_IPV6), check that if IPv6 can't be disabled on a
-// container interface, container creation fails - unless the error is ignored by
-// setting env var DOCKER_ALLOW_IPV6_ON_IPV4_INTERFACE=1.
+// container interface, container creation fails.
 // Regression test for https://github.com/moby/moby/issues/47751
 func TestReadOnlySlashProc(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
@@ -773,18 +838,11 @@ func TestReadOnlySlashProc(t *testing.T) {
 			name: "Normality",
 		},
 		{
-			name: "Read only no workaround",
+			name: "Read only",
 			daemonEnv: []string{
 				"DOCKER_TEST_RO_DISABLE_IPV6=1",
 			},
-			expErr: "failed to disable IPv6 on container's interface eth0, set env var DOCKER_ALLOW_IPV6_ON_IPV4_INTERFACE=1 to ignore this error",
-		},
-		{
-			name: "Read only with workaround",
-			daemonEnv: []string{
-				"DOCKER_TEST_RO_DISABLE_IPV6=1",
-				"DOCKER_ALLOW_IPV6_ON_IPV4_INTERFACE=1",
-			},
+			expErr: "failed to disable IPv6 on container's interface eth0",
 		},
 	}
 
@@ -827,4 +885,220 @@ func TestReadOnlySlashProc(t *testing.T) {
 			defer c.ContainerRemove(ctx, id6, containertypes.RemoveOptions{Force: true})
 		})
 	}
+}
+
+// Test that it's possible to set a sysctl on an interface in the container
+// using DriverOpts.
+func TestSetEndpointSysctl(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "no sysctl on Windows")
+
+	ctx := setupTest(t)
+	d := daemon.New(t)
+	d.StartWithBusybox(ctx, t)
+	defer d.Stop(t)
+
+	c := d.NewClientT(t)
+	defer c.Close()
+
+	const scName = "net.ipv4.conf.eth0.forwarding"
+	for _, ifname := range []string{"IFNAME", "ifname"} {
+		for _, val := range []string{"0", "1"} {
+			t.Run("ifname="+ifname+"/val="+val, func(t *testing.T) {
+				ctx := testutil.StartSpan(ctx, t)
+				runRes := container.RunAttach(ctx, t, c,
+					container.WithCmd("sysctl", "-qn", scName),
+					container.WithEndpointSettings(networktypes.NetworkBridge, &networktypes.EndpointSettings{
+						DriverOpts: map[string]string{
+							netlabel.EndpointSysctls: "net.ipv4.conf." + ifname + ".forwarding=" + val,
+						},
+					}),
+				)
+				defer c.ContainerRemove(ctx, runRes.ContainerID, containertypes.RemoveOptions{Force: true})
+
+				stdout := runRes.Stdout.String()
+				assert.Check(t, is.Equal(strings.TrimSpace(stdout), val))
+			})
+		}
+	}
+}
+
+func TestDisableNAT(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "bridge driver option doesn't apply to Windows")
+
+	ctx := setupTest(t)
+	d := daemon.New(t)
+	d.StartWithBusybox(ctx, t)
+	defer d.Stop(t)
+
+	c := d.NewClientT(t)
+	defer c.Close()
+
+	testcases := []struct {
+		name       string
+		gwMode4    string
+		gwMode6    string
+		expPortMap nat.PortMap
+	}{
+		{
+			name: "defaults",
+			expPortMap: nat.PortMap{
+				"80/tcp": []nat.PortBinding{
+					{HostIP: "0.0.0.0", HostPort: "8080"},
+					{HostIP: "::", HostPort: "8080"},
+				},
+			},
+		},
+		{
+			name:    "nat4 routed6",
+			gwMode4: "nat",
+			gwMode6: "routed",
+			expPortMap: nat.PortMap{
+				"80/tcp": []nat.PortBinding{
+					{HostIP: "0.0.0.0", HostPort: "8080"},
+					{HostIP: "::", HostPort: ""},
+				},
+			},
+		},
+		{
+			name:    "nat6 routed4",
+			gwMode4: "routed",
+			gwMode6: "nat",
+			expPortMap: nat.PortMap{
+				"80/tcp": []nat.PortBinding{
+					{HostIP: "0.0.0.0", HostPort: ""},
+					{HostIP: "::", HostPort: "8080"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutil.StartSpan(ctx, t)
+
+			const netName = "testnet"
+			nwOpts := []func(options *networktypes.CreateOptions){
+				network.WithIPv6(),
+				network.WithIPAM("fd2a:a2c3:4448::/64", "fd2a:a2c3:4448::1"),
+			}
+			if tc.gwMode4 != "" {
+				nwOpts = append(nwOpts, network.WithOption(bridge.IPv4GatewayMode, tc.gwMode4))
+			}
+			if tc.gwMode6 != "" {
+				nwOpts = append(nwOpts, network.WithOption(bridge.IPv6GatewayMode, tc.gwMode6))
+			}
+			network.CreateNoError(ctx, t, c, netName, nwOpts...)
+			defer network.RemoveNoError(ctx, t, c, netName)
+
+			id := container.Run(ctx, t, c,
+				container.WithNetworkMode(netName),
+				container.WithExposedPorts("80/tcp"),
+				container.WithPortMap(nat.PortMap{"80/tcp": {{HostPort: "8080"}}}),
+			)
+			defer c.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+
+			inspect := container.Inspect(ctx, t, c, id)
+			assert.Check(t, is.DeepEqual(inspect.NetworkSettings.Ports, tc.expPortMap))
+		})
+	}
+}
+
+// Check that a container on one network (bridge or Windows nat) can reach a
+// service in a container on another network, via a mapped port on the host.
+func TestPortMappedHairpin(t *testing.T) {
+	skip.If(t, testEnv.IsRootless)
+
+	ctx := setupTest(t)
+
+	var c client.APIClient
+	var driverName string
+
+	if runtime.GOOS == "windows" {
+		c = testEnv.APIClient()
+		driverName = "nat"
+	} else {
+		d := daemon.New(t)
+		d.StartWithBusybox(ctx, t)
+		defer d.Stop(t)
+
+		c = d.NewClientT(t)
+		defer c.Close()
+		driverName = "bridge"
+	}
+
+	// Find an address on the test host.
+	conn, err := net.Dial("tcp4", "hub.docker.com:80")
+	assert.NilError(t, err)
+	hostAddr := conn.LocalAddr().(*net.TCPAddr).IP.String()
+	conn.Close()
+
+	const serverNetName = "servernet"
+	network.CreateNoError(ctx, t, c, serverNetName, network.WithDriver(driverName))
+	defer network.RemoveNoError(ctx, t, c, serverNetName)
+	const clientNetName = "clientnet"
+	network.CreateNoError(ctx, t, c, clientNetName, network.WithDriver(driverName))
+	defer network.RemoveNoError(ctx, t, c, clientNetName)
+
+	serverId := container.Run(ctx, t, c,
+		container.WithNetworkMode(serverNetName),
+		container.WithExposedPorts("80"),
+		container.WithPortMap(nat.PortMap{"80": {{HostIP: "0.0.0.0"}}}),
+		container.WithCmd("httpd", "-f"),
+	)
+	defer c.ContainerRemove(ctx, serverId, containertypes.RemoveOptions{Force: true})
+
+	inspect := container.Inspect(ctx, t, c, serverId)
+	hostPort := inspect.NetworkSettings.Ports["80/tcp"][0].HostPort
+
+	clientCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	res := container.RunAttach(clientCtx, t, c,
+		container.WithNetworkMode(clientNetName),
+		container.WithCmd("wget", "http://"+hostAddr+":"+hostPort),
+	)
+	defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+	assert.Check(t, is.Contains(res.Stderr.String(), "404 Not Found"))
+}
+
+// Check that a container on an IPv4-only network can have a port mapping
+// from a specific IPv6 host address (using docker-proxy).
+// Regression test for https://github.com/moby/moby/issues/48067 (which
+// is about incorrectly reporting this as invalid config).
+func TestProxy4To6(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "uses bridge network and docker-proxy")
+	skip.If(t, testEnv.IsRootless)
+
+	ctx := setupTest(t)
+	d := daemon.New(t)
+	d.StartWithBusybox(ctx, t)
+	defer d.Stop(t)
+
+	c := d.NewClientT(t)
+	defer c.Close()
+
+	const netName = "ipv4net"
+	network.CreateNoError(ctx, t, c, netName)
+
+	serverId := container.Run(ctx, t, c,
+		container.WithNetworkMode(netName),
+		container.WithExposedPorts("80"),
+		container.WithPortMap(nat.PortMap{"80": {{HostIP: "::1"}}}),
+		container.WithCmd("httpd", "-f"),
+	)
+	defer c.ContainerRemove(ctx, serverId, containertypes.RemoveOptions{Force: true})
+
+	inspect := container.Inspect(ctx, t, c, serverId)
+	hostPort := inspect.NetworkSettings.Ports["80/tcp"][0].HostPort
+
+	var resp *http.Response
+	addr := "http://[::1]:" + hostPort
+	poll.WaitOn(t, func(t poll.LogT) poll.Result {
+		var err error
+		resp, err = http.Get(addr) // #nosec G107 -- Ignore "Potential HTTP request made with variable url"
+		if err != nil {
+			return poll.Continue("waiting for %s to be accessible: %v", addr, err)
+		}
+		return poll.Success()
+	})
+	assert.Check(t, is.Equal(resp.StatusCode, 404))
 }

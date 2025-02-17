@@ -5,10 +5,10 @@ Manage join tokens
 
 ### Options
 
-| Name            | Type | Default | Description        |
-|:----------------|:-----|:--------|:-------------------|
-| `-q`, `--quiet` |      |         | Only display token |
-| `--rotate`      |      |         | Rotate join token  |
+| Name            | Type   | Default | Description        |
+|:----------------|:-------|:--------|:-------------------|
+| `-q`, `--quiet` | `bool` |         | Only display token |
+| `--rotate`      | `bool` |         | Rotate join token  |
 
 
 <!---MARKER_GEN_END-->
@@ -21,8 +21,7 @@ role. You pass the token using the `--token` flag when you run
 [swarm join](swarm_join.md). Nodes use the join token only when they join the
 swarm.
 
-> **Note**
->
+> [!NOTE]
 > This is a cluster management command, and must be executed on a swarm
 > manager node. To learn about managers and workers, refer to the
 > [Swarm mode section](https://docs.docker.com/engine/swarm/) in the

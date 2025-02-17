@@ -820,6 +820,7 @@ definitions:
               - "default"
               - "process"
               - "hyperv"
+              - ""
           MaskedPaths:
             type: "array"
             description: "The list of paths to be masked inside the container (this overrides the default set of paths)"
@@ -2440,7 +2441,7 @@ definitions:
                 example: "json-file"
               Options:
                 description: |
-                  Driver-specific options for the selectd log driver, specified
+                  Driver-specific options for the selected log driver, specified
                   as key/value pairs.
                 type: "object"
                 additionalProperties:
@@ -2773,6 +2774,7 @@ definitions:
               - "default"
               - "process"
               - "hyperv"
+              - ""
           Init:
             description: "Run an init inside the container that forwards signals and reaps processes. This field is omitted if empty, and the default (as configured on the daemon) is used."
             type: "boolean"
@@ -3915,6 +3917,7 @@ definitions:
           - "default"
           - "hyperv"
           - "process"
+          - ""
       InitBinary:
         description: |
           Name and, optional, path of the `docker-init` binary.
@@ -5364,10 +5367,12 @@ paths:
           type: "string"
         - name: "h"
           in: "query"
+          required: true
           description: "Height of the tty session in characters"
           type: "integer"
         - name: "w"
           in: "query"
+          required: true
           description: "Width of the tty session in characters"
           type: "integer"
       tags: ["Container"]
@@ -6665,12 +6670,23 @@ paths:
       parameters:
         - name: "name"
           in: "path"
-          description: "Image name or ID."
+          description: |
+            Name of the image to push. For example, `registry.example.com/myimage`.
+            The image must be present in the local image store with the same name.
+
+            The name should be provided without tag; if a tag is provided, it
+            is ignored. For example, `registry.example.com/myimage:latest` is
+            considered equivalent to `registry.example.com/myimage`.
+
+            Use the `tag` parameter to specify the tag to push.
           type: "string"
           required: true
         - name: "tag"
           in: "query"
-          description: "The tag to associate with the image on the registry."
+          description: |
+            Tag of the image to push. For example, `latest`. If no tag is provided,
+            all tags of the given image that are present in the local image store
+            are pushed.
           type: "string"
         - name: "X-Registry-Auth"
           in: "header"
@@ -7016,7 +7032,7 @@ paths:
             type: "string"
             example: "OK"
           headers:
-            API-Version:
+            Api-Version:
               type: "string"
               description: "Max API Version the server supports"
             Docker-Experimental:
@@ -7553,10 +7569,12 @@ paths:
           type: "string"
         - name: "h"
           in: "query"
+          required: true
           description: "Height of the TTY session in characters"
           type: "integer"
         - name: "w"
           in: "query"
+          required: true
           description: "Width of the TTY session in characters"
           type: "integer"
       tags: ["Exec"]
@@ -8888,6 +8906,7 @@ paths:
             example:
               ListenAddr: "0.0.0.0:2377"
               AdvertiseAddr: "192.168.1.1:2377"
+              DataPathAddr: "192.168.1.1"
               RemoteAddrs:
                 - "node1:2377"
               JoinToken: "SWMTKN-1-3pu6hszjas19xyp7ghgosyx9k8atbfcr8p2is99znpy26u2lkl-7p73s1dx5in4tatdymyhg9hu2"

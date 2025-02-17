@@ -15,6 +15,7 @@ import (
 	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/config"
+	"github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/libcontainerd/local"
 	"github.com/docker/docker/libcontainerd/remote"
 	"github.com/docker/docker/libnetwork"
@@ -28,7 +29,6 @@ import (
 	"github.com/docker/docker/pkg/parsers/operatingsystem"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/runconfig"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -112,8 +112,11 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, isHyp
 	}
 	// The precision we could get is 0.01, because on Windows we have to convert to CPUPercent.
 	// We don't set the lower limit here and it is up to the underlying platform (e.g., Windows) to return an error.
-	if resources.NanoCPUs < 0 || resources.NanoCPUs > int64(sysinfo.NumCPU())*1e9 {
-		return warnings, fmt.Errorf("range of CPUs is from 0.01 to %d.00, as there are only %d CPUs available", sysinfo.NumCPU(), sysinfo.NumCPU())
+	if resources.NanoCPUs != 0 {
+		nc := runtime.NumCPU()
+		if resources.NanoCPUs < 0 || resources.NanoCPUs > int64(nc)*1e9 {
+			return warnings, fmt.Errorf("range of CPUs is from 0.01 to %[1]d.00, as there are only %[1]d CPUs available", nc)
+		}
 	}
 
 	if len(resources.BlkioDeviceReadBps) > 0 {
@@ -234,7 +237,7 @@ func configureMaxThreads(config *config.Config) error {
 }
 
 func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSandboxes map[string]interface{}) error {
-	netOptions, err := daemon.networkOptions(daemonCfg, nil, nil)
+	netOptions, err := daemon.networkOptions(daemonCfg, nil, daemon.id, nil)
 	if err != nil {
 		return err
 	}
@@ -309,7 +312,7 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 
 	defaultNetworkExists := false
 
-	if network, err := daemon.netController.NetworkByName(runconfig.DefaultDaemonNetworkMode().NetworkName()); err == nil {
+	if network, err := daemon.netController.NetworkByName(network.DefaultNetwork); err == nil {
 		hnsid := network.DriverOptions()[winlibnetwork.HNSID]
 		for _, v := range hnsresponse {
 			if hnsid == v.Id {
@@ -337,6 +340,7 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 		})
 
 		drvOptions := make(map[string]string)
+		var labels map[string]string
 		nid := ""
 		if n != nil {
 			nid = n.ID()
@@ -351,6 +355,7 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 
 			// restore option if it existed before
 			drvOptions = n.DriverOptions()
+			labels = n.Labels()
 			n.Delete()
 		}
 		netOption := map[string]string{
@@ -377,10 +382,8 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 
 		// If there is no nat network create one from the first NAT network
 		// encountered if it doesn't already exist
-		if !defaultNetworkExists &&
-			runconfig.DefaultDaemonNetworkMode() == containertypes.NetworkMode(strings.ToLower(v.Type)) &&
-			n == nil {
-			name = runconfig.DefaultDaemonNetworkMode().NetworkName()
+		if !defaultNetworkExists && strings.EqualFold(network.DefaultNetwork, v.Type) && n == nil {
+			name = network.DefaultNetwork
 			defaultNetworkExists = true
 		}
 
@@ -390,6 +393,7 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 				netlabel.GenericData: netOption,
 			}),
 			libnetwork.NetworkOptionIpam("default", "", v4Conf, v6Conf, nil),
+			libnetwork.NetworkOptionLabels(labels),
 		)
 		if err != nil {
 			log.G(context.TODO()).Errorf("Error occurred when creating network %v", err)
@@ -407,12 +411,12 @@ func (daemon *Daemon) initNetworkController(daemonCfg *config.Config, activeSand
 }
 
 func initBridgeDriver(controller *libnetwork.Controller, config config.BridgeConfig) error {
-	if _, err := controller.NetworkByName(runconfig.DefaultDaemonNetworkMode().NetworkName()); err == nil {
+	if _, err := controller.NetworkByName(network.DefaultNetwork); err == nil {
 		return nil
 	}
 
 	netOption := map[string]string{
-		winlibnetwork.NetworkName: runconfig.DefaultDaemonNetworkMode().NetworkName(),
+		winlibnetwork.NetworkName: network.DefaultNetwork,
 	}
 
 	var ipamOption libnetwork.NetworkOption
@@ -429,7 +433,7 @@ func initBridgeDriver(controller *libnetwork.Controller, config config.BridgeCon
 		ipamOption = libnetwork.NetworkOptionIpam("default", "", v4Conf, v6Conf, nil)
 	}
 
-	_, err := controller.NewNetwork(string(runconfig.DefaultDaemonNetworkMode()), runconfig.DefaultDaemonNetworkMode().NetworkName(), "",
+	_, err := controller.NewNetwork(network.DefaultNetwork, network.DefaultNetwork, "",
 		libnetwork.NetworkOptionGeneric(options.Generic{
 			netlabel.GenericData: netOption,
 		}),

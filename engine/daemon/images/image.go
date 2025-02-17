@@ -7,11 +7,11 @@ import (
 	"io"
 
 	"github.com/containerd/containerd/content"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
-	"github.com/containerd/containerd/platforms"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/errdefs"
@@ -238,7 +238,11 @@ func (i *ImageService) getImage(ctx context.Context, refOrID string, options bac
 		//   This may be confusing.
 		//   The alternative to this is to return an errdefs.Conflict error with a helpful message, but clients will not be
 		//   able to automatically tell what causes the conflict.
-		retErr = errdefs.NotFound(errors.Errorf("image with reference %s was found but does not match the specified platform: wanted %s, actual: %s", refOrID, platforms.Format(p), platforms.Format(imgPlat)))
+		imgName := refOrID
+		if ref, err := reference.ParseNamed(refOrID); err == nil {
+			imgName = reference.FamiliarString(ref)
+		}
+		retErr = errdefs.NotFound(errors.Errorf("image with reference %s was found but its platform (%s) does not match the specified platform (%s)", imgName, platforms.Format(imgPlat), platforms.Format(p)))
 	}()
 	ref, err := reference.ParseAnyReference(refOrID)
 	if err != nil {

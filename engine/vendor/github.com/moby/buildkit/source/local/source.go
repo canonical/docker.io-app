@@ -143,7 +143,7 @@ func (ls *localSourceHandler) Snapshot(ctx context.Context, g session.Group) (ca
 
 	timeoutCtx, cancel := context.WithCancelCause(ctx)
 	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 5*time.Second, errors.WithStack(context.DeadlineExceeded))
-	defer cancel(errors.WithStack(context.Canceled))
+	defer func() { cancel(errors.WithStack(context.Canceled)) }()
 
 	caller, err := ls.sm.Get(timeoutCtx, sessionID, false)
 	if err != nil {
@@ -208,7 +208,7 @@ func (ls *localSourceHandler) snapshot(ctx context.Context, caller session.Calle
 				bklog.G(ctx).Errorf("failed to reset mutable cachepolicy: %v", err)
 			}
 			contenthash.ClearCacheContext(mutable)
-			go mutable.Release(context.TODO())
+			go mutable.Release(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -334,7 +334,7 @@ const sharedKeyIndex = keySharedKey + ":"
 
 func searchSharedKey(ctx context.Context, store cache.MetadataStore, k string) ([]cacheRefMetadata, error) {
 	var results []cacheRefMetadata
-	mds, err := store.Search(ctx, sharedKeyIndex+k)
+	mds, err := store.Search(ctx, sharedKeyIndex+k, false)
 	if err != nil {
 		return nil, err
 	}

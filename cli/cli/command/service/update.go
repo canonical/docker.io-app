@@ -13,10 +13,10 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	mounttypes "github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
-	units "github.com/docker/go-units"
 	"github.com/moby/swarmkit/v2/api/defaults"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -108,6 +108,8 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 	flags.SetAnnotation(flagUlimitAdd, "version", []string{"1.41"})
 	flags.Var(newListOptsVar(), flagUlimitRemove, "Remove a ulimit option")
 	flags.SetAnnotation(flagUlimitRemove, "version", []string{"1.41"})
+	flags.Int64Var(&options.oomScoreAdj, flagOomScoreAdj, 0, "Tune host's OOM preferences (-1000 to 1000) ")
+	flags.SetAnnotation(flagOomScoreAdj, "version", []string{"1.46"})
 
 	// Add needs parsing, Remove only needs the key
 	flags.Var(newListOptsVar(), flagGenericResourcesRemove, "Remove a Generic resource")
@@ -365,6 +367,10 @@ func updateService(ctx context.Context, apiClient client.NetworkAPIClient, flags
 		taskResources().Reservations = spec.TaskTemplate.Resources.Reservations
 		updateInt64Value(flagReserveCPU, &task.Resources.Reservations.NanoCPUs)
 		updateInt64Value(flagReserveMemory, &task.Resources.Reservations.MemoryBytes)
+	}
+
+	if anyChanged(flags, flagOomScoreAdj) {
+		updateInt64(flagOomScoreAdj, &task.ContainerSpec.OomScoreAdj)
 	}
 
 	if err := addGenericResources(flags, task); err != nil {
@@ -709,8 +715,8 @@ func updateSysCtls(flags *pflag.FlagSet, field *map[string]string) {
 	}
 }
 
-func updateUlimits(flags *pflag.FlagSet, ulimits []*units.Ulimit) []*units.Ulimit {
-	newUlimits := make(map[string]*units.Ulimit)
+func updateUlimits(flags *pflag.FlagSet, ulimits []*container.Ulimit) []*container.Ulimit {
+	newUlimits := make(map[string]*container.Ulimit)
 
 	for _, ulimit := range ulimits {
 		newUlimits[ulimit.Name] = ulimit
@@ -730,7 +736,7 @@ func updateUlimits(flags *pflag.FlagSet, ulimits []*units.Ulimit) []*units.Ulimi
 	if len(newUlimits) == 0 {
 		return nil
 	}
-	limits := make([]*units.Ulimit, 0, len(newUlimits))
+	limits := make([]*container.Ulimit, 0, len(newUlimits))
 	for _, ulimit := range newUlimits {
 		limits = append(limits, ulimit)
 	}
@@ -1301,38 +1307,38 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 	toRemove := buildToRemoveSet(flags, flagNetworkRemove)
 	idsToRemove := make(map[string]struct{})
 	for networkIDOrName := range toRemove {
-		network, err := apiClient.NetworkInspect(ctx, networkIDOrName, types.NetworkInspectOptions{Scope: "swarm"})
+		nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, network.InspectOptions{Scope: "swarm"})
 		if err != nil {
 			return err
 		}
-		idsToRemove[network.ID] = struct{}{}
+		idsToRemove[nw.ID] = struct{}{}
 	}
 
 	existingNetworks := make(map[string]struct{})
 	var newNetworks []swarm.NetworkAttachmentConfig //nolint:prealloc
-	for _, network := range specNetworks {
-		if _, exists := idsToRemove[network.Target]; exists {
+	for _, nw := range specNetworks {
+		if _, exists := idsToRemove[nw.Target]; exists {
 			continue
 		}
 
-		newNetworks = append(newNetworks, network)
-		existingNetworks[network.Target] = struct{}{}
+		newNetworks = append(newNetworks, nw)
+		existingNetworks[nw.Target] = struct{}{}
 	}
 
 	if flags.Changed(flagNetworkAdd) {
 		values := flags.Lookup(flagNetworkAdd).Value.(*opts.NetworkOpt)
 		networks := convertNetworks(*values)
-		for _, network := range networks {
-			nwID, err := resolveNetworkID(ctx, apiClient, network.Target)
+		for _, nw := range networks {
+			nwID, err := resolveNetworkID(ctx, apiClient, nw.Target)
 			if err != nil {
 				return err
 			}
 			if _, exists := existingNetworks[nwID]; exists {
-				return errors.Errorf("service is already attached to network %s", network.Target)
+				return errors.Errorf("service is already attached to network %s", nw.Target)
 			}
-			network.Target = nwID
-			newNetworks = append(newNetworks, network)
-			existingNetworks[network.Target] = struct{}{}
+			nw.Target = nwID
+			newNetworks = append(newNetworks, nw)
+			existingNetworks[nw.Target] = struct{}{}
 		}
 	}
 

@@ -1,5 +1,5 @@
 variable "GO_VERSION" {
-    default = "1.21.10"
+    default = "1.22.11"
 }
 variable "VERSION" {
     default = ""
@@ -180,6 +180,8 @@ target "bin-image-cross" {
   inherits = ["bin-image"]
   output = ["type=image"]
   platforms = [
+    "darwin/amd64",
+    "darwin/arm64",
     "linux/amd64",
     "linux/arm/v6",
     "linux/arm/v7",

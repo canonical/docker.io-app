@@ -399,7 +399,7 @@ func checkGoroutineCount(ctx context.Context, apiClient client.APIClient, expect
 				t.Log("Waiting for goroutines to stabilize")
 				first = false
 			}
-			return poll.Continue("exepcted %d goroutines, got %d", expected, n)
+			return poll.Continue("expected %d goroutines, got %d", expected, n)
 		}
 		return poll.Success()
 	}
@@ -439,7 +439,7 @@ func pollCheck(t *testing.T, f checkF, compare func(x interface{}) assert.BoolOr
 		default:
 			panic(fmt.Errorf("pollCheck: type %T not implemented", r))
 		}
-		return poll.Continue(comment)
+		return poll.Continue("%v", comment)
 	}
 }
 

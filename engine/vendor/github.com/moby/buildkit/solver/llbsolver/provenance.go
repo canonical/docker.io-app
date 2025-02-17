@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
@@ -411,9 +411,10 @@ func NewProvenanceCreator(ctx context.Context, cp *provenance.Capture, res solve
 			}
 
 			if _, err := r.CacheKeys()[0].Exporter.ExportTo(ctx, e, solver.CacheExportOpt{
-				ResolveRemotes: resolveRemotes,
-				Mode:           solver.CacheExportModeRemoteOnly,
-				ExportRoots:    true,
+				ResolveRemotes:  resolveRemotes,
+				Mode:            solver.CacheExportModeRemoteOnly,
+				ExportRoots:     true,
+				IgnoreBacklinks: true,
 			}); err != nil {
 				return err
 			}
@@ -620,7 +621,7 @@ func toBuildSteps(def *pb.Definition, c *provenance.Capture, withUsage bool) ([]
 	var dgst digest.Digest
 	for _, dt := range def.Def {
 		var op pb.Op
-		if err := (&op).Unmarshal(dt); err != nil {
+		if err := op.UnmarshalVT(dt); err != nil {
 			return nil, nil, errors.Wrap(err, "failed to parse llb proto op")
 		}
 		if src := op.GetSource(); src != nil {
@@ -663,10 +664,10 @@ func toBuildSteps(def *pb.Definition, c *provenance.Capture, withUsage bool) ([]
 
 	out := make([]provenancetypes.BuildStep, 0, len(dgsts))
 	for i, dgst := range dgsts {
-		op := *ops[dgst]
+		op := ops[dgst].CloneVT()
 		inputs := make([]string, len(op.Inputs))
 		for i, inp := range op.Inputs {
-			inputs[i] = fmt.Sprintf("step%d:%d", indexes[inp.Digest], inp.Index)
+			inputs[i] = fmt.Sprintf("step%d:%d", indexes[digest.Digest(inp.Digest)], inp.Index)
 		}
 		op.Inputs = nil
 		s := provenancetypes.BuildStep{
@@ -696,7 +697,7 @@ func walkDigests(dgsts []digest.Digest, ops map[digest.Digest]*pb.Op, dgst diges
 	visited[dgst] = struct{}{}
 	for _, inp := range op.Inputs {
 		var err error
-		dgsts, err = walkDigests(dgsts, ops, inp.Digest, visited)
+		dgsts, err = walkDigests(dgsts, ops, digest.Digest(inp.Digest), visited)
 		if err != nil {
 			return nil, err
 		}

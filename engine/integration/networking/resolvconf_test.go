@@ -28,7 +28,7 @@ func TestResolvConfLocalhostIPv6(t *testing.T) {
 	tmpFileName := network.WriteTempResolvConf(t, "127.0.0.53")
 
 	d := daemon.New(t, daemon.WithEnvVars("DOCKER_TEST_RESOLV_CONF_PATH="+tmpFileName))
-	d.StartWithBusybox(ctx, t, "--experimental", "--ip6tables")
+	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
@@ -81,7 +81,7 @@ func TestInternalNetworkDNS(t *testing.T) {
 	// Set up a temp resolv.conf pointing at that DNS server, and a daemon using it.
 	tmpFileName := network.WriteTempResolvConf(t, "127.0.0.1")
 	d := daemon.New(t, daemon.WithEnvVars("DOCKER_TEST_RESOLV_CONF_PATH="+tmpFileName))
-	d.StartWithBusybox(ctx, t, "--experimental", "--ip6tables")
+	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
@@ -161,7 +161,7 @@ func TestInternalNetworkLocalDNS(t *testing.T) {
 	// Write a config file for busybox's dnsd.
 	td := t.TempDir()
 	fname := path.Join(td, "dnsd.conf")
-	err := os.WriteFile(fname, []byte("foo.example 192.0.2.42\n"), 0644)
+	err := os.WriteFile(fname, []byte("foo.example 192.0.2.42\n"), 0o644)
 	assert.NilError(t, err)
 
 	// Start a DNS server on the internal network.
@@ -206,10 +206,7 @@ func TestNslookupWindows(t *testing.T) {
 	defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
 
 	assert.Check(t, is.Equal(res.ExitCode, 0))
-	// Current default is to not-forward requests to external servers, which
+	// Current default is to forward requests to external servers, which
 	// can only be changed in daemon.json using feature flag "windows-dns-proxy".
-	// So, expect the lookup to fail...
-	assert.Check(t, is.Contains(res.Stderr.String(), "Server failed"))
-	// When the default behaviour is changed, nslookup should succeed...
-	//assert.Check(t, is.Contains(res.Stdout.String(), "Addresses:"))
+	assert.Check(t, is.Contains(res.Stdout.String(), "Addresses:"))
 }

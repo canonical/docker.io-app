@@ -10,11 +10,11 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/diff"
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/filters"
 	"github.com/containerd/containerd/gc"
 	"github.com/containerd/containerd/labels"
 	"github.com/containerd/containerd/leases"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/moby/buildkit/cache/metadata"
 	"github.com/moby/buildkit/client"
@@ -22,6 +22,7 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
 	"github.com/moby/buildkit/util/bklog"
+	"github.com/moby/buildkit/util/disk"
 	"github.com/moby/buildkit/util/flightcontrol"
 	"github.com/moby/buildkit/util/progress"
 	digest "github.com/opencontainers/go-digest"
@@ -48,6 +49,7 @@ type ManagerOpt struct {
 	Applier         diff.Applier
 	Differ          diff.Comparer
 	MetadataStore   *metadata.Store
+	Root            string
 	MountPoolRoot   string
 }
 
@@ -93,6 +95,8 @@ type cacheManager struct {
 	Differ          diff.Comparer
 	MetadataStore   *metadata.Store
 
+	root string
+
 	mountPool sharableMountPool
 
 	muPrune sync.Mutex // make sure parallel prune is not allowed so there will not be inconsistent results
@@ -109,6 +113,7 @@ func NewManager(opt ManagerOpt) (Manager, error) {
 		Applier:         opt.Applier,
 		Differ:          opt.Differ,
 		MetadataStore:   opt.MetadataStore,
+		root:            opt.Root,
 		records:         make(map[string]*cacheRecord),
 	}
 
@@ -137,7 +142,7 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 
 	descHandlers := descHandlersOf(opts...)
 	if desc.Digest != "" && (descHandlers == nil || descHandlers[desc.Digest] == nil) {
-		if _, err := cm.ContentStore.Info(ctx, desc.Digest); errors.Is(err, errdefs.ErrNotFound) {
+		if _, err := cm.ContentStore.Info(ctx, desc.Digest); errors.Is(err, cerrdefs.ErrNotFound) {
 			return nil, NeedsRemoteProviderError([]digest.Digest{desc.Digest})
 		} else if err != nil {
 			return nil, err
@@ -168,7 +173,7 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 	releaseParent := false
 	defer func() {
 		if releaseParent || rerr != nil && p != nil {
-			p.Release(context.TODO())
+			p.Release(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -242,7 +247,8 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 
 	defer func() {
 		if rerr != nil {
-			if err := cm.LeaseManager.Delete(context.TODO(), leases.Lease{
+			ctx := context.WithoutCancel(ctx)
+			if err := cm.LeaseManager.Delete(ctx, leases.Lease{
 				ID: l.ID,
 			}); err != nil {
 				bklog.G(ctx).Errorf("failed to remove lease: %+v", err)
@@ -253,7 +259,7 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 	if err := cm.LeaseManager.AddResource(ctx, l, leases.Resource{
 		ID:   snapshotID,
 		Type: "snapshots/" + cm.Snapshotter.Name(),
-	}); err != nil && !errdefs.IsAlreadyExists(err) {
+	}); err != nil && !cerrdefs.IsAlreadyExists(err) {
 		return nil, errors.Wrapf(err, "failed to add snapshot %s to lease", id)
 	}
 
@@ -374,7 +380,7 @@ func (cm *cacheManager) get(ctx context.Context, id string, pg progress.Controll
 		if rec.equalImmutable != nil {
 			return rec.equalImmutable.ref(triggerUpdate, descHandlers, pg), nil
 		}
-		return rec.mref(triggerUpdate, descHandlers).commit(ctx)
+		return rec.mref(triggerUpdate, descHandlers).commit()
 	}
 
 	return rec.ref(triggerUpdate, descHandlers, pg), nil
@@ -423,7 +429,7 @@ func (cm *cacheManager) getRecord(ctx context.Context, id string, opts ...RefOpt
 	}
 	defer func() {
 		if retErr != nil {
-			parents.release(context.TODO())
+			parents.release(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -484,7 +490,7 @@ func (cm *cacheManager) getRecord(ctx context.Context, id string, opts ...RefOpt
 	if rec.mutable {
 		// If the record is mutable, then the snapshot must exist
 		if _, err := cm.Snapshotter.Stat(ctx, rec.ID()); err != nil {
-			if !errdefs.IsNotFound(err) {
+			if !cerrdefs.IsNotFound(err) {
 				return nil, errors.Wrap(err, "failed to check mutable ref snapshot")
 			}
 			// the snapshot doesn't exist, clear this record
@@ -513,7 +519,7 @@ func (cm *cacheManager) getRecord(ctx context.Context, id string, opts ...RefOpt
 func (cm *cacheManager) parentsOf(ctx context.Context, md *cacheMetadata, opts ...RefOption) (ps parentRefs, rerr error) {
 	defer func() {
 		if rerr != nil {
-			ps.release(context.TODO())
+			ps.release(context.WithoutCancel(ctx))
 		}
 	}()
 	if parentID := md.getParent(); parentID != "" {
@@ -580,7 +586,7 @@ func (cm *cacheManager) New(ctx context.Context, s ImmutableRef, sess session.Gr
 
 	defer func() {
 		if err != nil && parent != nil {
-			parent.Release(context.TODO())
+			parent.Release(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -597,7 +603,8 @@ func (cm *cacheManager) New(ctx context.Context, s ImmutableRef, sess session.Gr
 
 	defer func() {
 		if err != nil {
-			if err := cm.LeaseManager.Delete(context.TODO(), leases.Lease{
+			ctx := context.WithoutCancel(ctx)
+			if err := cm.LeaseManager.Delete(ctx, leases.Lease{
 				ID: l.ID,
 			}); err != nil {
 				bklog.G(ctx).Errorf("failed to remove lease: %+v", err)
@@ -609,7 +616,7 @@ func (cm *cacheManager) New(ctx context.Context, s ImmutableRef, sess session.Gr
 	if err := cm.LeaseManager.AddResource(ctx, l, leases.Resource{
 		ID:   snapshotID,
 		Type: "snapshots/" + cm.Snapshotter.Name(),
-	}); err != nil && !errdefs.IsAlreadyExists(err) {
+	}); err != nil && !cerrdefs.IsAlreadyExists(err) {
 		return nil, errors.Wrapf(err, "failed to add snapshot %s to lease", snapshotID)
 	}
 
@@ -705,7 +712,7 @@ func (cm *cacheManager) Merge(ctx context.Context, inputParents []ImmutableRef, 
 	dhs := make(map[digest.Digest]*DescHandler)
 	defer func() {
 		if rerr != nil {
-			parents.release(context.TODO())
+			parents.release(context.WithoutCancel(ctx))
 		}
 	}()
 	for _, inputParent := range inputParents {
@@ -798,7 +805,8 @@ func (cm *cacheManager) createMergeRef(ctx context.Context, parents parentRefs, 
 	}
 	defer func() {
 		if rerr != nil {
-			if err := cm.LeaseManager.Delete(context.TODO(), leases.Lease{
+			ctx := context.WithoutCancel(ctx)
+			if err := cm.LeaseManager.Delete(ctx, leases.Lease{
 				ID: l.ID,
 			}); err != nil {
 				bklog.G(ctx).Errorf("failed to remove lease: %+v", err)
@@ -834,7 +842,7 @@ func (cm *cacheManager) Diff(ctx context.Context, lower, upper ImmutableRef, pg 
 	dhs := make(map[digest.Digest]*DescHandler)
 	defer func() {
 		if rerr != nil {
-			parents.release(context.TODO())
+			parents.release(context.WithoutCancel(ctx))
 		}
 	}()
 	for i, inputParent := range []ImmutableRef{lower, upper} {
@@ -889,7 +897,7 @@ func (cm *cacheManager) Diff(ctx context.Context, lower, upper ImmutableRef, pg 
 			mergeParents := parentRefs{mergeParents: make([]*immutableRef, len(upperLayers)-len(lowerLayers))}
 			defer func() {
 				if rerr != nil {
-					mergeParents.release(context.TODO())
+					mergeParents.release(context.WithoutCancel(ctx))
 				}
 			}()
 			for i := len(lowerLayers); i < len(upperLayers); i++ {
@@ -954,7 +962,8 @@ func (cm *cacheManager) createDiffRef(ctx context.Context, parents parentRefs, d
 	}
 	defer func() {
 		if rerr != nil {
-			if err := cm.LeaseManager.Delete(context.TODO(), leases.Lease{
+			ctx := context.WithoutCancel(ctx)
+			if err := cm.LeaseManager.Delete(ctx, leases.Lease{
 				ID: l.ID,
 			}); err != nil {
 				bklog.G(ctx).Errorf("failed to remove lease: %+v", err)
@@ -1036,7 +1045,7 @@ func (cm *cacheManager) pruneOnce(ctx context.Context, ch chan client.UsageInfo,
 	}
 
 	totalSize := int64(0)
-	if opt.KeepBytes != 0 {
+	if opt.MaxUsedSpace != 0 || opt.ReservedSpace != 0 || opt.MinFreeSpace != 0 {
 		du, err := cm.DiskUsage(ctx, client.DiskUsageInfo{})
 		if err != nil {
 			return err
@@ -1049,27 +1058,59 @@ func (cm *cacheManager) pruneOnce(ctx context.Context, ch chan client.UsageInfo,
 		}
 	}
 
+	var dstat disk.DiskStat
+	if opt.MinFreeSpace != 0 {
+		dstat, err = disk.GetDiskStat(cm.root)
+		if err != nil {
+			return err
+		}
+	}
+
 	return cm.prune(ctx, ch, pruneOpt{
 		filter:       filter,
 		all:          opt.All,
 		checkShared:  check,
 		keepDuration: opt.KeepDuration,
-		keepBytes:    opt.KeepBytes,
+		keepBytes:    calculateKeepBytes(totalSize, dstat, opt),
 		totalSize:    totalSize,
 	})
 }
 
-func (cm *cacheManager) prune(ctx context.Context, ch chan client.UsageInfo, opt pruneOpt) (err error) {
-	var toDelete []*deleteRecord
+func calculateKeepBytes(totalSize int64, dstat disk.DiskStat, opt client.PruneInfo) int64 {
+	// 0 values are special, and means we have no keep cap
+	if opt.MaxUsedSpace == 0 && opt.ReservedSpace == 0 && opt.MinFreeSpace == 0 {
+		return 0
+	}
 
+	// try and keep as many bytes as we can
+	keepBytes := opt.MaxUsedSpace
+
+	// if we need to free up space, then decrease to that
+	if excess := opt.MinFreeSpace - dstat.Free; excess > 0 {
+		if keepBytes == 0 {
+			keepBytes = totalSize - excess
+		} else {
+			keepBytes = min(keepBytes, totalSize-excess)
+		}
+	}
+
+	// but make sure we don't take the total below the reserved space
+	keepBytes = max(keepBytes, opt.ReservedSpace)
+
+	return keepBytes
+}
+
+func (cm *cacheManager) prune(ctx context.Context, ch chan client.UsageInfo, opt pruneOpt) (err error) {
 	if opt.keepBytes != 0 && opt.totalSize < opt.keepBytes {
 		return nil
 	}
 
+	var toDelete []*deleteRecord
+
 	cm.mu.Lock()
 
-	gcMode := opt.keepBytes != 0
 	cutOff := time.Now().Add(-opt.keepDuration)
+	gcMode := opt.keepBytes != 0
 
 	locked := map[*sync.Mutex]struct{}{}
 
@@ -1109,10 +1150,11 @@ func (cm *cacheManager) prune(ctx context.Context, ch chan client.UsageInfo, opt
 			}
 
 			c := &client.UsageInfo{
-				ID:         cr.ID(),
-				Mutable:    cr.mutable,
-				RecordType: recordType,
-				Shared:     shared,
+				ID:          cr.ID(),
+				Mutable:     cr.mutable,
+				RecordType:  recordType,
+				Shared:      shared,
+				Description: cr.GetDescription(),
 			}
 
 			usageCount, lastUsedAt := cr.getLastUsed()
@@ -1605,8 +1647,9 @@ type pruneOpt struct {
 	all          bool
 	checkShared  ExternalRefChecker
 	keepDuration time.Duration
-	keepBytes    int64
-	totalSize    int64
+
+	keepBytes int64
+	totalSize int64
 }
 
 type deleteRecord struct {

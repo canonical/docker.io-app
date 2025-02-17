@@ -2,6 +2,7 @@ package convert // import "github.com/docker/docker/daemon/cluster/convert"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	mounttypes "github.com/docker/docker/api/types/mount"
 	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/go-units"
 	gogotypes "github.com/gogo/protobuf/types"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/pkg/errors"
@@ -42,6 +42,7 @@ func containerSpecFromGRPC(c *swarmapi.ContainerSpec) *types.ContainerSpec {
 		CapabilityAdd:  c.CapabilityAdd,
 		CapabilityDrop: c.CapabilityDrop,
 		Ulimits:        ulimitsFromGRPC(c.Ulimits),
+		OomScoreAdj:    c.OomScoreAdj,
 	}
 
 	if c.DNSConfig != nil {
@@ -136,6 +137,7 @@ func containerSpecFromGRPC(c *swarmapi.ContainerSpec) *types.ContainerSpec {
 			mount.TmpfsOptions = &mounttypes.TmpfsOptions{
 				SizeBytes: m.TmpfsOptions.SizeBytes,
 				Mode:      m.TmpfsOptions.Mode,
+				Options:   tmpfsOptionsFromGRPC(m.TmpfsOptions.Options),
 			}
 		}
 		containerSpec.Mounts = append(containerSpec.Mounts, mount)
@@ -302,6 +304,7 @@ func containerToGRPC(c *types.ContainerSpec) (*swarmapi.ContainerSpec, error) {
 		CapabilityAdd:  c.CapabilityAdd,
 		CapabilityDrop: c.CapabilityDrop,
 		Ulimits:        ulimitsToGRPC(c.Ulimits),
+		OomScoreAdj:    c.OomScoreAdj,
 	}
 
 	if c.DNSConfig != nil {
@@ -423,6 +426,7 @@ func containerToGRPC(c *types.ContainerSpec) (*swarmapi.ContainerSpec, error) {
 			mount.TmpfsOptions = &swarmapi.Mount_TmpfsOptions{
 				SizeBytes: m.TmpfsOptions.SizeBytes,
 				Mode:      m.TmpfsOptions.Mode,
+				Options:   tmpfsOptionsToGRPC(m.TmpfsOptions.Options),
 			}
 		}
 
@@ -539,11 +543,11 @@ func isolationToGRPC(i container.Isolation) swarmapi.ContainerSpec_Isolation {
 	return swarmapi.ContainerIsolationDefault
 }
 
-func ulimitsFromGRPC(u []*swarmapi.ContainerSpec_Ulimit) []*units.Ulimit {
-	ulimits := make([]*units.Ulimit, len(u))
+func ulimitsFromGRPC(u []*swarmapi.ContainerSpec_Ulimit) []*container.Ulimit {
+	ulimits := make([]*container.Ulimit, len(u))
 
 	for i, ulimit := range u {
-		ulimits[i] = &units.Ulimit{
+		ulimits[i] = &container.Ulimit{
 			Name: ulimit.Name,
 			Soft: ulimit.Soft,
 			Hard: ulimit.Hard,
@@ -553,7 +557,7 @@ func ulimitsFromGRPC(u []*swarmapi.ContainerSpec_Ulimit) []*units.Ulimit {
 	return ulimits
 }
 
-func ulimitsToGRPC(u []*units.Ulimit) []*swarmapi.ContainerSpec_Ulimit {
+func ulimitsToGRPC(u []*container.Ulimit) []*swarmapi.ContainerSpec_Ulimit {
 	ulimits := make([]*swarmapi.ContainerSpec_Ulimit, len(u))
 
 	for i, ulimit := range u {
@@ -565,4 +569,33 @@ func ulimitsToGRPC(u []*units.Ulimit) []*swarmapi.ContainerSpec_Ulimit {
 	}
 
 	return ulimits
+}
+
+func tmpfsOptionsToGRPC(options [][]string) string {
+	// The shape of the swarmkit API that tmpfs options are a string. The shape
+	// of the docker API has them as a more structured array of arrays of
+	// strings. To smooth this over, we will marshall the array-of-arrays to
+	// json then pass that as the string.
+
+	// Marshalling json can create an error, but only in specific cases which
+	// are not relevant. We can ignore the possibility.
+	jsonBytes, _ := json.Marshal(options)
+	return string(jsonBytes)
+}
+
+func tmpfsOptionsFromGRPC(options string) [][]string {
+	// See tmpfsOptionsToGRPC for the reasoning. We undo what we did.
+	var unstring [][]string
+	// We can't return errors from here, so just don't ever pass anything that
+	// could result in an error.
+	//
+	// Duh.
+	//
+	// If there is something erroneous, then an empty return value will result,
+	// which should not be catastrophic. Because we control the data that is
+	// marshalled (in tmpfsOptionsToGRPC), we can more-or-less ensure that only
+	// valid data is unmarshalled here. If someone does something like muck
+	// with the GRPC API directly, then they get footgun, no apologies.
+	_ = json.Unmarshal([]byte(options), &unstring)
+	return unstring
 }

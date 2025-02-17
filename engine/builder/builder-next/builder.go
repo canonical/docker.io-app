@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/api/types/container"
 	timetypes "github.com/docker/docker/api/types/time"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builder/builder-next/exporter"
@@ -21,11 +22,11 @@ import (
 	"github.com/docker/docker/builder/builder-next/exporter/overrides"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/images"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libnetwork"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/go-units"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/control"
@@ -37,6 +38,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	grpcmetadata "google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 type errMultipleFilterValues struct{}
@@ -93,6 +95,7 @@ type Opt struct {
 	Snapshotter         string
 	ContainerdAddress   string
 	ContainerdNamespace string
+	Callbacks           exporter.BuildkitCallbacks
 }
 
 // Builder can build using BuildKit backend
@@ -160,16 +163,29 @@ func (b *Builder) DiskUsage(ctx context.Context) ([]*types.BuildCache, error) {
 			Description: r.Description,
 			InUse:       r.InUse,
 			Shared:      r.Shared,
-			Size:        r.Size_,
-			CreatedAt:   r.CreatedAt,
-			LastUsedAt:  r.LastUsedAt,
-			UsageCount:  int(r.UsageCount),
+			Size:        r.Size,
+			CreatedAt: func() time.Time {
+				if r.CreatedAt != nil {
+					return r.CreatedAt.AsTime()
+				}
+				return time.Time{}
+			}(),
+			LastUsedAt: func() *time.Time {
+				if r.LastUsedAt == nil {
+					return nil
+				}
+				t := r.LastUsedAt.AsTime()
+				return &t
+			}(),
+			UsageCount: int(r.UsageCount),
 		})
 	}
 	return items, nil
 }
 
-// Prune clears all reclaimable build cache
+// Prune clears all reclaimable build cache.
+//
+// FIXME(thaJeztah): wire up new options https://github.com/moby/moby/issues/48639
 func (b *Builder) Prune(ctx context.Context, opts types.BuildCachePruneOptions) (int64, []string, error) {
 	ch := make(chan *controlapi.UsageRecord)
 
@@ -195,10 +211,10 @@ func (b *Builder) Prune(ctx context.Context, opts types.BuildCachePruneOptions) 
 	eg.Go(func() error {
 		defer close(ch)
 		return b.controller.Prune(&controlapi.PruneRequest{
-			All:          pi.All,
-			KeepDuration: int64(pi.KeepDuration),
-			KeepBytes:    pi.KeepBytes,
-			Filter:       pi.Filter,
+			All:           pi.All,
+			KeepDuration:  int64(pi.KeepDuration),
+			ReservedSpace: pi.ReservedSpace,
+			Filter:        pi.Filter,
 		}, &pruneProxy{
 			streamProxy: streamProxy{ctx: ctx},
 			ch:          ch,
@@ -209,7 +225,7 @@ func (b *Builder) Prune(ctx context.Context, opts types.BuildCachePruneOptions) 
 	var cacheIDs []string
 	eg.Go(func() error {
 		for r := range ch {
-			size += r.Size_
+			size += r.Size
 			cacheIDs = append(cacheIDs, r.ID)
 		}
 		return nil
@@ -326,7 +342,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 		// TODO: remove once opt.Options.Platform is of type specs.Platform
 		_, err := platforms.Parse(opt.Options.Platform)
 		if err != nil {
-			return nil, err
+			return nil, errdefs.InvalidParameter(err)
 		}
 		frontendAttrs["platform"] = opt.Options.Platform
 	}
@@ -379,7 +395,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 		exporterAttrs["name"] = strings.Join(nameAttr, ",")
 	}
 
-	cache := controlapi.CacheOptions{}
+	cache := &controlapi.CacheOptions{}
 	if inlineCache := opt.Options.BuildArgs["BUILDKIT_INLINE_CACHE"]; inlineCache != nil {
 		if b, err := strconv.ParseBool(*inlineCache); err == nil && b {
 			cache.Exports = append(cache.Exports, &controlapi.CacheOptionsEntry{
@@ -391,7 +407,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 	req := &controlapi.SolveRequest{
 		Ref: id,
 		Exporters: []*controlapi.Exporter{
-			&controlapi.Exporter{Type: exporterName, Attrs: exporterAttrs},
+			{Type: exporterName, Attrs: exporterAttrs},
 		},
 		Frontend:      "dockerfile.v0",
 		FrontendAttrs: frontendAttrs,
@@ -400,7 +416,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 	}
 
 	if opt.Options.NetworkMode == "host" {
-		req.Entitlements = append(req.Entitlements, entitlements.EntitlementNetworkHost)
+		req.Entitlements = append(req.Entitlements, string(entitlements.EntitlementNetworkHost))
 	}
 
 	aux := streamformatter.AuxFormatter{Writer: opt.ProgressWriter.Output}
@@ -435,7 +451,7 @@ func (b *Builder) Build(ctx context.Context, opt backend.BuildConfig) (*builder.
 
 	eg.Go(func() error {
 		for sr := range ch {
-			dt, err := sr.Marshal()
+			dt, err := proto.Marshal(sr)
 			if err != nil {
 				return err
 			}
@@ -611,7 +627,7 @@ func toBuildkitExtraHosts(inp []string, hostGatewayIP net.IP) (string, error) {
 }
 
 // toBuildkitUlimits converts ulimits from docker type=soft:hard format to buildkit's csv format
-func toBuildkitUlimits(inp []*units.Ulimit) (string, error) {
+func toBuildkitUlimits(inp []*container.Ulimit) (string, error) {
 	if len(inp) == 0 {
 		return "", nil
 	}
@@ -622,6 +638,7 @@ func toBuildkitUlimits(inp []*units.Ulimit) (string, error) {
 	return strings.Join(ulimits, ","), nil
 }
 
+// FIXME(thaJeztah): wire-up new fields; see https://github.com/moby/moby/issues/48639
 func toBuildkitPruneInfo(opts types.BuildCachePruneOptions) (client.PruneInfo, error) {
 	var until time.Duration
 	untilValues := opts.Filters.Get("until")          // canonical
@@ -677,9 +694,9 @@ func toBuildkitPruneInfo(opts types.BuildCachePruneOptions) (client.PruneInfo, e
 		}
 	}
 	return client.PruneInfo{
-		All:          opts.All,
-		KeepDuration: until,
-		KeepBytes:    opts.KeepStorage,
-		Filter:       []string{strings.Join(bkFilter, ",")},
+		All:           opts.All,
+		KeepDuration:  until,
+		ReservedSpace: opts.KeepStorage,
+		Filter:        []string{strings.Join(bkFilter, ",")},
 	}, nil
 }

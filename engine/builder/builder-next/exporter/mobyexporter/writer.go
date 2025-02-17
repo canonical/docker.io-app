@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/util/progress"
@@ -43,6 +43,10 @@ func patchImageConfig(dt []byte, dps []digest.Digest, history []ocispec.History,
 	m := map[string]json.RawMessage{}
 	if err := json.Unmarshal(dt, &m); err != nil {
 		return nil, errors.Wrap(err, "failed to parse image config for patch")
+	}
+
+	if m == nil {
+		return nil, errors.New("null image config")
 	}
 
 	var rootFS ocispec.RootFS

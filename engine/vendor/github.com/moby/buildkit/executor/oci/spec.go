@@ -13,7 +13,6 @@ import (
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
-	"github.com/containerd/containerd/pkg/userns"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/moby/buildkit/executor"
@@ -21,6 +20,7 @@ import (
 	"github.com/moby/buildkit/util/network"
 	rootlessmountopts "github.com/moby/buildkit/util/rootless/mountopts"
 	traceexec "github.com/moby/buildkit/util/tracing/exec"
+	"github.com/moby/sys/userns"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
@@ -84,11 +84,7 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 		ctx = namespaces.WithNamespace(ctx, "buildkit")
 	}
 
-	if mountOpts, err := generateMountOpts(resolvConf, hostsFile); err == nil {
-		opts = append(opts, mountOpts...)
-	} else {
-		return nil, nil, err
-	}
+	opts = append(opts, generateMountOpts(resolvConf, hostsFile)...)
 
 	if securityOpts, err := generateSecurityOpts(meta.SecurityMode, apparmorProfile, selinuxB); err == nil {
 		opts = append(opts, securityOpts...)
@@ -135,7 +131,7 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 
 	s, err := oci.GenerateSpec(ctx, nil, c, opts...)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.WithStack(err)
 	}
 
 	if cgroupV2NamespaceSupported() {
@@ -151,7 +147,7 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 
 	// set the networking information on the spec
 	if err := namespace.Set(s); err != nil {
-		return nil, nil, err
+		return nil, nil, errors.WithStack(err)
 	}
 
 	sm := &submounts{}
@@ -183,9 +179,25 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 		}
 		releasers = append(releasers, release)
 		for _, mount := range mounts {
+			mount, release, err := compactLongOverlayMount(mount, m.Readonly)
+			if err != nil {
+				releaseAll()
+				return nil, nil, err
+			}
+
+			if release != nil {
+				releasers = append(releasers, release)
+			}
+
 			mount, err = sm.subMount(mount, m.Selector)
 			if err != nil {
 				releaseAll()
+				var os *os.PathError
+				if errors.As(err, &os) {
+					if strings.HasSuffix(os.Path, m.Selector) {
+						os.Path = m.Selector
+					}
+				}
 				return nil, nil, err
 			}
 			s.Mounts = append(s.Mounts, specs.Mount{
@@ -211,6 +223,7 @@ func GenerateSpec(ctx context.Context, meta executor.Meta, mounts []executor.Mou
 	if userns.RunningInUserNS() {
 		s.Mounts, err = rootlessmountopts.FixUpOCI(s.Mounts)
 		if err != nil {
+			releaseAll()
 			return nil, nil, err
 		}
 	}
@@ -237,7 +250,7 @@ func (s *submounts) subMount(m mount.Mount, subPath string) (mount.Mount, error)
 	}
 	h, err := hashstructure.Hash(m, hashstructure.FormatV2, nil)
 	if err != nil {
-		return mount.Mount{}, err
+		return mount.Mount{}, errors.WithStack(err)
 	}
 	if mr, ok := s.m[h]; ok {
 		if sm, ok := mr.subRefs[subPath]; ok {
@@ -261,26 +274,8 @@ func (s *submounts) subMount(m mount.Mount, subPath string) (mount.Mount, error)
 		return mount.Mount{}, err
 	}
 
-	var mntType string
-	opts := []string{}
-	if m.ReadOnly() {
-		opts = append(opts, "ro")
-	}
-
-	if runtime.GOOS != "windows" {
-		// Windows uses a mechanism similar to bind mounts, but will err out if we request
-		// a mount type it does not understand. Leaving the mount type empty on Windows will
-		// yield the same result.
-		mntType = "bind"
-		opts = append(opts, "rbind")
-	}
-
 	s.m[h] = mountRef{
-		mount: mount.Mount{
-			Source:  mp,
-			Type:    mntType,
-			Options: opts,
-		},
+		mount:   bind(mp, m.ReadOnly()),
 		unmount: lm.Unmount,
 		subRefs: map[string]mountRef{},
 	}
@@ -311,4 +306,46 @@ func (s *submounts) cleanup() {
 		}(m)
 	}
 	wg.Wait()
+}
+
+func bind(p string, ro bool) mount.Mount {
+	m := mount.Mount{
+		Source: p,
+	}
+	if runtime.GOOS != "windows" {
+		// Windows uses a mechanism similar to bind mounts, but will err out if we request
+		// a mount type it does not understand. Leaving the mount type empty on Windows will
+		// yield the same result.
+		m.Type = "bind"
+		m.Options = []string{"rbind"}
+	}
+	if ro {
+		m.Options = append(m.Options, "ro")
+	}
+	return m
+}
+
+func compactLongOverlayMount(m mount.Mount, ro bool) (mount.Mount, func() error, error) {
+	if m.Type != "overlay" {
+		return m, nil, nil
+	}
+
+	sz := 0
+	for _, opt := range m.Options {
+		sz += len(opt) + 1
+	}
+
+	// can fit to single page, no need to compact
+	if sz < 4096-512 {
+		return m, nil, nil
+	}
+
+	lm := snapshot.LocalMounterWithMounts([]mount.Mount{m})
+
+	mp, err := lm.Mount()
+	if err != nil {
+		return mount.Mount{}, nil, err
+	}
+
+	return bind(mp, ro), lm.Unmount, nil
 }
