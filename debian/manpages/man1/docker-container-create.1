@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-container-create - Create a new container
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker container create [OPTIONS] IMAGE [COMMAND] [ARG...]\fP
 
 
 .SH DESCRIPTION
-.PP
 Creates a writeable container layer over the specified image and prepares it for
 running the specified command. The container ID is then printed to STDOUT. This
 is similar to \fBdocker run -d\fP except the container is never started. You can
@@ -23,7 +20,6 @@ any point.
 The initial status of the container created with \fBdocker create\fP is 'created'.
 
 .SS OPTIONS
-.PP
 The \fBCONTAINER-DIR\fR must be an absolute path such as \fB/src/docs\fR\&. The \fBHOST-DIR\fR
 can be an absolute path or a \fBname\fR value. A \fBname\fR value must start with an
 alphanumeric character, followed by \fBa-z0-9\fR, \fB_\fR (underscore), \fB\&.\fR (period) or
@@ -121,7 +117,6 @@ apply to bind mounts..
 
 
 .SH OPTIONS
-.PP
 \fB--add-host\fP=
 	Add a custom host-to-IP mapping (host:ip)
 
@@ -156,9 +151,9 @@ apply to bind mounts..
 .PP
 \fB--cgroupns\fP=""
 	Cgroup namespace to use (host|private)
-'host':    Run the container in the Docker host's cgroup namespace
-'private': Run the container in its own private cgroup namespace
-'':        Use the cgroup namespace as configured by the
+\&'host':    Run the container in the Docker host's cgroup namespace
+\&'private': Run the container in its own private cgroup namespace
+\&'':        Use the cgroup namespace as configured by the
            default-cgroupns-mode option on the daemon (default)
 
 .PP
@@ -455,7 +450,7 @@ apply to bind mounts..
 
 .PP
 \fB--rm\fP[=false]
-	Automatically remove the container when it exits
+	Automatically remove the container and its associated anonymous volumes when it exits
 
 .PP
 \fB--runtime\fP=""
@@ -539,8 +534,6 @@ Linux namespaces. On Microsoft Windows, you can specify these values:
 * `process`: Namespace isolation only.
 * `hyperv`: Hyper-V hypervisor partition-based isolation.
 
-Specifying the `--isolation` flag without a value is the same as setting `--isolation="default"`.
-
 ### Dealing with dynamically created devices (--device-cgroup-rule)
 
 Devices available to a container are assigned at creation time. The
@@ -556,7 +549,6 @@ following rule would be added:
 
 ```console
 $ docker create --device-cgroup-rule='c 42:* rmw' --name my-container my-image
-
 .EE
 
 .PP
@@ -572,5 +564,4 @@ the create/run command
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-container(1)\fP

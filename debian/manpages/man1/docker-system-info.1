@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-system-info - Display system-wide information
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker system info [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 This command displays system wide information regarding the Docker installation.
 Information displayed includes the kernel version, number of containers and images.
 The number of images shown is the number of unique images. The same image tagged
@@ -37,7 +34,6 @@ available on the volume where \fB/var/lib/docker\fR is mounted.
 
 .SH EXAMPLES
 .SH Display Docker system information
-.PP
 The example below shows the output for a daemon running on Ubuntu Linux,
 using the \fBoverlay2\fR storage driver. As can be seen in the output, additional
 information about the \fBoverlay2\fR storage driver is shown:
@@ -105,7 +101,6 @@ Server:
   myinsecurehost:5000
   127.0.0.0/8
  Live Restore Enabled: false
-
 .EE
 
 .PP
@@ -114,16 +109,14 @@ You can also specify the output format:
 .EX
 $ docker info --format '{{json .}}'
 {"ID":"4cee4408-10d2-4e17-891c-a41736ac4536","Containers":14, ...}
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--format\fP=""
 	Format output using a custom template:
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -132,5 +125,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-system(1)\fP

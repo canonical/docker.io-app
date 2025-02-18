@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-volume-create - Create a volume
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker volume create [OPTIONS] [VOLUME]\fP
 
 
 .SH DESCRIPTION
-.PP
 Creates a new volume that containers can consume and store data in. If a name
 is not specified, Docker generates a random name. You create a volume and then
 configure the container to use it, for example:
@@ -21,7 +18,6 @@ configure the container to use it, for example:
 $ docker volume create hello
 hello
 $ docker run -d -v hello:/world busybox ls /world
-
 .EE
 
 .PP
@@ -34,13 +30,11 @@ useful if two containers need access to shared data. For example, if one
 container writes and the other reads the data.
 
 .SH Driver specific options
-.PP
 Some volume drivers may take options to customize the volume creation. Use the
 \fB-o\fR or \fB--opt\fR flags to pass driver options:
 
 .EX
 $ docker volume create --driver fake --opt tardis=blue --opt timey=wimey
-
 .EE
 
 .PP
@@ -56,7 +50,6 @@ The built-in \fBlocal\fR driver on Linux accepts options similar to the linux
 
 .EX
 $ docker volume create --driver local --opt type=tmpfs --opt device=tmpfs --opt o=size=100m,uid=1000
-
 .EE
 
 .PP
@@ -64,12 +57,10 @@ Another example:
 
 .EX
 $ docker volume create --driver local --opt type=btrfs --opt device=/dev/sda2
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB--availability\fP="active"
 	Cluster Volume availability ("active", "pause", "drain")
 
@@ -127,5 +118,4 @@ $ docker volume create --driver local --opt type=btrfs --opt device=/dev/sda2
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-volume(1)\fP

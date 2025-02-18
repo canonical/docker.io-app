@@ -1,30 +1,25 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-plugin-ls - List plugins
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker plugin ls [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 Lists all the plugins that are currently installed. You can install plugins
 using the \fBdocker plugin install\fR command.
 You can also filter using the \fB-f\fR or \fB--filter\fR flag.
 
 .SH Filters
-.PP
 Filter output based on these conditions:
    - enabled=(true|false) - plugins that are enabled or not
    - capability= - filters plugins based on capabilities (currently \fBvolumedriver\fR, \fBnetworkdriver\fR, \fBipamdriver\fR, or \fBauthz\fR)
 
 .SH Format
-.PP
 Format the output using the given Go template.
    Valid placeholders:
       .ID - Plugin ID.
@@ -40,21 +35,18 @@ $ docker plugin ls
 ID                  NAME                                    DESCRIPTION                         ENABLED
 869080b57404        tiborvass/sample-volume-plugin:latest   A sample volume plugin for Docker   true
 141bf6c02ddd        vieux/sshfs:latest                      sshFS plugin for Docker             false
-
 .EE
 
 .SH Display plugins with their ID and names
 .EX
 $ docker plugin ls --format "{{.ID}}: {{.Name}}"
 869080b57404: tiborvass/sample-volume-plugin:latest
-
 .EE
 
 .SH Display plugins in JSON format
 .EX
 $ docker plugin ls --format json
 {"Description":"A sample volume plugin for Docker","Enabled":true,"ID":"2788a2da7e12","Name":"tiborvass/sample-volume-plugin:latest","PluginReference":"docker.io/tiborvass/sample-volume-plugin:latest"}
-
 .EE
 
 .SH Display enabled plugins
@@ -62,7 +54,6 @@ $ docker plugin ls --format json
 $ docker plugin ls --filter enabled=true
 ID                  NAME                                    DESCRIPTION                         ENABLED
 869080b57404        tiborvass/sample-volume-plugin:latest   A sample volume plugin for Docker   true
-
 .EE
 
 .SH Display plugins with \fBvolumedriver\fR capability
@@ -70,22 +61,20 @@ ID                  NAME                                    DESCRIPTION         
 $ docker plugin ls --filter capability=volumedriver --format "table {{.ID}}\\t{{.Name}}"
 ID                  Name
 869080b57404        tiborvass/sample-volume-plugin:latest
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--filter\fP=
 	Provide filter values (e.g. "enabled=true")
 
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -102,5 +91,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-plugin(1)\fP

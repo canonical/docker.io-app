@@ -1,23 +1,19 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-service-create - Create a new service
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker service create [OPTIONS] IMAGE [COMMAND] [ARG...]\fP
 
 
 .SH DESCRIPTION
-.PP
 Create a new service
 
 
 .SH OPTIONS
-.PP
 \fB--cap-add\fP=
 	Add Linux capabilities
 
@@ -178,6 +174,10 @@ Create a new service
 	Do not query the registry to resolve image digest and supported platforms
 
 .PP
+\fB--oom-score-adj\fP=0
+	Tune host's OOM preferences (-1000 to 1000)
+
+.PP
 \fB--placement-pref\fP=
 	Add a placement preference
 
@@ -311,5 +311,4 @@ Create a new service
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-service(1)\fP

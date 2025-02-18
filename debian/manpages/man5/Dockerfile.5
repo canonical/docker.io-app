@@ -2,12 +2,10 @@
 .TH "DOCKERFILE" "5" "MAY 2014" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
-Dockerfile - automate the steps of creating a Docker image
+Dockerfile \- automate the steps of creating a Docker image
 
 
 .SH INTRODUCTION
-.PP
 The \fBDockerfile\fP is a configuration file that automates the steps of creating
 a Docker image. It is similar to a Makefile. Docker reads instructions from the
 \fBDockerfile\fP to automate the steps otherwise performed manually to create an
@@ -20,7 +18,6 @@ path of directory that contains \fBDockerfile\fP as the argument.
 
 
 .SH SYNOPSIS
-.PP
 INSTRUCTION arguments
 
 .PP
@@ -31,13 +28,11 @@ FROM image
 
 
 .SH DESCRIPTION
-.PP
 A Dockerfile is a file that automates the steps of creating a Docker image.
 A Dockerfile is similar to a Makefile.
 
 
 .SH USAGE
-.PP
 docker build .
 
 .PP
@@ -50,7 +45,6 @@ docker build .
 
 .EX
   docker build -t repository/tag .
-
 .EE
 
 .PP
@@ -60,12 +54,11 @@ docker build .
   image. The Docker daemon automatically cleans up the context it is given.
 
 .PP
-Docker re-uses intermediate images whenever possible. This significantly
+Docker reuses intermediate images whenever possible. This significantly
   accelerates the \fIdocker build\fP process.
 
 
 .SH FORMAT
-.PP
 \fBFROM image\fR
 
 .PP
@@ -111,7 +104,6 @@ Docker re-uses intermediate images whenever possible. This significantly
 
   # Executable form
   RUN ["executable", "param1", "param2"]
-
 .EE
 
 .PP
@@ -143,7 +135,6 @@ Note that the exec form is parsed as a JSON array, which means that you must
 
   # the command is run in a shell - /bin/sh -c
   CMD command param1 param2
-
 .EE
 
 .PP
@@ -163,7 +154,6 @@ Note that the exec form is parsed as a JSON array, which means that you must
 .EX
   FROM ubuntu
   CMD echo "This is a test." | wc -
-
 .EE
 
 .PP
@@ -175,7 +165,6 @@ Note that the exec form is parsed as a JSON array, which means that you must
 .EX
   FROM ubuntu
   CMD ["/usr/bin/wc","--help"]
-
 .EE
 
 .PP
@@ -195,7 +184,6 @@ Note that the exec form is parsed as a JSON array, which means that you must
   LABEL <key>[ <value>]
   LABEL <key>[ <value>]
   ...
-
 .EE
 
 .PP
@@ -210,7 +198,6 @@ The \fBLABEL\fP instruction adds metadata to an image. A \fBLABEL\fP is a
   LABEL com.example.vendor.is-beta ""
   LABEL com.example.vendor.is-beta=
   LABEL com.example.vendor.is-beta=""
-
 .EE
 
 .PP
@@ -273,7 +260,6 @@ Note that setting "\fBENV DEBIAN_FRONTEND=noninteractive\fR" may cause
 
   # Required for paths with whitespace
   ADD ["<src>",... "<dest>"]
-
 .EE
 
 .PP
@@ -298,7 +284,6 @@ The \fBADD\fP instruction copies new files, directories
 
   # Required for paths with whitespace
   COPY ["<src>",... "<dest>"]
-
 .EE
 
 .PP
@@ -322,7 +307,6 @@ The \fBCOPY\fP instruction copies new files from \fB<src>\fR and
 
   # run command in a shell - /bin/sh -c
   ENTRYPOINT command param1 param2
-
 .EE
 
 .PP
@@ -342,7 +326,6 @@ The \fBCOPY\fP instruction copies new files from \fB<src>\fR and
 .EX
   FROM ubuntu
   ENTRYPOINT wc -l -
-
 .EE
 
 .PP
@@ -354,7 +337,6 @@ This means that the Dockerfile's image always takes stdin as input (that's
   FROM ubuntu
   CMD ["-l", "-"]
   ENTRYPOINT ["/usr/bin/wc"]
-
 .EE
 
 .PP
@@ -392,7 +374,6 @@ Until the \fBUSER\fP instruction is set, instructions will be run as root. The U
   WORKDIR b
   WORKDIR c
   RUN pwd
-
 .EE
 
 .PP
@@ -410,7 +391,6 @@ The \fBARG\fR instruction defines a variable that users can pass at build-time t
 
 .EX
   [Warning] One or more build-args [foo] were not consumed
-
 .EE
 
 .PP
@@ -422,7 +402,6 @@ The Dockerfile author can define a single variable by specifying \fBARG\fR once 
   ARG user1
   ARG buildno
   ...
-
 .EE
 
 .PP
@@ -433,7 +412,6 @@ A Dockerfile author may optionally specify a default value for an \fBARG\fR inst
   ARG user1=someuser
   ARG buildno=1
   ...
-
 .EE
 
 .PP
@@ -451,7 +429,6 @@ An \fBARG\fR variable definition comes into effect from the line on which it is
   3 ARG user
   4 USER $user
   ...
-
 .EE
 
 .PP
@@ -459,7 +436,6 @@ A user builds this file by calling:
 
 .EX
   $ docker build --build-arg user=what_user Dockerfile
-
 .EE
 
 .PP
@@ -489,7 +465,6 @@ You can use an \fBARG\fR or an \fBENV\fR instruction to specify variables that a
   2 ARG CONT_IMG_VER
   3 ENV CONT_IMG_VER=v1.0.0
   4 RUN echo $CONT_IMG_VER
-
 .EE
 
 .PP
@@ -497,7 +472,6 @@ Then, assume this image is built with this command:
 
 .EX
   $ docker build --build-arg CONT_IMG_VER=v2.0.1 Dockerfile
-
 .EE
 
 .PP
@@ -515,7 +489,6 @@ Using the example above but a different \fBENV\fR specification you can create m
   2 ARG CONT_IMG_VER
   3 ENV CONT_IMG_VER=${CONT_IMG_VER:-v1.0.0}
   4 RUN echo $CONT_IMG_VER
-
 .EE
 
 .PP
@@ -524,7 +497,6 @@ Unlike an \fBARG\fR instruction, \fBENV\fR values are always persisted in the bu
 
 .EX
   $ docker build Dockerfile
-
 .EE
 
 .PP
@@ -541,8 +513,6 @@ The variable expansion technique in this example allows you to pass arguments
 .PP
 Docker has a set of predefined \fBARG\fR variables that you can use without a
   corresponding \fBARG\fR instruction in the Dockerfile.
-
-.RS
 .IP \(bu 2
 \fBHTTP_PROXY\fR
 .IP \(bu 2
@@ -564,15 +534,12 @@ Docker has a set of predefined \fBARG\fR variables that you can use without a
 .IP \(bu 2
 \fBall_proxy\fR
 
-.RE
-
 .PP
 To use these, pass them on the command line using \fB--build-arg\fR flag, for
   example:
 
 .EX
   $ docker build --build-arg HTTPS_PROXY=https://my-proxy.example.com .
-
 .EE
 
 .PP
@@ -606,7 +573,6 @@ Consider an image intended as a reusable python application builder. It must
 
 
 .SH HISTORY
-.PP
 *May 2014, Compiled by Zac Dover (zdover at redhat dot com) based on docker.com Dockerfile documentation.
 *Feb 2015, updated by Brian Goff (cpuguy83@gmail.com) for readability
 *Sept 2015, updated by Sally O'Malley (somalley@redhat.com)

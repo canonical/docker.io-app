@@ -1,13 +1,12 @@
+'\" t
 .nh
 .TH "DOCKER" "1" "JUNE 2014" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
-docker-run - Create and run a new container from an image
+docker-run \- Create and run a new container from an image
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker run\fP
 [\fB-a\fP|\fB--attach\fP[=\fI[]\fP]]
 [\fB--add-host\fP[=\fI[]\fP]]
@@ -101,7 +100,6 @@ IMAGE [COMMAND] [ARG...]
 
 
 .SH DESCRIPTION
-.PP
 Run a process in a new container. \fBdocker run\fP starts a process with its own
 file system, its own networking, and its own isolated process tree. The IMAGE
 which starts the process may define defaults related to the process that will be
@@ -117,7 +115,6 @@ pull\fP IMAGE, before it starts the container from that image.
 
 
 .SH OPTIONS
-.PP
 \fB-a\fP, \fB--attach\fP=[]
    Attach to STDIN, STDOUT or STDERR.
 
@@ -195,7 +192,6 @@ PID    container	CPU	CPU share
 100    {C0}		0	100% of CPU0
 101    {C1}		1	100% of CPU1
 102    {C1}		2	100% of CPU2
-
 .EE
 
 .PP
@@ -229,7 +225,6 @@ PID    container	CPU	CPU share
 On Windows Server containers, this is approximated as a percentage of total CPU usage.
 
 On Windows Server containers, the processor resource controls are mutually exclusive, the order of precedence is CPUCount first, then CPUShares, and CPUPercent last.
-
 .EE
 
 .PP
@@ -238,7 +233,6 @@ On Windows Server containers, the processor resource controls are mutually exclu
 
 .EX
 On Windows Server containers, the processor resource controls are mutually exclusive, the order of precedence is CPUCount first, then CPUShares, and CPUPercent last.
-
 .EE
 
 .PP
@@ -587,8 +581,6 @@ e.g.
 
 .PP
 Common Options:
-
-.RS
 .IP \(bu 2
 \fBsrc\fR, \fBsource\fR: mount source spec for \fBbind\fR and \fBvolume\fR\&. Mandatory for \fBbind\fR\&.
 .IP \(bu 2
@@ -596,16 +588,12 @@ Common Options:
 .IP \(bu 2
 \fBro\fR, \fBreadonly\fR: \fBtrue\fR or \fBfalse\fR (default).
 
-.RE
-
 .PP
 \fBNote\fP: setting \fBreadonly\fR for a bind mount may not make its submounts
    read-only depending on the kernel version. See also \fBbind-recursive\fR\&.
 
 .PP
 Options specific to \fBbind\fR:
-
-.RS
 .IP \(bu 2
 \fBbind-propagation\fR: \fBshared\fR, \fBslave\fR, \fBprivate\fR, \fBrshared\fR, \fBrslave\fR, or \fBrprivate\fR(default). See also \fBmount(2)\fR\&.
 .IP \(bu 2
@@ -620,12 +608,8 @@ Options specific to \fBbind\fR:
 \fBbind-nonrecursive\fR (Deprecated): \fBtrue\fR or \fBfalse\fR (default). Setting \fBtrue\fR equates to \fBbind-recursive=disabled\fR\&.
  Setting \fBfalse\fR equates to \fBbind-recursive=enabled\fR\&.
 
-.RE
-
 .PP
 Options specific to \fBvolume\fR:
-
-.RS
 .IP \(bu 2
 \fBvolume-driver\fR: Name of the volume-driver plugin.
 .IP \(bu 2
@@ -635,18 +619,12 @@ Options specific to \fBvolume\fR:
 .IP \(bu 2
 \fBvolume-opt\fR: specific to a given volume driver.
 
-.RE
-
 .PP
 Options specific to \fBtmpfs\fR:
-
-.RS
 .IP \(bu 2
 \fBtmpfs-size\fR: Size of the tmpfs mount in bytes. Unlimited by default in Linux.
 .IP \(bu 2
 \fBtmpfs-mode\fR: File mode of the tmpfs in octal. (e.g. \fB700\fR or \fB0700\fR\&.) Defaults to \fB1777\fR in Linux.
-
-.RE
 
 .PP
 \fB--name\fP=""
@@ -832,7 +810,6 @@ incompatible with any restart policy other than \fBnone\fR\&.
 
 "apparmor=unconfined" : Turn off apparmor confinement for the container
 "apparmor=your-profile" : Set the apparmor confinement profile for the container
-
 .EE
 
 .PP
@@ -969,8 +946,6 @@ Without this argument the command will be run as root in the container.
    bind mounts \fB/HOST-DIR\fR in the host to \fB/CONTAINER-DIR\fR in the Docker
    container. If 'HOST-DIR' is omitted,  Docker automatically creates the new
    volume on the host.  The \fBOPTIONS\fR are a comma delimited list and can be:
-
-.RS
 .IP \(bu 2
 [rw|ro]
 .IP \(bu 2
@@ -981,8 +956,6 @@ Without this argument the command will be run as root in the container.
 [\fBdelegated\fR|\fBcached\fR|\fBconsistent\fR]
 .IP \(bu 2
 [nocopy]
-
-.RE
 
 .PP
 The \fBCONTAINER-DIR\fR must be an absolute path such as \fB/src/docs\fR\&. The \fBHOST-DIR\fR
@@ -1122,7 +1095,6 @@ can override the working directory by using the \fB-w\fP option.
 
 
 .SH Exit Status
-.PP
 The exit code from \fBdocker run\fR gives information about why the container
 failed to run or why it exited.  When \fBdocker run\fR exits with a non-zero code,
 the exit codes follow the \fBchroot\fR standard, see below:
@@ -1135,7 +1107,6 @@ $ docker run --foo busybox; echo $?
 # flag provided but not defined: --foo
   See 'docker run --help'.
   125
-
 .EE
 
 .PP
@@ -1146,7 +1117,6 @@ $ docker run busybox /etc; echo $?
 # exec: "/etc": permission denied
   docker: Error response from daemon: Contained command could not be invoked
   126
-
 .EE
 
 .PP
@@ -1157,7 +1127,6 @@ $ docker run busybox foo; echo $?
 # exec: "foo": executable file not found in $PATH
   docker: Error response from daemon: Contained command not found or does not exist
   127
-
 .EE
 
 .PP
@@ -1166,13 +1135,11 @@ $ docker run busybox foo; echo $?
 .EX
 $ docker run busybox /bin/sh -c 'exit 3' 
 # 3
-
 .EE
 
 
 .SH EXAMPLES
 .SH Running container in read-only mode
-.PP
 During container image development, containers often need to write to the image
 content.  Installing packages into /usr, for example.  In production,
 applications seldom need to write to the image.  Container applications write
@@ -1184,17 +1151,14 @@ tmpfs directories on /run and /tmp.
 
 .EX
 # docker run --read-only --tmpfs /run --tmpfs /tmp -i -t fedora /bin/bash
-
 .EE
 
 .SH Exposing log messages from the container to the host's log
-.PP
 If you want messages that are logged in your container to show up in the host's
 syslog/journal then you should bind mount the /dev/log directory as follows.
 
 .EX
 # docker run -v /dev/log:/dev/log -i -t fedora /bin/bash
-
 .EE
 
 .PP
@@ -1202,7 +1166,6 @@ From inside the container you can test this by sending a message to the log.
 
 .EX
 (bash)# logger "Hello from my container"
-
 .EE
 
 .PP
@@ -1212,25 +1175,21 @@ Then exit and check the journal.
 # exit
 
 # journalctl -b | grep Hello
-
 .EE
 
 .PP
 This should list the message sent to logger.
 
 .SH Attaching to one or more from STDIN, STDOUT, STDERR
-.PP
 If you do not specify -a then Docker will attach everything (stdin,stdout,stderr)
-. You can specify to which of the three standard streams (stdin, stdout, stderr)
+\&. You can specify to which of the three standard streams (stdin, stdout, stderr)
 you'd like to connect instead, as in:
 
 .EX
 # docker run -a stdin -a stdout -i -t fedora /bin/bash
-
 .EE
 
 .SH Sharing IPC between containers
-.PP
 Using shm_server.c available here: https://www.cs.cf.ac.uk/Dave/C/node27.html
 
 .PP
@@ -1245,7 +1204,6 @@ Host shows a shared memory segment with 7 pids attached, happens to be from http
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
  0x01128e25 0          root       600        1000       7                       
-
 .EE
 
 .PP
@@ -1256,7 +1214,6 @@ Now run a regular container, and it correctly does NOT see the shared memory seg
 
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
-
 .EE
 
 .PP
@@ -1268,7 +1225,6 @@ Run a container with the new \fB--ipc=host\fR option, and it now sees the shared
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
  0x01128e25 0          root       600        1000       7                   
-
 .EE
 
 .PP
@@ -1285,7 +1241,6 @@ Start a container with a program to create a shared memory segment:
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
  0x0000162e 0          root       666        27         1                       
-
 .EE
 
 .PP
@@ -1296,7 +1251,6 @@ Create a 2nd container correctly shows no shared memory segment from 1st contain
 
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
-
 .EE
 
 .PP
@@ -1309,7 +1263,6 @@ Create a 3rd container using the new --ipc=container:CONTAINERID option, now it 
  ------ Shared Memory Segments --------
  key        shmid      owner      perms      bytes      nattch     status      
  0x0000162e 0          root       666        27         1
-
 .EE
 
 .SH Linking Containers
@@ -1332,7 +1285,6 @@ as follows:
 
 .EX
 # docker run --name=link-test -d -i -t fedora/httpd
-
 .EE
 
 .PP
@@ -1341,7 +1293,6 @@ container, named link-test, by running with the \fB--link=:\fP
 
 .EX
 # docker run -t -i --link=link-test:lt --name=linker fedora /bin/bash
-
 .EE
 
 .PP
@@ -1364,7 +1315,6 @@ SHLVL=1
 HOME=/
 LT_PORT_80_TCP_ADDR=172.17.0.3
 _=/usr/bin/env
-
 .EE
 
 .PP
@@ -1388,18 +1338,15 @@ should fix the problem.
 .RE
 
 .SH Mapping Ports for External Usage
-.PP
 The exposed port of an application can be mapped to a host port using the \fB-p\fP
 flag. For example, an httpd port 80 can be mapped to the host port 8080 using the
 following:
 
 .EX
 # docker run -p 8080:80 -d -i -t fedora/httpd
-
 .EE
 
 .SH Creating and Mounting a Data Volume Container
-.PP
 Many applications require the sharing of persistent data across several
 containers. Docker allows you to create a Data Volume Container that other
 containers can mount from. For example, create a named container that contains
@@ -1410,7 +1357,6 @@ fedora-data image:
 .EX
 # docker run --name=data -v /var/volume1 -v /tmp/volume2 -i -t fedora-data true
 # docker run --volumes-from=data --name=fedora-container1 -i -t fedora bash
-
 .EE
 
 .PP
@@ -1421,18 +1367,15 @@ container, allowing to abstract the actual data source from users of that data:
 
 .EX
 # docker run --volumes-from=fedora-container1 --name=fedora-container2 -i -t fedora bash
-
 .EE
 
 .SH Mounting External Volumes
-.PP
 To mount a host directory as a container volume, specify the absolute path to
 the directory and the absolute path for the container directory separated by a
 colon:
 
 .EX
 # docker run -v /var/db:/data1 -i -t fedora bash
-
 .EE
 
 .PP
@@ -1448,7 +1391,6 @@ to the host directory:
 
 .EX
 # chcon -Rt svirt_sandbox_file_t /var/db
-
 .EE
 
 .PP
@@ -1456,7 +1398,6 @@ Now, writing to the /data1 volume in the container will be allowed and the
 changes will also be reflected on the host in /var/db.
 
 .SH Using alternative security labeling
-.PP
 You can override the default labeling scheme for each container by specifying
 the \fB--security-opt\fR flag. For example, you can specify the MCS/MLS level, a
 requirement for MLS systems. Specifying the level in the following command
@@ -1464,7 +1405,6 @@ allows you to share the same content between containers.
 
 .EX
 # docker run --security-opt label=level:s0:c100,c200 -i -t fedora bash
-
 .EE
 
 .PP
@@ -1472,7 +1412,6 @@ An MLS example might be:
 
 .EX
 # docker run --security-opt label=level:TopSecret -i -t rhel7 bash
-
 .EE
 
 .PP
@@ -1481,7 +1420,6 @@ To disable the security labeling for this container versus running with the
 
 .EX
 # docker run --security-opt label=disable -i -t fedora bash
-
 .EE
 
 .PP
@@ -1492,7 +1430,6 @@ command:
 
 .EX
 # docker run --security-opt label=type:svirt_apache_t -i -t centos bash
-
 .EE
 
 .PP
@@ -1502,17 +1439,14 @@ Note:
 You would have to write policy defining a \fBsvirt_apache_t\fR type.
 
 .SH Setting device weight
-.PP
 If you want to set \fB/dev/sda\fR device weight to \fB200\fR, you can specify the device
 weight by \fB--blkio-weight-device\fR flag. Use the following command:
 
 .EX
 # docker run -it --blkio-weight-device "/dev/sda:200" ubuntu
-
 .EE
 
 .SH Specify isolation technology for container (--isolation)
-.PP
 This option is useful in situations where you are running Docker containers on
 Microsoft Windows. The \fB--isolation <value>\fR option sets a container's isolation
 technology. On Linux, the only supported is the \fBdefault\fR option which uses
@@ -1521,13 +1455,10 @@ Linux namespaces. These two commands are equivalent on Linux:
 .EX
 $ docker run -d busybox top
 $ docker run -d --isolation default busybox top
-
 .EE
 
 .PP
 On Microsoft Windows, can take any of these values:
-
-.RS
 .IP \(bu 2
 \fBdefault\fR: Use the value specified by the Docker daemon's \fB--exec-opt\fR . If the \fBdaemon\fR does not specify an isolation technology, Microsoft Windows uses \fBprocess\fR as its default value.
 .IP \(bu 2
@@ -1535,15 +1466,12 @@ On Microsoft Windows, can take any of these values:
 .IP \(bu 2
 \fBhyperv\fR: Hyper-V hypervisor partition-based isolation.
 
-.RE
-
 .PP
 In practice, when running on Microsoft Windows without a \fBdaemon\fR option set,  these two commands are equivalent:
 
 .EX
 $ docker run -d --isolation default busybox top
 $ docker run -d --isolation process busybox top
-
 .EE
 
 .PP
@@ -1552,18 +1480,15 @@ If you have set the \fB--exec-opt isolation=hyperv\fR option on the Docker \fBda
 .EX
 $ docker run -d --isolation default busybox top
 $ docker run -d --isolation hyperv busybox top
-
 .EE
 
 .SH Setting Namespaced Kernel Parameters (Sysctls)
-.PP
 The \fB--sysctl\fR sets namespaced kernel parameters (sysctls) in the
 container. For example, to turn on IP forwarding in the containers
 network namespace, run this command:
 
 .EX
 $ docker run --sysctl net.ipv4.ip_forward=1 someimage
-
 .EE
 
 .PP
@@ -1580,7 +1505,6 @@ supported sysctls.
 
 
 .SH HISTORY
-.PP
 April 2014, Originally compiled by William Henry (whenry at redhat dot com)
 based on docker.com source material and internal work.
 June 2014, updated by Sven Dowideit SvenDowideit@home.org.au
