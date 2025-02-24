@@ -34,6 +34,11 @@ Depends: adduser,
          iptables,
          ${misc:Depends},
          ${shlibs:Depends}
+# Debian split the daemon and the docker binary into docker.io and docker-cli,
+# respectively. Instead of splitting it here, let's add a Provides: docker-cli
+# https://salsa.debian.org/ci-team/autopkgtest/-/merge_requests/399#note_543111
+# LP: #2099941
+Provides: docker-cli
 Recommends: ca-certificates,
             git,
             pigz,
