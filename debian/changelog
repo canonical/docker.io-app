@@ -1,3 +1,9 @@
+docker.io-app (27.5.1-0ubuntu2) plucky; urgency=medium
+
+  * d/control: provides docker-cli (LP: #2099941)
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Mon, 24 Feb 2025 17:53:24 -0300
+
 docker.io-app (27.5.1-0ubuntu1) plucky; urgency=medium
 
   * New upstream version 27.5.1 (LP: #2085187)
