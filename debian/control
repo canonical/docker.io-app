@@ -38,7 +38,7 @@ Depends: adduser,
 # respectively. Instead of splitting it here, let's add a Provides: docker-cli
 # https://salsa.debian.org/ci-team/autopkgtest/-/merge_requests/399#note_543111
 # LP: #2099941
-Provides: docker-cli
+Provides: docker-cli (= ${binary:Version})
 Recommends: ca-certificates,
             git,
             pigz,
