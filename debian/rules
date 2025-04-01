@@ -9,8 +9,8 @@ export DOCKER_GITCOMMIT := $(DEB_VERSION)
 
 export MANPAGES_VERSION := $(shell cat debian/manpages/upstream-version)
 
-# Build with Golang 1.24
-export PATH := /usr/lib/go-1.24/bin:$(PATH)
+# Build with Golang 1.22
+export PATH := /usr/lib/go-1.22/bin:$(PATH)
 
 # temporary build path (see http://golang.org/doc/code.html#GOPATH)
 OUR_GOPATH := $(CURDIR)/.gopath
