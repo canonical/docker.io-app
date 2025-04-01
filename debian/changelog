@@ -1,3 +1,12 @@
+docker.io-app (27.5.1-0ubuntu3~22.04.1) jammy; urgency=medium
+
+  * Backport from plucky to jammy (LP: #2085187)
+  * d/control: build with golang 1.22 for consistency across the supported
+    release
+  * d/rules: add golang 1.22 to PATH
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:15:14 -0300
+
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 
   * d/control: set a version for the docker-cli Provides
