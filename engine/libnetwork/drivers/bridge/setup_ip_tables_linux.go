@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/libnetwork/iptables"
 	"github.com/docker/docker/libnetwork/types"
 	"github.com/vishvananda/netlink"
@@ -32,17 +34,23 @@ const (
 	IsolationChain2 = "DOCKER-ISOLATION-STAGE-2"
 )
 
+// Path to the executable installed in Linux under WSL2 that reports on
+// WSL config. https://github.com/microsoft/WSL/releases/tag/2.0.4
+// Can be modified by tests.
+var wslinfoPath = "/usr/bin/wslinfo"
+
 func setupIPChains(config configuration, version iptables.IPVersion) (natChain *iptables.ChainInfo, filterChain *iptables.ChainInfo, isolationChain1 *iptables.ChainInfo, isolationChain2 *iptables.ChainInfo, retErr error) {
 	// Sanity check.
-	if !config.EnableIPTables {
-		return nil, nil, nil, nil, errors.New("cannot create new chains, EnableIPTable is disabled")
+	if version == iptables.IPv4 && !config.EnableIPTables {
+		return nil, nil, nil, nil, errors.New("cannot create new chains, iptables is disabled")
 	}
-
-	hairpinMode := !config.EnableUserlandProxy
+	if version == iptables.IPv6 && !config.EnableIP6Tables {
+		return nil, nil, nil, nil, errors.New("cannot create new chains, ip6tables is disabled")
+	}
 
 	iptable := iptables.GetIptable(version)
 
-	natChain, err := iptable.NewChain(DockerChain, iptables.Nat, hairpinMode)
+	natChain, err := iptable.NewChain(DockerChain, iptables.Nat)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to create NAT chain %s: %v", DockerChain, err)
 	}
@@ -54,19 +62,19 @@ func setupIPChains(config configuration, version iptables.IPVersion) (natChain *
 		}
 	}()
 
-	filterChain, err = iptable.NewChain(DockerChain, iptables.Filter, false)
+	filterChain, err = iptable.NewChain(DockerChain, iptables.Filter)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to create FILTER chain %s: %v", DockerChain, err)
 	}
 	defer func() {
-		if err != nil {
+		if retErr != nil {
 			if err := iptable.RemoveExistingChain(DockerChain, iptables.Filter); err != nil {
 				log.G(context.TODO()).Warnf("failed on removing iptables FILTER chain %s on cleanup: %v", DockerChain, err)
 			}
 		}
 	}()
 
-	isolationChain1, err = iptable.NewChain(IsolationChain1, iptables.Filter, false)
+	isolationChain1, err = iptable.NewChain(IsolationChain1, iptables.Filter)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to create FILTER isolation chain: %v", err)
 	}
@@ -78,7 +86,7 @@ func setupIPChains(config configuration, version iptables.IPVersion) (natChain *
 		}
 	}()
 
-	isolationChain2, err = iptable.NewChain(IsolationChain2, iptables.Filter, false)
+	isolationChain2, err = iptable.NewChain(IsolationChain2, iptables.Filter)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to create FILTER isolation chain: %v", err)
 	}
@@ -95,6 +103,10 @@ func setupIPChains(config configuration, version iptables.IPVersion) (natChain *
 	}
 
 	if err := iptable.AddReturnRule(IsolationChain2); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	if err := mirroredWSL2Workaround(config, version); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -183,12 +195,6 @@ func (n *bridgeNetwork) setupIPTables(ipVersion iptables.IPVersion, maskedAddr *
 		n.registerIptCleanFunc(func() error {
 			return iptable.ProgramChain(filterChain, config.BridgeName, hairpinMode, false)
 		})
-
-		if ipVersion == iptables.IPv4 {
-			n.portMapper.SetIptablesChain(natChain, n.getNetworkBridgeName())
-		} else {
-			n.portMapperV6.SetIptablesChain(natChain, n.getNetworkBridgeName())
-		}
 	}
 
 	d.Lock()
@@ -260,8 +266,10 @@ func setupIPTablesInternal(ipVer iptables.IPVersion, config *networkConfiguratio
 		hpNatArgs []string
 	)
 	hostIP := config.HostIPv4
+	nat := !config.GwModeIPv4.natDisabled()
 	if ipVer == iptables.IPv6 {
 		hostIP = config.HostIPv6
+		nat = !config.GwModeIPv6.natDisabled()
 	}
 	// If hostIP is set, the user wants IPv4/IPv6 SNAT with the given address.
 	if hostIP != nil {
@@ -278,15 +286,14 @@ func setupIPTablesInternal(ipVer iptables.IPVersion, config *networkConfiguratio
 	hpNatRule := iptRule{ipv: ipVer, table: iptables.Nat, chain: "POSTROUTING", args: hpNatArgs}
 
 	// Set NAT.
-	if config.EnableIPMasquerade {
+	if nat && config.EnableIPMasquerade {
 		if err := programChainRule(natRule, "NAT", enable); err != nil {
 			return err
 		}
-	}
-
-	if config.EnableIPMasquerade && !hairpin {
-		if err := programChainRule(skipDNAT, "SKIP DNAT", enable); err != nil {
-			return err
+		if !hairpin {
+			if err := programChainRule(skipDNAT, "SKIP DNAT", enable); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -311,6 +318,19 @@ func programChainRule(rule iptRule, ruleDescr string, insert bool) error {
 	if insert {
 		operation = "enable"
 		fn = rule.Insert
+	}
+	if err := fn(); err != nil {
+		return fmt.Errorf("Unable to %s %s rule: %s", operation, ruleDescr, err.Error())
+	}
+	return nil
+}
+
+func appendOrDelChainRule(rule iptRule, ruleDescr string, append bool) error {
+	operation := "disable"
+	fn := rule.Delete
+	if append {
+		operation = "enable"
+		fn = rule.Append
 	}
 	if err := fn(); err != nil {
 		return fmt.Errorf("Unable to %s %s rule: %s", operation, ruleDescr, err.Error())
@@ -373,7 +393,7 @@ func setINC(version iptables.IPVersion, iface string, enable bool) error {
 						log.G(context.TODO()).Warnf("Failed to rollback iptables rule after failure (%v): %v", err, err2)
 					}
 				}
-				return fmt.Errorf(msg)
+				return errors.New(msg)
 			}
 			log.G(context.TODO()).Warn(msg)
 		}
@@ -473,7 +493,7 @@ func setupInternalNetworkRules(bridgeIface string, addr *net.IPNet, icc, insert 
 // As such, we need to flush all those conntrack entries to make sure NAT rules
 // are correctly applied to all packets.
 // See: #8795, #44688 & #44742.
-func clearConntrackEntries(nlh *netlink.Handle, ep *bridgeEndpoint) {
+func clearConntrackEntries(nlh nlwrap.Handle, ep *bridgeEndpoint) {
 	var ipv4List []net.IP
 	var ipv6List []net.IP
 	var udpPorts []uint16
@@ -492,4 +512,82 @@ func clearConntrackEntries(nlh *netlink.Handle, ep *bridgeEndpoint) {
 
 	iptables.DeleteConntrackEntries(nlh, ipv4List, ipv6List)
 	iptables.DeleteConntrackEntriesByPort(nlh, types.UDP, udpPorts)
+}
+
+// mirroredWSL2Workaround adds or removes an IPv4 NAT rule, depending on whether
+// docker's host Linux appears to be a guest running under WSL2 in with mirrored
+// mode networking.
+// https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking
+//
+// Without mirrored mode networking, or for a packet sent from Linux, packets
+// sent to 127.0.0.1 are processed as outgoing - they hit the nat-OUTPUT chain,
+// which does not jump to the nat-DOCKER chain because the rule has an exception
+// for "-d 127.0.0.0/8". The default action on the nat-OUTPUT chain is ACCEPT (by
+// default), so the packet is delivered to 127.0.0.1 on lo, where docker-proxy
+// picks it up and acts as a man-in-the-middle; it receives the packet and
+// re-sends it to the container (or acks a SYN and sets up a second TCP
+// connection to the container). So, the container sees packets arrive with a
+// source address belonging to the network's bridge, and it is able to reply to
+// that address.
+//
+// In WSL2's mirrored networking mode, Linux has a loopback0 device as well as lo
+// (which owns 127.0.0.1 as normal). Packets sent to 127.0.0.1 from Windows to a
+// server listening on Linux's 127.0.0.1 are delivered via loopback0, and
+// processed as packets arriving from outside the Linux host (which they are).
+//
+// So, these packets hit the nat-PREROUTING chain instead of nat-OUTPUT. It would
+// normally be impossible for a packet ->127.0.0.1 to arrive from outside the
+// host, so the nat-PREROUTING jump to nat-DOCKER has no exception for it. The
+// packet is processed by a per-bridge DNAT rule in that chain, so it is
+// delivered directly to the container (not via docker-proxy) with source address
+// 127.0.0.1, so the container can't respond.
+//
+// DNAT is normally skipped by RETURN rules in the nat-DOCKER chain for packets
+// arriving from any other bridge network. Similarly, this function adds (or
+// removes) a rule to RETURN early for packets delivered via loopback0 with
+// destination 127.0.0.0/8.
+func mirroredWSL2Workaround(config configuration, ipv iptables.IPVersion) error {
+	// WSL2 does not (currently) support Windows<->Linux communication via ::1.
+	if ipv != iptables.IPv4 {
+		return nil
+	}
+	return programChainRule(mirroredWSL2Rule(), "WSL2 loopback", insertMirroredWSL2Rule(config))
+}
+
+// insertMirroredWSL2Rule returns true if the NAT rule for mirrored WSL2 workaround
+// is required. It is required if:
+//   - the userland proxy is running. If not, there's nothing on the host to catch
+//     the packet, so the loopback0 rule as wouldn't be useful. However, without
+//     the workaround, with improvements in WSL2 v2.3.11, and without userland proxy
+//     running - no workaround is needed, the normal DNAT/masquerading works.
+//   - and, the host Linux appears to be running under Windows WSL2 with mirrored
+//     mode networking. If a loopback0 device exists, and there's an executable at
+//     /usr/bin/wslinfo, infer that this is WSL2 with mirrored networking. ("wslinfo
+//     --networking-mode" reports "mirrored", but applying the workaround for WSL2's
+//     loopback device when it's not needed is low risk, compared with executing
+//     wslinfo with dockerd's elevated permissions.)
+func insertMirroredWSL2Rule(config configuration) bool {
+	if !config.EnableUserlandProxy || config.UserlandProxyPath == "" {
+		return false
+	}
+	if _, err := nlwrap.LinkByName("loopback0"); err != nil {
+		if !errors.As(err, &netlink.LinkNotFoundError{}) {
+			log.G(context.TODO()).WithError(err).Warn("Failed to check for WSL interface")
+		}
+		return false
+	}
+	stat, err := os.Stat(wslinfoPath)
+	if err != nil {
+		return false
+	}
+	return stat.Mode().IsRegular() && (stat.Mode().Perm()&0111) != 0
+}
+
+func mirroredWSL2Rule() iptRule {
+	return iptRule{
+		ipv:   iptables.IPv4,
+		table: iptables.Nat,
+		chain: DockerChain,
+		args:  []string{"-i", "loopback0", "-d", "127.0.0.0/8", "-j", "RETURN"},
+	}
 }

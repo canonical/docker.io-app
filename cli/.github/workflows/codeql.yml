@@ -1,10 +1,20 @@
 name: codeql
 
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
 on:
   push:
     branches: 
       - 'master' 
       - '[0-9]+.[0-9]+' 
+      - '[0-9]+.x'
     tags: 
       - 'v*' 
   pull_request:
@@ -44,16 +54,6 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         run: |
           git checkout HEAD^2
-      - 
-        name: Update Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-      -
-        name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: go
       # CodeQL 2.16.4's auto-build added support for multi-module repositories,
       # and is trying to be smart by searching for modules in every directory,
       # including vendor directories. If no module is found, it's creating one
@@ -64,6 +64,16 @@ jobs:
         run: |
           ln -s vendor.mod go.mod
           ln -s vendor.sum go.sum
+      -
+        name: Update Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.11"
+      -
+        name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
       -
         name: Autobuild
         uses: github/codeql-action/autobuild@v3

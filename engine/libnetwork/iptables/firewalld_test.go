@@ -34,7 +34,7 @@ func TestFirewalldInit(t *testing.T) {
 
 func TestReloaded(t *testing.T) {
 	iptable := GetIptable(IPv4)
-	fwdChain, err := iptable.NewChain("FWD", Filter, false)
+	fwdChain, err := iptable.NewChain("FWD", Filter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestPassthrough(t *testing.T) {
 		"-j", "ACCEPT",
 	}
 
-	_, err := Passthrough(Iptables, append([]string{"-A"}, rule1...)...)
+	_, err := passthrough(IPv4, append([]string{"-A"}, rule1...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

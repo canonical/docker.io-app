@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-network-ls - List networks
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker network ls [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 Lists all the networks the Engine \fBdaemon\fR knows about. This includes the
 networks that span across multiple hosts in a cluster, for example:
 
@@ -23,7 +20,6 @@ NETWORK ID          NAME                DRIVER          SCOPE
 9f904ee27bf5        none                null            local
 cf03ee007fb4        host                host            local
 78b03ee04fc4        multi-host          overlay         swarm
-
 .EE
 
 .PP
@@ -37,11 +33,9 @@ c288470c46f6c8949c5f7e5099b5b7947b07eabe8d9a27d79a9cbf111adcbf47   host         
 7b369448dccbf865d397c8d2be0cda7cf7edc6b0945f77d2529912ae917a0185   bridge              bridge              
 95e74588f40db048e86320c6526440c504650a1ff3e9f7d60a497c4d2163e5bd   foo                 bridge    
 63d1ff1f77b07ca51070a8c227e962238358bd310bde1529cf62e6c307ade161   dev                 bridge
-
 .EE
 
 .SH Filtering
-.PP
 The filtering flag (\fB-f\fR or \fB--filter\fR) format is a \fBkey=value\fR pair. If there
 is more than one filter, then pass multiple flags (e.g. \fB--filter "foo=bar" --filter "bif=baz"\fR).
 Multiple filter flags are combined as an \fBOR\fR filter. For example,
@@ -49,8 +43,6 @@ Multiple filter flags are combined as an \fBOR\fR filter. For example,
 
 .PP
 The currently supported filters are:
-
-.RS
 .IP \(bu 2
 driver
 .IP \(bu 2
@@ -64,10 +56,7 @@ scope (\fBswarm|global|local\fR)
 .IP \(bu 2
 type (custom|builtin)
 
-.RE
-
 .SS Driver
-.PP
 The \fBdriver\fR filter matches networks based on their driver.
 
 .PP
@@ -78,11 +67,9 @@ $ docker network ls --filter driver=bridge
 NETWORK ID          NAME                DRIVER
 db9db329f835        test1               bridge
 f6e212da9dfd        test2               bridge
-
 .EE
 
 .SS ID
-.PP
 The \fBid\fR filter matches on all or part of a network's ID.
 
 .PP
@@ -93,7 +80,6 @@ The following filter matches all networks with an ID containing the
 $ docker network ls --filter id=63d1ff1f77b07ca51070a8c227e962238358bd310bde1529cf62e6c307ade161
 NETWORK ID          NAME                DRIVER
 63d1ff1f77b0        dev                 bridge
-
 .EE
 
 .PP
@@ -107,11 +93,9 @@ NETWORK ID          NAME                DRIVER
 $ docker network ls --filter id=95e
 NETWORK ID          NAME                DRIVER
 95e74588f40d        foo                 bridge
-
 .EE
 
 .SS Label
-.PP
 The \fBlabel\fR filter matches networks based on the presence of a \fBlabel\fR alone or a \fBlabel\fR and a
 value.
 
@@ -123,7 +107,6 @@ $ docker network ls -f "label=usage"
 NETWORK ID          NAME                DRIVER
 db9db329f835        test1               bridge              
 f6e212da9dfd        test2               bridge
-
 .EE
 
 .PP
@@ -133,11 +116,9 @@ The following filter matches networks with the \fBusage\fR label with the \fBpro
 $ docker network ls -f "label=usage=prod"
 NETWORK ID          NAME                DRIVER
 f6e212da9dfd        test2               bridge
-
 .EE
 
 .SS Name
-.PP
 The \fBname\fR filter matches on all or part of a network's name.
 
 .PP
@@ -147,7 +128,6 @@ The following filter matches all networks with a name containing the \fBfoobar\f
 $ docker network ls --filter name=foobar
 NETWORK ID          NAME                DRIVER
 06e7eef0a170        foobar              bridge
-
 .EE
 
 .PP
@@ -158,11 +138,9 @@ $ docker network ls --filter name=foo
 NETWORK ID          NAME                DRIVER
 95e74588f40d        foo                 bridge
 06e7eef0a170        foobar              bridge
-
 .EE
 
 .SS Scope
-.PP
 The \fBscope\fR filter matches networks based on their scope.
 
 .PP
@@ -173,7 +151,6 @@ $ docker network ls --filter scope=swarm
 NETWORK ID          NAME                DRIVER              SCOPE
 xbtm0v4f1lfh        ingress             overlay             swarm
 ic6r88twuu92        swarmnet            overlay             swarm
-
 .EE
 
 .PP
@@ -186,11 +163,9 @@ e85227439ac7        bridge              bridge              local
 0ca0e19443ed        host                host                local
 ca13cc149a36        localnet            bridge              local
 f9e115d2de35        none                null                local
-
 .EE
 
 .SS Type
-.PP
 The \fBtype\fR filter supports two values; \fBbuiltin\fR displays predefined networks
 (\fBbridge\fR, \fBnone\fR, \fBhost\fR), whereas \fBcustom\fR displays user defined networks.
 
@@ -202,7 +177,6 @@ $ docker network ls --filter type=custom
 NETWORK ID          NAME                DRIVER
 95e74588f40d        foo                 bridge
 63d1ff1f77b0        dev                 bridge
-
 .EE
 
 .PP
@@ -211,7 +185,6 @@ to delete all user defined networks:
 
 .EX
 $ docker network rm `docker network ls --filter type=custom -q`
-
 .EE
 
 .PP
@@ -219,11 +192,8 @@ A warning will be issued when trying to remove a network that has containers
 attached.
 
 .SH Format
-.PP
 Format uses a Go template to print the output. The following variables are
 supported:
-
-.RS
 .IP \(bu 2
 \&.ID - Network ID
 .IP \(bu 2
@@ -241,21 +211,18 @@ supported:
 .IP \(bu 2
 \&.Label - Value of a specific label for this network. For example \fB{{.Label "project.version"}}\fR
 
-.RE
-
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--filter\fP=
 	Provide filter values (e.g. "driver=bridge")
 
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -272,5 +239,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-network(1)\fP

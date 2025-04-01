@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/ioutils"
 )
 
 // ContainerStats writes information about the container to the stream
@@ -27,9 +26,11 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		return errdefs.InvalidParameter(errors.New("cannot have stream=true and one-shot=true"))
 	}
 
+	enc := json.NewEncoder(config.OutStream())
+
 	// If the container is either not running or restarting and requires no stream, return an empty stats.
 	if (!ctr.IsRunning() || ctr.IsRestarting()) && !config.Stream {
-		return json.NewEncoder(config.OutStream).Encode(&types.StatsJSON{
+		return enc.Encode(&containertypes.StatsResponse{
 			Name: ctr.Name,
 			ID:   ctr.ID,
 		})
@@ -41,21 +42,13 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(config.OutStream).Encode(stats)
+		return enc.Encode(stats)
 	}
 
-	outStream := config.OutStream
-	if config.Stream {
-		wf := ioutils.NewWriteFlusher(outStream)
-		defer wf.Close()
-		wf.Flush()
-		outStream = wf
-	}
-
-	var preCPUStats types.CPUStats
+	var preCPUStats containertypes.CPUStats
 	var preRead time.Time
-	getStatJSON := func(v interface{}) *types.StatsJSON {
-		ss := v.(types.StatsJSON)
+	getStatJSON := func(v interface{}) *containertypes.StatsResponse {
+		ss := v.(containertypes.StatsResponse)
 		ss.Name = ctr.Name
 		ss.ID = ctr.ID
 		ss.PreCPUStats = preCPUStats
@@ -65,12 +58,11 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		return &ss
 	}
 
-	enc := json.NewEncoder(outStream)
-
 	updates := daemon.subscribeToContainerStats(ctr)
 	defer daemon.unsubscribeToContainerStats(ctr, updates)
 
 	noStreamFirstFrame := !config.OneShot
+
 	for {
 		select {
 		case v, ok := <-updates:
@@ -107,7 +99,7 @@ func (daemon *Daemon) unsubscribeToContainerStats(c *container.Container, ch cha
 }
 
 // GetContainerStats collects all the stats published by a container
-func (daemon *Daemon) GetContainerStats(container *container.Container) (*types.StatsJSON, error) {
+func (daemon *Daemon) GetContainerStats(container *container.Container) (*containertypes.StatsResponse, error) {
 	stats, err := daemon.stats(container)
 	if err != nil {
 		goto done
@@ -132,7 +124,7 @@ done:
 		return stats, nil
 	case errdefs.ErrConflict, errdefs.ErrNotFound:
 		// return empty stats containing only name and ID if not running or not found
-		return &types.StatsJSON{
+		return &containertypes.StatsResponse{
 			Name: container.Name,
 			ID:   container.ID,
 		}, nil

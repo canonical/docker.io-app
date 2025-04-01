@@ -10,7 +10,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/network"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -23,7 +22,7 @@ type createOptions struct {
 	driverOpts opts.MapOpts
 	labels     opts.ListOpts
 	internal   bool
-	ipv6       bool
+	ipv6       *bool
 	attachable bool
 	ingress    bool
 	configOnly bool
@@ -38,6 +37,7 @@ type createOptions struct {
 }
 
 func newCreateCommand(dockerCli command.Cli) *cobra.Command {
+	var ipv6 bool
 	options := createOptions{
 		driverOpts: *opts.NewMapOpts(nil, nil),
 		labels:     opts.NewListOpts(opts.ValidateLabel),
@@ -51,6 +51,11 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.name = args[0]
+
+			if cmd.Flag("ipv6").Changed {
+				options.ipv6 = &ipv6
+			}
+
 			return runCreate(cmd.Context(), dockerCli, options)
 		},
 		ValidArgsFunction: completion.NoComplete,
@@ -61,7 +66,7 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 	flags.VarP(&options.driverOpts, "opt", "o", "Set driver specific options")
 	flags.Var(&options.labels, "label", "Set metadata on a network")
 	flags.BoolVar(&options.internal, "internal", false, "Restrict external access to the network")
-	flags.BoolVar(&options.ipv6, "ipv6", false, "Enable IPv6 networking")
+	flags.BoolVar(&ipv6, "ipv6", false, "Enable or disable IPv6 networking")
 	flags.BoolVar(&options.attachable, "attachable", false, "Enable manual container attachment")
 	flags.SetAnnotation("attachable", "version", []string{"1.25"})
 	flags.BoolVar(&options.ingress, "ingress", false, "Create swarm routing-mesh network")
@@ -98,7 +103,7 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 			Network: options.configFrom,
 		}
 	}
-	resp, err := client.NetworkCreate(ctx, options.name, types.NetworkCreate{
+	resp, err := client.NetworkCreate(ctx, options.name, network.CreateOptions{
 		Driver:  options.driver,
 		Options: options.driverOpts.GetAll(),
 		IPAM: &network.IPAM{

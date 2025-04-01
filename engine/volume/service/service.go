@@ -6,12 +6,11 @@ import (
 	"sync/atomic"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/directory"
+	"github.com/docker/docker/internal/directory"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/docker/pkg/stringid"
@@ -69,11 +68,14 @@ const AnonymousLabel = "com.docker.volume.anonymous"
 // This reference ID will protect this volume from removal.
 //
 // A good example for a reference ID is a container's ID.
-// When whatever is going to reference this volume is removed the caller should defeference the volume by calling `Release`.
+// When whatever is going to reference this volume is removed the caller should dereference the volume by calling `Release`.
 func (s *VolumesService) Create(ctx context.Context, name, driverName string, options ...opts.CreateOption) (*volumetypes.Volume, error) {
 	if name == "" {
 		name = stringid.GenerateRandomID()
 		options = append(options, opts.WithCreateLabel(AnonymousLabel, ""))
+		log.G(ctx).WithField("volume-name", name).Debug("Creating anonymous volume")
+	} else {
+		log.G(ctx).WithField("volume-name", name).Debug("Creating named volume")
 	}
 	v, err := s.vs.Create(ctx, name, driverName, options...)
 	if err != nil {
@@ -104,7 +106,7 @@ func (s *VolumesService) Get(ctx context.Context, name string, getOpts ...opts.G
 }
 
 // Mount mounts the volume
-// Callers should specify a uniqe reference for each Mount/Unmount pair.
+// Callers should specify a unique reference for each Mount/Unmount pair.
 //
 // Example:
 // ```go
@@ -204,7 +206,7 @@ func (s *VolumesService) LocalVolumesSize(ctx context.Context) ([]*volumetypes.V
 // Prune removes (local) volumes which match the past in filter arguments.
 // Note that this intentionally skips volumes with mount options as there would
 // be no space reclaimed in this case.
-func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*types.VolumesPruneReport, error) {
+func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*volumetypes.PruneReport, error) {
 	if !atomic.CompareAndSwapInt32(&s.pruneRunning, 0, 1) {
 		return nil, errdefs.Conflict(errors.New("a prune operation is already running"))
 	}
@@ -226,7 +228,7 @@ func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*types
 		return nil, err
 	}
 
-	rep := &types.VolumesPruneReport{VolumesDeleted: make([]string, 0, len(ls))}
+	rep := &volumetypes.PruneReport{VolumesDeleted: make([]string, 0, len(ls))}
 	for _, v := range ls {
 		select {
 		case <-ctx.Done():

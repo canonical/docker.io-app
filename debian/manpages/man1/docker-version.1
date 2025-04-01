@@ -1,25 +1,21 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-version - Show the Docker version information
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker version [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 The version command prints the current version number for all independently
 versioned Docker components.
 
 
 .SH EXAMPLES
 .SH Display Docker version information
-.PP
 The default output renders all version information divided into two sections;
 the "Client" section contains information about the Docker CLI and client
 components, and the "Server" section contains information about the Docker
@@ -60,7 +56,6 @@ Server: Docker Desktop 4.19.0 (12345)
  docker-init:
   Version:          0.19.0
   GitCommit:        de40ad0
-
 .EE
 
 .PP
@@ -69,7 +64,6 @@ Get server version:
 .EX
 $ docker version --format '{{.Server.Version}}'
 23.0.3
-
 .EE
 
 .PP
@@ -81,16 +75,14 @@ To view all available fields, you can use the format \fB{{json .}}\fR\&.
 .EX
 $ docker version --format '{{json .}}'
 {"Client":"Version":"23.0.3","ApiVersion":"1.42", ...}
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--format\fP=""
 	Format output using a custom template:
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -99,5 +91,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker(1)\fP

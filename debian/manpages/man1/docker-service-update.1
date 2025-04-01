@@ -1,23 +1,19 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-service-update - Update a service
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker service update [OPTIONS] SERVICE\fP
 
 
 .SH DESCRIPTION
-.PP
 Update a service
 
 
 .SH OPTIONS
-.PP
 \fB--args\fP=
 	Service command args
 
@@ -230,6 +226,10 @@ Update a service
 	Do not query the registry to resolve image digest and supported platforms
 
 .PP
+\fB--oom-score-adj\fP=0
+	Tune host's OOM preferences (-1000 to 1000)
+
+.PP
 \fB--placement-pref-add\fP=
 	Add a placement preference
 
@@ -387,5 +387,4 @@ Update a service
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-service(1)\fP

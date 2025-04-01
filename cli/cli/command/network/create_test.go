@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/network"
 	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
@@ -18,7 +17,7 @@ func TestNetworkCreateErrors(t *testing.T) {
 	testCases := []struct {
 		args              []string
 		flags             map[string]string
-		networkCreateFunc func(ctx context.Context, name string, options types.NetworkCreate) (types.NetworkCreateResponse, error)
+		networkCreateFunc func(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
 		expectedError     string
 	}{
 		{
@@ -26,8 +25,8 @@ func TestNetworkCreateErrors(t *testing.T) {
 		},
 		{
 			args: []string{"toto"},
-			networkCreateFunc: func(ctx context.Context, name string, createBody types.NetworkCreate) (types.NetworkCreateResponse, error) {
-				return types.NetworkCreateResponse{}, errors.Errorf("error creating network")
+			networkCreateFunc: func(ctx context.Context, name string, createBody network.CreateOptions) (network.CreateResponse, error) {
+				return network.CreateResponse{}, errors.Errorf("error creating network")
 			},
 			expectedError: "error creating network",
 		},
@@ -138,6 +137,7 @@ func TestNetworkCreateErrors(t *testing.T) {
 			assert.NilError(t, cmd.Flags().Set(key, value))
 		}
 		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
 		assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
 	}
 }
@@ -153,10 +153,10 @@ func TestNetworkCreateWithFlags(t *testing.T) {
 		},
 	}
 	cli := test.NewFakeCli(&fakeClient{
-		networkCreateFunc: func(ctx context.Context, name string, createBody types.NetworkCreate) (types.NetworkCreateResponse, error) {
-			assert.Check(t, is.Equal(expectedDriver, createBody.Driver), "not expected driver error")
-			assert.Check(t, is.DeepEqual(expectedOpts, createBody.IPAM.Config), "not expected driver error")
-			return types.NetworkCreateResponse{
+		networkCreateFunc: func(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error) {
+			assert.Check(t, is.Equal(expectedDriver, options.Driver), "not expected driver error")
+			assert.Check(t, is.DeepEqual(expectedOpts, options.IPAM.Config), "not expected driver error")
+			return network.CreateResponse{
 				ID: name,
 			}, nil
 		},
@@ -171,4 +171,59 @@ func TestNetworkCreateWithFlags(t *testing.T) {
 	cmd.Flags().Set("subnet", "192.168.4.0/24")
 	assert.NilError(t, cmd.Execute())
 	assert.Check(t, is.Equal("banana", strings.TrimSpace(cli.OutBuffer().String())))
+}
+
+// TestNetworkCreateIPv6 verifies behavior of the "--ipv6" option. This option
+// is an optional bool, and must default to "nil", not "true" or "false".
+func TestNetworkCreateIPv6(t *testing.T) {
+	strPtr := func(val bool) *bool { return &val }
+
+	tests := []struct {
+		doc, name string
+		flags     []string
+		expected  *bool
+	}{
+		{
+			doc:      "IPV6 default",
+			name:     "ipv6-default",
+			expected: nil,
+		},
+		{
+			doc:      "IPV6 enabled",
+			name:     "ipv6-enabled",
+			flags:    []string{"--ipv6=true"},
+			expected: strPtr(true),
+		},
+		{
+			doc:      "IPV6 enabled (shorthand)",
+			name:     "ipv6-enabled-shorthand",
+			flags:    []string{"--ipv6"},
+			expected: strPtr(true),
+		},
+		{
+			doc:      "IPV6 disabled",
+			name:     "ipv6-disabled",
+			flags:    []string{"--ipv6=false"},
+			expected: strPtr(false),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.doc, func(t *testing.T) {
+			cli := test.NewFakeCli(&fakeClient{
+				networkCreateFunc: func(ctx context.Context, name string, createBody network.CreateOptions) (network.CreateResponse, error) {
+					assert.Check(t, is.DeepEqual(tc.expected, createBody.EnableIPv6))
+					return network.CreateResponse{ID: name}, nil
+				},
+			})
+			cmd := newCreateCommand(cli)
+			cmd.SetArgs([]string{tc.name})
+			if tc.expected != nil {
+				assert.Check(t, cmd.ParseFlags(tc.flags))
+			}
+			assert.NilError(t, cmd.Execute())
+			assert.Check(t, is.Equal(tc.name, strings.TrimSpace(cli.OutBuffer().String())))
+		})
+	}
 }

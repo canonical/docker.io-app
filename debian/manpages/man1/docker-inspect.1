@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-inspect - Return low-level information on Docker objects
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker inspect [OPTIONS] NAME|ID [NAME|ID...]\fP
 
 
 .SH DESCRIPTION
-.PP
 This displays the low-level information on Docker object(s) (e.g. container,
 image, volume,network, node, service, or task) identified by name or ID. By default,
 this will render all results in a JSON array. If the container and image have
@@ -21,7 +18,6 @@ is specified, the given template will be executed for each result.
 
 
 .SH EXAMPLES
-.PP
 Get information about an image when image name conflicts with the container name,
 e.g. both image and container are named rhel7:
 
@@ -34,11 +30,9 @@ $ docker inspect --type=image rhel7
  ....
 }
 ]
-
 .EE
 
 .SH Getting information on a container
-.PP
 To get information on a container use its ID or instance name:
 
 .EX
@@ -196,21 +190,17 @@ $ docker inspect d2cc496561d6
 }
 }
 ]
-
 .EE
 
 .SH Getting the IP address of a container instance
-.PP
 To get the IP address of a container use:
 
 .EX
 $ docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' d2cc496561d6
 172.17.0.2
-
 .EE
 
 .SH Listing all port bindings
-.PP
 One can loop over arrays and maps in the results to produce simple text
 output:
 
@@ -218,7 +208,6 @@ output:
 $ docker inspect --format='{{range $p, $conf := .NetworkSettings.Ports}} \\
   {{$p}} -> {{(index $conf 0).HostPort}} {{end}}' d2cc496561d6
   80/tcp -> 80
-
 .EE
 
 .PP
@@ -230,17 +219,15 @@ https://pkg.go.dev/text/template.
 $ docker inspect -s d2cc496561d6
 [
 {
-....
+\&....
 "SizeRw": 0,
 "SizeRootFs": 972,
-....
+\&....
 }
 ]
-
 .EE
 
 .SH Getting information on an image
-.PP
 Use an image's ID or name (e.g., repository/name[:tag]) to get information
 about the image:
 
@@ -318,16 +305,14 @@ $ docker inspect ded7cd95e059
     "Name": "overlay2"
 }
 }]
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--format\fP=""
 	Format output using a custom template:
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -344,5 +329,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker(1)\fP

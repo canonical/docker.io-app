@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/libnetwork/driverapi"
 	"github.com/docker/docker/libnetwork/drivers/overlay/overlayutils"
 	"github.com/docker/docker/libnetwork/netlabel"
@@ -235,7 +236,7 @@ func (d *driver) DeleteNetwork(nid string) error {
 	return nil
 }
 
-func (d *driver) ProgramExternalConnectivity(nid, eid string, options map[string]interface{}) error {
+func (d *driver) ProgramExternalConnectivity(_ context.Context, nid, eid string, options map[string]interface{}) error {
 	return nil
 }
 
@@ -351,7 +352,7 @@ func populateVNITbl() {
 			}
 			defer n.Close()
 
-			nlh, err := netlink.NewHandleAt(n, unix.NETLINK_ROUTE)
+			nlh, err := nlwrap.NewHandleAt(n, unix.NETLINK_ROUTE)
 			if err != nil {
 				log.G(context.TODO()).Errorf("Could not open netlink handle during vni population for ns %s: %v", path, err)
 				return nil
@@ -426,7 +427,7 @@ func (n *network) setupSubnetSandbox(s *subnet, brName, vxlanName string) error 
 	// create a bridge and vxlan device for this subnet and move it to the sandbox
 	sbox := n.sbox
 
-	if err := sbox.AddInterface(brName, "br", osl.WithIPv4Address(s.gwIP), osl.WithIsBridge(true)); err != nil {
+	if err := sbox.AddInterface(context.TODO(), brName, "br", osl.WithIPv4Address(s.gwIP), osl.WithIsBridge(true)); err != nil {
 		return fmt.Errorf("bridge creation in sandbox failed for subnet %q: %v", s.subnetIP.String(), err)
 	}
 
@@ -438,7 +439,7 @@ func (n *network) setupSubnetSandbox(s *subnet, brName, vxlanName string) error 
 		return err
 	}
 
-	if err := sbox.AddInterface(vxlanName, "vxlan", osl.WithMaster(brName)); err != nil {
+	if err := sbox.AddInterface(context.TODO(), vxlanName, "vxlan", osl.WithMaster(brName)); err != nil {
 		// If adding vxlan device to the overlay namespace fails, remove the bridge interface we
 		// already added to the namespace. This allows the caller to try the setup again.
 		for _, iface := range sbox.Interfaces() {

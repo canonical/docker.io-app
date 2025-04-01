@@ -2,7 +2,7 @@
 
 set -eu
 
-: "${CLI_DOCS_TOOL_VERSION=v0.7.0}"
+: "${CLI_DOCS_TOOL_VERSION=v0.8.0}"
 
 export GO111MODULE=auto
 
@@ -20,7 +20,7 @@ trap clean EXIT
   # init dummy go.mod
   ./scripts/vendor init
   # install cli-docs-tool and copy docs/tools.go in root folder
-  # to be able to fetch the required depedencies
+  # to be able to fetch the required dependencies
   go mod edit -modfile=vendor.mod -require=github.com/docker/cli-docs-tool@${CLI_DOCS_TOOL_VERSION}
   cp docs/generate/tools.go .
   # update vendor

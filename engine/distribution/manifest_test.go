@@ -10,8 +10,8 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/content/local"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/remotes"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/manifestlist"
@@ -240,7 +240,7 @@ func TestManifestStore(t *testing.T) {
 		ref, desc, mg, store, cs, teardown := setupTest(t)
 		defer teardown(t)
 
-		// first add the manifest to the coontent store
+		// first add the manifest to the content store
 		writeManifest(t, cs, desc)
 
 		// now do the get

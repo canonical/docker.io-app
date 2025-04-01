@@ -35,14 +35,16 @@ import (
 	systemrouter "github.com/docker/docker/api/server/router/system"
 	"github.com/docker/docker/api/server/router/volume"
 	buildkit "github.com/docker/docker/builder/builder-next"
+	"github.com/docker/docker/builder/builder-next/exporter"
 	"github.com/docker/docker/builder/dockerfile"
-	"github.com/docker/docker/cli/debug"
+	"github.com/docker/docker/cmd/dockerd/debug"
 	"github.com/docker/docker/cmd/dockerd/trap"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/daemon/cluster"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/listeners"
 	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/libcontainerd/supervisor"
 	dopts "github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/authorization"
@@ -63,7 +65,6 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 )
 
@@ -240,23 +241,17 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	setOTLPProtoDefault()
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
-	// Override BuildKit's default Resource so that it matches the semconv
-	// version that is used in our code.
-	detect.OverrideResource(resource.Default())
+	// Initialize the trace recorder for buildkit.
 	detect.Recorder = detect.NewTraceRecorder()
 
-	tp, err := detect.TracerProvider()
-	if err != nil {
-		log.G(ctx).WithError(err).Warn("Failed to initialize tracing, skipping")
-	} else {
-		otel.SetTracerProvider(tp)
-		log.G(ctx).Logger.AddHook(tracing.NewLogrusHook())
-	}
+	tp, otelShutdown := otelutil.NewTracerProvider(ctx, true)
+	otel.SetTracerProvider(tp)
+	log.G(ctx).Logger.AddHook(tracing.NewLogrusHook())
 
 	pluginStore := plugin.NewStore()
 
 	var apiServer apiserver.Server
-	cli.authzMiddleware, err = initMiddlewares(&apiServer, cli.Config, pluginStore)
+	cli.authzMiddleware, err = initMiddlewares(ctx, &apiServer, cli.Config, pluginStore)
 	if err != nil {
 		return errors.Wrap(err, "failed to start API server")
 	}
@@ -274,7 +269,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	}
 
 	// Note that CDI is not inherently linux-specific, there are some linux-specific assumptions / implementations in the code that
-	// queries the properties of device on the host as wel as performs the injection of device nodes and their access permissions into the OCI spec.
+	// queries the properties of device on the host as well as performs the injection of device nodes and their access permissions into the OCI spec.
 	//
 	// In order to lift this restriction the following would have to be addressed:
 	// - Support needs to be added to the cdi package for injecting Windows devices: https://tags.cncf.io/container-device-interface/issues/28
@@ -301,16 +296,13 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 
 	log.G(ctx).Info("Daemon has completed initialization")
 
-	routerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Get a the current daemon config, because the daemon sets up config
 	// during initialization. We cannot user the cli.Config for that reason,
 	// as that only holds the config that was set by the user.
 	//
 	// FIXME(thaJeztah): better separate runtime and config data?
 	daemonCfg := d.Config()
-	routerOpts, err := newRouterOptions(routerCtx, &daemonCfg, d, c)
+	routerOpts, err := newRouterOptions(ctx, &daemonCfg, d, c)
 	if err != nil {
 		return err
 	}
@@ -368,7 +360,9 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 		return errors.Wrap(err, "shutting down due to ServeAPI error")
 	}
 
-	detect.Shutdown(context.Background())
+	if err := otelShutdown(context.WithoutCancel(ctx)); err != nil {
+		log.G(ctx).WithError(err).Error("Failed to shutdown OTEL tracing")
+	}
 
 	log.G(ctx).Info("Daemon shutdown complete")
 	return nil
@@ -436,6 +430,10 @@ func newRouterOptions(ctx context.Context, config *config.Config, d *daemon.Daem
 		Snapshotter:         d.ImageService().StorageDriver(),
 		ContainerdAddress:   config.ContainerdAddr,
 		ContainerdNamespace: config.ContainerdNamespace,
+		Callbacks: exporter.BuildkitCallbacks{
+			Exported: d.ImageExportedByBuildkit,
+			Named:    d.ImageNamedByBuildkit,
+		},
 	})
 	if err != nil {
 		return routerOptions{}, err
@@ -719,7 +717,7 @@ func (opts routerOptions) Build() []router.Router {
 	return routers
 }
 
-func initMiddlewares(s *apiserver.Server, cfg *config.Config, pluginStore plugingetter.PluginGetter) (*authorization.Middleware, error) {
+func initMiddlewares(ctx context.Context, s *apiserver.Server, cfg *config.Config, pluginStore plugingetter.PluginGetter) (*authorization.Middleware, error) {
 	exp := middleware.NewExperimentalMiddleware(cfg.Experimental)
 	s.UseMiddleware(exp)
 
@@ -729,8 +727,9 @@ func initMiddlewares(s *apiserver.Server, cfg *config.Config, pluginStore plugin
 	}
 	s.UseMiddleware(*vm)
 
-	if cfg.CorsHeaders != "" {
-		c := middleware.NewCORSMiddleware(cfg.CorsHeaders)
+	if cfg.CorsHeaders != "" && os.Getenv("DOCKERD_DEPRECATED_CORS_HEADER") != "" {
+		log.G(ctx).Warn(`DEPRECATED: The "api-cors-header" config parameter and the dockerd "--api-cors-header" option will be removed in the next release. Use a reverse proxy if you need CORS headers.`)
+		c := middleware.NewCORSMiddleware(cfg.CorsHeaders) //nolint:staticcheck // ignore SA1019 (NewCORSMiddleware is deprecated); will be removed in the next release.
 		s.UseMiddleware(c)
 	}
 

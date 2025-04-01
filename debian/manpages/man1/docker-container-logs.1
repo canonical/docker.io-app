@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-container-logs - Fetch the logs of a container
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker container logs [OPTIONS] CONTAINER\fP
 
 
 .SH DESCRIPTION
-.PP
 The \fBdocker container logs\fP command batch-retrieves whatever logs are present for
 a container at the time of execution. This does not guarantee execution
 order when combined with a docker run (i.e., your run may not have generated
@@ -29,10 +26,11 @@ logging drivers.
 
 .PP
 The \fB--since\fR and \fB--until\fR options can be Unix timestamps, date formatted timestamps,
-or Go duration strings (e.g. \fB10m\fR, \fB1h30m\fR) computed relative to the client machine's
+or Go duration strings supported by ParseDuration
+\[la]https://pkg.go.dev/time#ParseDuration\[ra] (e.g. \fB10m\fR, \fB1h30m\fR) computed relative to the client machine's
 time. Supported formats for date formatted time stamps include RFC3339Nano,
 RFC3339, \fB2006-01-02T15:04:05\fR, \fB2006-01-02T15:04:05.999999999\fR,
-\fB2006-01-02Z07:00\fR, and \fB2006-01-02\fR\&. The local timezone on the client will be
+\fB2006-01-02T07:00\fR, and \fB2006-01-02\fR\&. The local timezone on the client will be
 used if you do not provide either a \fBZ\fR or a \fB+-00:00\fR timezone offset at the
 end of the timestamp.  When providing Unix timestamps enter
 seconds[.nanoseconds], where seconds is the number of seconds that have elapsed
@@ -57,12 +55,10 @@ $ docker logs -f --until=2s test
 Tue 14 Nov 2017 16:40:00 CET
 Tue 14 Nov 2017 16:40:01 CET
 Tue 14 Nov 2017 16:40:02 CET
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB--details\fP[=false]
 	Show extra details provided to logs
 
@@ -92,5 +88,4 @@ Tue 14 Nov 2017 16:40:02 CET
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-container(1)\fP

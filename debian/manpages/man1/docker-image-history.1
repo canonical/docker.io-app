@@ -1,18 +1,16 @@
+'\" t
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-image-history - Show the history of an image
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker image history [OPTIONS] IMAGE\fP
 
 
 .SH DESCRIPTION
-.PP
 Show the history of when and how an image was created.
 
 
@@ -23,11 +21,9 @@ IMAGE          CREATED          CREATED BY                                      
 105182bb5e8b   5 days ago       /bin/sh -c #(nop) ADD file:71356d2ad59aa3119d   372.7 MB
 73bd853d2ea5   13 days ago      /bin/sh -c #(nop) MAINTAINER Lokesh Mandvekar   0 B
 511136ea3c5a   10 months ago                                                    0 B                 Imported from -
-
 .EE
 
 .SH Display comments in the image history
-.PP
 The \fBdocker commit\fR command has a \fB-m\fP flag for adding comments to the image. These comments will be displayed in the image history.
 
 .EX
@@ -37,11 +33,9 @@ IMAGE               CREATED             CREATED BY                              
 88b42ffd1f7c        5 months ago        /bin/sh -c #(nop) ADD file:1fd8d7f9f6557cafc7   373.7 MB            
 c69cab00d6ef        5 months ago        /bin/sh -c #(nop) MAINTAINER Lokesh Mandvekar   0 B                 
 511136ea3c5a        19 months ago                                                       0 B                 Imported from -
-
 .EE
 
 .SS Format the output
-.PP
 The formatting option (\fB--format\fR) will pretty-prints history output
 using a Go template.
 
@@ -87,18 +81,16 @@ cc1b61406712: 2 weeks ago
 <missing>: 3 weeks ago
 <missing>: 3 weeks ago
 <missing>: 3 weeks ago
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -119,5 +111,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-image(1)\fP

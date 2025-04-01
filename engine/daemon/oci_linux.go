@@ -13,25 +13,27 @@ import (
 	"github.com/containerd/containerd/containers"
 	coci "github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/apparmor"
-	"github.com/containerd/containerd/pkg/userns"
 	"github.com/containerd/log"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/container"
 	dconfig "github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/internal/rootless/mountopts"
+	"github.com/docker/docker/internal/rootless/specconv"
 	"github.com/docker/docker/oci"
 	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/pkg/idtools"
-	"github.com/docker/docker/pkg/rootless/specconv"
 	"github.com/docker/docker/pkg/stringid"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"github.com/moby/sys/user"
+	"github.com/moby/sys/userns"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel"
 )
 
 const inContainerInitPath = "/sbin/" + dconfig.DefaultInitBinary
@@ -73,8 +75,13 @@ func withLibnetwork(daemon *Daemon, daemonCfg *dconfig.Config, c *container.Cont
 					s.Hooks = &specs.Hooks{}
 				}
 				shortNetCtlrID := stringid.TruncateID(daemon.netController.ID())
+
+				var carrier otelutil.EnvironCarrier
+				otel.GetTextMapPropagator().Inject(ctx, &carrier)
+
 				s.Hooks.Prestart = append(s.Hooks.Prestart, specs.Hook{ //nolint:staticcheck // FIXME(thaJeztah); replace prestart hook with a non-deprecated one.
 					Path: filepath.Join("/proc", strconv.Itoa(os.Getpid()), "exe"),
+					Env:  carrier.Environ(),
 					Args: []string{"libnetwork-setkey", "-exec-root=" + daemonCfg.GetExecRoot(), c.ID, shortNetCtlrID},
 				})
 			}
@@ -178,7 +185,7 @@ func WithApparmor(c *container.Container) coci.SpecOpts {
 	}
 }
 
-// WithCapabilities sets the container's capabilties
+// WithCapabilities sets the container's capabilities
 func WithCapabilities(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
 		capabilities, err := caps.TweakCapabilities(
@@ -825,15 +832,11 @@ func withCgroups(daemon *Daemon, daemonCfg *dconfig.Config, c *container.Contain
 
 		p := cgroupsPath
 		if useSystemd {
-			initPath, err := cgroups.GetInitCgroup("cpu")
+			path, err := cgroups.GetOwnCgroup("cpu")
 			if err != nil {
 				return errors.Wrap(err, "unable to init CPU RT controller")
 			}
-			_, err = cgroups.GetOwnCgroup("cpu")
-			if err != nil {
-				return errors.Wrap(err, "unable to init CPU RT controller")
-			}
-			p = filepath.Join(initPath, s.Linux.CgroupsPath)
+			p = filepath.Join(path, s.Linux.CgroupsPath)
 		}
 
 		// Clean path to guard against things like ../../../BAD

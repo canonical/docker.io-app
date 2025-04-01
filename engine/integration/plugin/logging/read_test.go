@@ -9,10 +9,12 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	testContainer "github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/daemon"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/poll"
 )
 
 // TestReadPluginNoRead tests that reads are supported even if the plugin isn't capable.
@@ -25,7 +27,7 @@ func TestReadPluginNoRead(t *testing.T) {
 	ctx := testutil.StartSpan(baseContext, t)
 
 	d := daemon.New(t)
-	d.StartWithBusybox(ctx, t, "--iptables=false")
+	d.StartWithBusybox(ctx, t, "--iptables=false", "--ip6tables=false")
 	defer d.Stop(t)
 
 	client, err := d.NewClient()
@@ -50,7 +52,7 @@ func TestReadPluginNoRead(t *testing.T) {
 	} {
 		t.Run(desc, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
-			d.Start(t, append([]string{"--iptables=false"}, test.dOpts...)...)
+			d.Start(t, append([]string{"--iptables=false", "--ip6tables=false"}, test.dOpts...)...)
 			defer d.Stop(t)
 			c, err := client.ContainerCreate(ctx,
 				cfg,
@@ -65,6 +67,7 @@ func TestReadPluginNoRead(t *testing.T) {
 			err = client.ContainerStart(ctx, c.ID, container.StartOptions{})
 			assert.Assert(t, err)
 
+			poll.WaitOn(t, testContainer.IsStopped(ctx, client, c.ID))
 			logs, err := client.ContainerLogs(ctx, c.ID, container.LogsOptions{ShowStdout: true})
 			if !test.logsSupported {
 				assert.Assert(t, err != nil)

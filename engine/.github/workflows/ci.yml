@@ -1,5 +1,14 @@
 name: ci
 
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -10,10 +19,13 @@ on:
     branches:
       - 'master'
       - '[0-9]+.[0-9]+'
+      - '[0-9]+.x'
   pull_request:
 
 env:
   DESTDIR: ./build
+  SETUP_BUILDX_VERSION: latest
+  SETUP_BUILDKIT_IMAGE: moby/buildkit:latest
 
 jobs:
   validate-dco:
@@ -21,6 +33,7 @@ jobs:
 
   build:
     runs-on: ubuntu-20.04
+    timeout-minutes: 20 # guardrails timeout for the whole job
     needs:
       - validate-dco
     strategy:
@@ -31,16 +44,15 @@ jobs:
           - dynbinary
     steps:
       -
-        name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: ${{ matrix.target }}
       -
@@ -53,7 +65,8 @@ jobs:
           find ${{ env.DESTDIR }} -type f -exec file -e ascii -- {} +
 
   prepare-cross:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20 # guardrails timeout for the whole job
     needs:
       - validate-dco
     outputs:
@@ -75,6 +88,7 @@ jobs:
 
   cross:
     runs-on: ubuntu-20.04
+    timeout-minutes: 20 # guardrails timeout for the whole job
     needs:
       - validate-dco
       - prepare-cross
@@ -84,11 +98,6 @@ jobs:
         platform: ${{ fromJson(needs.prepare-cross.outputs.matrix) }}
     steps:
       -
-        name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      -
         name: Prepare
         run: |
           platform=${{ matrix.platform }}
@@ -96,9 +105,13 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
       -
         name: Build
-        uses: docker/bake-action@v4
+        uses: docker/bake-action@v6
         with:
           targets: all
           set: |
@@ -111,3 +124,33 @@ jobs:
         name: Check artifacts
         run: |
           find ${{ env.DESTDIR }} -type f -exec file -e ascii -- {} +
+
+  govulncheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
+    permissions:
+      # required to write sarif report
+      security-events: write
+      # required to check out the repository
+      contents: read
+    steps:
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: ${{ env.SETUP_BUILDX_VERSION }}
+          driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
+          buildkitd-flags: --debug
+      -
+        name: Run
+        uses: docker/bake-action@v6
+        with:
+          targets: govulncheck
+        env:
+          GOVULNCHECK_FORMAT: sarif
+      -
+        name: Upload SARIF report
+        if: ${{ github.event_name != 'pull_request' && github.repository == 'moby/moby' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.DESTDIR }}/govulncheck.out

@@ -11,7 +11,7 @@ Build-Depends: bash-completion,
                dh-exec,
                dh-golang,
                git,
-               golang-1.22-go,
+               golang-1.24-go,
                libapparmor-dev,
                libbtrfs-dev | btrfs-progs (<< 4.16.1~),
                libdevmapper-dev (>= 2:1.02.68~),
@@ -34,6 +34,11 @@ Depends: adduser,
          iptables,
          ${misc:Depends},
          ${shlibs:Depends}
+# Debian split the daemon and the docker binary into docker.io and docker-cli,
+# respectively. Instead of splitting it here, let's add a Provides: docker-cli
+# https://salsa.debian.org/ci-team/autopkgtest/-/merge_requests/399#note_543111
+# LP: #2099941
+Provides: docker-cli (= ${binary:Version})
 Recommends: ca-certificates,
             git,
             pigz,

@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package cache
 
@@ -9,9 +8,9 @@ import (
 	"io"
 
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/errdefs"
 	labelspkg "github.com/containerd/containerd/labels"
 	"github.com/containerd/containerd/mount"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/compression"
 	"github.com/moby/buildkit/util/overlay"
@@ -46,12 +45,13 @@ func (sr *immutableRef) tryComputeOverlayBlob(ctx context.Context, lower, upper 
 
 	defer func() {
 		if cw != nil {
+			ctx = context.WithoutCancel(ctx)
 			// after commit success cw will be set to nil, if cw isn't nil, error
 			// happened before commit, we should abort this ingest, and because the
 			// error may incured by ctx cancel, use a new context here. And since
 			// cm.Close will unlock this ref in the content store, we invoke abort
 			// to remove the ingest root in advance.
-			if aerr := sr.cm.ContentStore.Abort(context.Background(), ref); aerr != nil {
+			if aerr := sr.cm.ContentStore.Abort(ctx, ref); aerr != nil {
 				bklog.G(ctx).WithError(aerr).Warnf("failed to abort writer %q", ref)
 			}
 			if cerr := cw.Close(); cerr != nil {
@@ -80,10 +80,9 @@ func (sr *immutableRef) tryComputeOverlayBlob(ctx context.Context, lower, upper 
 		if err := compressed.Close(); err != nil {
 			return emptyDesc, false, errors.Wrap(err, "failed to close compressed diff writer")
 		}
-		if labels == nil {
-			labels = map[string]string{}
+		labels = map[string]string{
+			labelspkg.LabelUncompressed: dgstr.Digest().String(),
 		}
-		labels[labelspkg.LabelUncompressed] = dgstr.Digest().String()
 	} else {
 		if err = overlay.WriteUpperdir(ctx, bufW, upperdir, lower); err != nil {
 			return emptyDesc, false, errors.Wrap(err, "failed to write diff")
@@ -99,7 +98,7 @@ func (sr *immutableRef) tryComputeOverlayBlob(ctx context.Context, lower, upper 
 	}
 	dgst := cw.Digest()
 	if err := cw.Commit(ctx, 0, dgst, commitopts...); err != nil {
-		if !errdefs.IsAlreadyExists(err) {
+		if !cerrdefs.IsAlreadyExists(err) {
 			return emptyDesc, false, errors.Wrap(err, "failed to commit")
 		}
 	}

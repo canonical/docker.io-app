@@ -988,7 +988,7 @@ func (s *DockerCLIBuildSuite) TestBuildAddBadLinks(c *testing.T) {
 		c.Fatal(err)
 	}
 
-	err = os.WriteFile(fooPath, []byte("test"), 0666)
+	err = os.WriteFile(fooPath, []byte("test"), 0o666)
 	if err != nil {
 		c.Fatal(err)
 	}
@@ -1023,7 +1023,7 @@ func (s *DockerCLIBuildSuite) TestBuildAddBadLinksVolume(c *testing.T) {
 	defer ctx.Close()
 	fooPath := filepath.Join(ctx.Dir, targetFile)
 
-	err = os.WriteFile(fooPath, []byte("test"), 0666)
+	err = os.WriteFile(fooPath, []byte("test"), 0o666)
 	if err != nil {
 		c.Fatal(err)
 	}
@@ -3521,7 +3521,7 @@ func (s *DockerCLIBuildSuite) TestBuildNotVerboseFailureRemote(c *testing.T) {
 
 	// An error message should contain name server IP and port, like this:
 	//  "dial tcp: lookup something.invalid on 172.29.128.11:53: no such host"
-	// The IP:port need to be removed in order to not trigger a test failur
+	// The IP:port need to be removed in order to not trigger a test failure
 	// when more than one nameserver is configured.
 	// While at it, also strip excessive newlines.
 	normalize := func(msg string) string {
@@ -6191,4 +6191,72 @@ func (s *DockerCLIBuildSuite) TestBuildIidFileCleanupOnFail(c *testing.T) {
 	_, err = os.Stat(tmpIidFile)
 	assert.ErrorContains(c, err, "")
 	assert.Equal(c, os.IsNotExist(err), true)
+}
+
+func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
+	for _, builder := range []struct {
+		buildkit bool
+	}{
+		{buildkit: false},
+		{buildkit: true},
+	} {
+		builder := builder
+		for _, tc := range []struct {
+			name  string
+			args  []string
+			check func(t *testing.T, stdout string)
+		}{
+			{
+				name: "no tag",
+				args: []string{},
+				check: func(t *testing.T, stdout string) {
+					assert.Check(t, is.Contains(stdout, "image create"))
+					assert.Check(t, !strings.Contains(stdout, "image tag"))
+				},
+			},
+			{
+				name: "with tag",
+				args: []string{"-t", "testbuildemitsimagetagevent"},
+				check: func(t *testing.T, stdout string) {
+					assert.Check(t, is.Contains(stdout, "image create"))
+					assert.Check(t, is.Contains(stdout, "image tag"))
+					assert.Check(t, is.Contains(stdout, "testbuildemitsimagetagevent"))
+				},
+			},
+		} {
+			tc := tc
+			t.Run(fmt.Sprintf("buildkit=%v/%s", builder.buildkit, tc.name), func(t *testing.T) {
+				skip.If(t, DaemonIsWindows, "Buildkit is not supported on Windows")
+
+				time.Sleep(time.Second)
+				before := time.Now()
+
+				args := []string{"build"}
+				args = append(args, tc.args...)
+
+				b := cli.Docker(cli.Args(args...),
+					build.WithoutCache,
+					build.WithDockerfile("FROM busybox\nRUN echo hi >/hello"),
+					build.WithBuildkit(builder.buildkit),
+				)
+				b.Assert(t, icmd.Success)
+				t.Log(b.Stdout())
+				t.Log(b.Stderr())
+
+				cmd := cli.Docker(
+					cli.Args("events",
+						"--filter", "type=image",
+						"--since", before.Format(time.RFC3339),
+					),
+					cli.WithTimeout(time.Millisecond*300),
+					cli.WithEnvironmentVariables("DOCKER_API_VERSION=v1.46"), // FIXME(thaJeztah): integration-cli runs docker CLI 17.06; we're "upgrading" the API version to a version it doesn't support here ;)
+				)
+
+				stdout := cmd.Stdout()
+				t.Log(stdout)
+
+				tc.check(t, stdout)
+			})
+		}
+	}
 }

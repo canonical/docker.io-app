@@ -30,18 +30,20 @@ import (
 	"github.com/docker/docker/layer"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	"github.com/docker/docker/oci"
-	"github.com/docker/docker/pkg/containerfs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/restartmanager"
 	"github.com/docker/docker/volume"
 	volumemounts "github.com/docker/docker/volume/mounts"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
 	agentexec "github.com/moby/swarmkit/v2/agent/exec"
 	"github.com/moby/sys/signal"
 	"github.com/moby/sys/symlink"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -200,7 +202,12 @@ func (container *Container) toDisk() (*Container, error) {
 
 // CheckpointTo makes the Container's current state visible to queries, and persists state.
 // Callers must hold a Container lock.
-func (container *Container) CheckpointTo(store *ViewDB) error {
+func (container *Container) CheckpointTo(ctx context.Context, store *ViewDB) error {
+	ctx, span := otel.Tracer("").Start(ctx, "container.CheckpointTo", trace.WithAttributes(
+		attribute.String("container.ID", container.ID),
+		attribute.String("container.Name", container.Name)))
+	defer span.End()
+
 	deepCopy, err := container.toDisk()
 	if err != nil {
 		return err
@@ -318,7 +325,7 @@ func (container *Container) SetupWorkingDirectory(rootIdentity idtools.Identity)
 }
 
 // GetResourcePath evaluates `path` in the scope of the container's BaseFS, with proper path
-// sanitisation. Symlinks are all scoped to the BaseFS of the container, as
+// sanitization. Symlinks are all scoped to the BaseFS of the container, as
 // though the container's BaseFS was `/`.
 //
 // The BaseFS of a container is the host-facing path which is bind-mounted as
@@ -337,7 +344,7 @@ func (container *Container) GetResourcePath(path string) (string, error) {
 	}
 	// IMPORTANT - These are paths on the OS where the daemon is running, hence
 	// any filepath operations must be done in an OS-agnostic way.
-	r, e := symlink.FollowSymlinkInScope(filepath.Join(container.BaseFS, containerfs.CleanScopedPath(path)), container.BaseFS)
+	r, e := symlink.FollowSymlinkInScope(filepath.Join(container.BaseFS, cleanScopedPath(path)), container.BaseFS)
 
 	// Log this here on the daemon side as there's otherwise no indication apart
 	// from the error being propagated all the way back to the client. This makes
@@ -348,8 +355,20 @@ func (container *Container) GetResourcePath(path string) (string, error) {
 	return r, e
 }
 
+// cleanScopedPath prepares the given path to be combined with a mount path or
+// a drive-letter. On Windows, it removes any existing driveletter (e.g. "C:").
+// The returned path is always prefixed with a [filepath.Separator].
+func cleanScopedPath(path string) string {
+	if len(path) >= 2 {
+		if v := filepath.VolumeName(path); len(v) > 0 {
+			path = path[len(v):]
+		}
+	}
+	return filepath.Join(string(filepath.Separator), path)
+}
+
 // GetRootResourcePath evaluates `path` in the scope of the container's root, with proper path
-// sanitisation. Symlinks are all scoped to the root of the container, as
+// sanitization. Symlinks are all scoped to the root of the container, as
 // though the container's root was `/`.
 //
 // The root of a container is the host-facing configuration metadata directory.

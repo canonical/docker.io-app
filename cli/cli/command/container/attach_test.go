@@ -1,7 +1,7 @@
 package container
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"testing"
 
@@ -70,19 +70,19 @@ func TestNewAttachCommandErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		cmd := NewAttachCommand(test.NewFakeCli(&fakeClient{inspectFunc: tc.containerInspectFunc}))
-		cmd.SetOut(io.Discard)
-		cmd.SetArgs(tc.args)
-		assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewAttachCommand(test.NewFakeCli(&fakeClient{inspectFunc: tc.containerInspectFunc}))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+			assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
+		})
 	}
 }
 
 func TestGetExitStatus(t *testing.T) {
-	var (
-		expectedErr = fmt.Errorf("unexpected error")
-		errC        = make(chan error, 1)
-		resultC     = make(chan container.WaitResponse, 1)
-	)
+	expectedErr := errors.New("unexpected error")
 
 	testcases := []struct {
 		result        *container.WaitResponse
@@ -110,16 +110,24 @@ func TestGetExitStatus(t *testing.T) {
 			},
 			expectedError: cli.StatusError{StatusCode: 15},
 		},
+		{
+			err:           context.Canceled,
+			expectedError: nil,
+		},
 	}
 
 	for _, testcase := range testcases {
+		errC := make(chan error, 1)
+		resultC := make(chan container.WaitResponse, 1)
 		if testcase.err != nil {
 			errC <- testcase.err
 		}
 		if testcase.result != nil {
 			resultC <- *testcase.result
 		}
+
 		err := getExitStatus(errC, resultC)
+
 		if testcase.expectedError == nil {
 			assert.NilError(t, err)
 		} else {
