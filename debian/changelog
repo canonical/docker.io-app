@@ -1,3 +1,15 @@
+docker.io-app (27.5.1-0ubuntu3~24.04.1) noble; urgency=medium
+
+  * Backport from plucky to noble (LP: #2085187)
+  * d/control: build with golang 1.22 for consistency across the supported
+    release
+  * d/rules: add golang 1.22 to PATH
+  * d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
+  * d/docker.io.postinst: notify when a reboot is required to reload the
+    AppArmor profile (LP #2065423).
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:11:56 -0300
+
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 
   * d/control: set a version for the docker-cli Provides
