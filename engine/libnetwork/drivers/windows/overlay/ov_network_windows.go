@@ -203,7 +203,7 @@ func (d *driver) DeleteNetwork(nid string) error {
 
 	_, err := hcsshim.HNSNetworkRequest("DELETE", n.hnsID, "")
 	if err != nil {
-		return types.ForbiddenErrorf(err.Error())
+		return types.ForbiddenErrorf("%v", err)
 	}
 
 	d.deleteNetwork(nid)
@@ -211,7 +211,7 @@ func (d *driver) DeleteNetwork(nid string) error {
 	return nil
 }
 
-func (d *driver) ProgramExternalConnectivity(nid, eid string, options map[string]interface{}) error {
+func (d *driver) ProgramExternalConnectivity(_ context.Context, nid, eid string, options map[string]interface{}) error {
 	return nil
 }
 

@@ -3,7 +3,6 @@ package container
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -134,7 +133,7 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 						return container.CreateResponse{ID: containerID}, nil
 					}
 				},
-				imageCreateFunc: func(parentReference string, options image.CreateOptions) (io.ReadCloser, error) {
+				imageCreateFunc: func(ctx context.Context, parentReference string, options image.CreateOptions) (io.ReadCloser, error) {
 					defer func() { pullCounter++ }()
 					return io.NopCloser(strings.NewReader("")), nil
 				},
@@ -231,12 +230,13 @@ func TestNewCreateCommandWithContentTrustErrors(t *testing.T) {
 				platform *specs.Platform,
 				containerName string,
 			) (container.CreateResponse, error) {
-				return container.CreateResponse{}, fmt.Errorf("shouldn't try to pull image")
+				return container.CreateResponse{}, errors.New("shouldn't try to pull image")
 			},
 		}, test.EnableContentTrust)
 		fakeCLI.SetNotaryClient(tc.notaryFunc)
 		cmd := NewCreateCommand(fakeCLI)
 		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
 		cmd.SetArgs(tc.args)
 		err := cmd.Execute()
 		assert.ErrorContains(t, err, tc.expectedError)

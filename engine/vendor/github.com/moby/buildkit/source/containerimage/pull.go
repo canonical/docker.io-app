@@ -3,16 +3,17 @@ package containerimage
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"runtime"
 	"time"
 
 	"github.com/containerd/containerd/content"
-	containerderrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/snapshots"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
@@ -58,7 +59,7 @@ type puller struct {
 	*pull.Puller
 }
 
-func mainManifestKey(ctx context.Context, desc ocispecs.Descriptor, platform ocispecs.Platform, layerLimit *int) (digest.Digest, error) {
+func mainManifestKey(desc ocispecs.Descriptor, platform ocispecs.Platform, layerLimit *int) (digest.Digest, error) {
 	dt, err := json.Marshal(struct {
 		Digest     digest.Digest
 		OS         string
@@ -150,9 +151,8 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 				if labels == nil {
 					labels = make(map[string]string)
 				}
-				for k, v := range estargz.SnapshotLabels(p.manifest.Ref, p.manifest.Descriptors, i) {
-					labels[k] = v
-				}
+				maps.Copy(labels, estargz.SnapshotLabels(p.manifest.Ref, p.manifest.Descriptors, i))
+
 				p.descHandlers[desc.Digest] = &cache.DescHandler{
 					Provider:       p.manifest.Provider,
 					Progress:       progressController,
@@ -164,7 +164,7 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (cach
 		}
 
 		desc := p.manifest.MainManifestDesc
-		k, err := mainManifestKey(ctx, desc, p.Platform, p.layerLimit)
+		k, err := mainManifestKey(desc, p.Platform, p.layerLimit)
 		if err != nil {
 			return struct{}{}, err
 		}
@@ -218,14 +218,14 @@ func (p *puller) Snapshot(ctx context.Context, g session.Group) (ir cache.Immuta
 	}
 	defer func() {
 		if p.releaseTmpLeases != nil {
-			p.releaseTmpLeases(context.TODO())
+			p.releaseTmpLeases(context.WithoutCancel(ctx))
 		}
 	}()
 
 	var current cache.ImmutableRef
 	defer func() {
 		if err != nil && current != nil {
-			current.Release(context.TODO())
+			current.Release(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -249,13 +249,13 @@ func (p *puller) Snapshot(ctx context.Context, g session.Group) (ir cache.Immuta
 	}
 
 	for _, desc := range p.manifest.Nonlayers {
-		if _, err := p.ContentStore.Info(ctx, desc.Digest); containerderrdefs.IsNotFound(err) {
+		if _, err := p.ContentStore.Info(ctx, desc.Digest); cerrdefs.IsNotFound(err) {
 			// manifest or config must have gotten gc'd after CacheKey, re-pull them
 			ctx, done, err := leaseutil.WithLease(ctx, p.LeaseManager, leaseutil.MakeTemporary)
 			if err != nil {
 				return nil, err
 			}
-			defer done(ctx)
+			defer done(context.WithoutCancel(ctx))
 
 			if _, err := p.PullManifests(ctx, getResolver); err != nil {
 				return nil, err

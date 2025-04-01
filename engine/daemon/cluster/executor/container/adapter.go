@@ -19,12 +19,12 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
-	containerpkg "github.com/docker/docker/container"
+	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/daemon/cluster/convert"
 	executorpkg "github.com/docker/docker/daemon/cluster/executor"
+	networkSettings "github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/libnetwork"
-	"github.com/docker/docker/runconfig"
 	volumeopts "github.com/docker/docker/volume/service/opts"
 	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/moby/swarmkit/v2/agent/exec"
@@ -305,10 +305,10 @@ func (c *containerAdapter) create(ctx context.Context) error {
 	// need to make this normalization happen once we're sure we won't make a
 	// cross-OS API call.
 	if hostConfig.NetworkMode == "" || hostConfig.NetworkMode.IsDefault() {
-		hostConfig.NetworkMode = runconfig.DefaultDaemonNetworkMode()
+		hostConfig.NetworkMode = networkSettings.DefaultNetwork
 		if v, ok := netConfig.EndpointsConfig[network.NetworkDefault]; ok {
 			delete(netConfig.EndpointsConfig, network.NetworkDefault)
-			netConfig.EndpointsConfig[runconfig.DefaultDaemonNetworkMode().NetworkName()] = v
+			netConfig.EndpointsConfig[networkSettings.DefaultNetwork] = v
 		}
 	}
 
@@ -324,8 +324,8 @@ func (c *containerAdapter) create(ctx context.Context) error {
 		return err
 	}
 
-	container := c.container.task.Spec.GetContainer()
-	if container == nil {
+	ctr := c.container.task.Spec.GetContainer()
+	if ctr == nil {
 		return errors.New("unable to get container from task spec")
 	}
 
@@ -334,12 +334,12 @@ func (c *containerAdapter) create(ctx context.Context) error {
 	}
 
 	// configure secrets
-	secretRefs := convert.SecretReferencesFromGRPC(container.Secrets)
+	secretRefs := convert.SecretReferencesFromGRPC(ctr.Secrets)
 	if err := c.backend.SetContainerSecretReferences(cr.ID, secretRefs); err != nil {
 		return err
 	}
 
-	configRefs := convert.ConfigReferencesFromGRPC(container.Configs)
+	configRefs := convert.ConfigReferencesFromGRPC(ctr.Configs)
 	if err := c.backend.SetContainerConfigReferences(cr.ID, configRefs); err != nil {
 		return err
 	}
@@ -419,8 +419,8 @@ func (c *containerAdapter) events(ctx context.Context) <-chan events.Message {
 	return eventsq
 }
 
-func (c *containerAdapter) wait(ctx context.Context) (<-chan containerpkg.StateStatus, error) {
-	return c.backend.ContainerWait(ctx, c.container.nameOrID(), containerpkg.WaitConditionNotRunning)
+func (c *containerAdapter) wait(ctx context.Context) (<-chan container.StateStatus, error) {
+	return c.backend.ContainerWait(ctx, c.container.nameOrID(), container.WaitConditionNotRunning)
 }
 
 func (c *containerAdapter) shutdown(ctx context.Context) error {
@@ -556,17 +556,4 @@ func (c *containerAdapter) logs(ctx context.Context, options api.LogSubscription
 		return nil, err
 	}
 	return msgs, nil
-}
-
-// todo: typed/wrapped errors
-func isContainerCreateNameConflict(err error) bool {
-	return strings.Contains(err.Error(), "Conflict. The name")
-}
-
-func isUnknownContainer(err error) bool {
-	return strings.Contains(err.Error(), "No such container:")
-}
-
-func isStoppedContainer(err error) bool {
-	return strings.Contains(err.Error(), "is already stopped")
 }

@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.22
+
 package containerd
 
 import (
@@ -10,23 +13,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/platforms"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
+	"github.com/docker/docker/internal/sliceutil"
 	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 )
-
-var truncatedID = regexp.MustCompile(`^(sha256:)?([a-f0-9]{4,64})$`)
 
 var errInconsistentData error = errors.New("consistency error: data changed during operation, retry")
 
@@ -111,7 +113,7 @@ func (i *ImageService) GetImage(ctx context.Context, refOrID string, options bac
 		}
 
 		img.Details = &image.Details{
-			References:  refs,
+			References:  sliceutil.Dedup(refs),
 			Size:        size,
 			Metadata:    nil,
 			Driver:      i.snapshotter,
@@ -202,10 +204,8 @@ func (i *ImageService) GetImageManifest(ctx context.Context, refOrID string, opt
 		}
 
 		if options.Platform != nil {
-			if plat == nil {
-				return nil, errdefs.NotFound(errors.Errorf("image with reference %s was found but does not match the specified platform: wanted %s, actual: nil", refOrID, platforms.Format(*options.Platform)))
-			} else if !platform.Match(*plat) {
-				return nil, errdefs.NotFound(errors.Errorf("image with reference %s was found but does not match the specified platform: wanted %s, actual: %s", refOrID, platforms.Format(*options.Platform), platforms.Format(*plat)))
+			if plat == nil || !platform.Match(*plat) {
+				return nil, errdefs.NotFound(errors.Errorf("image with reference %s was found but does not provide the specified platform (%s)", refOrID, platforms.FormatAll(*options.Platform)))
 			}
 		}
 
@@ -273,6 +273,11 @@ func (i *ImageService) resolveDescriptor(ctx context.Context, refOrID string) (o
 	return img.Target, nil
 }
 
+// ResolveImage looks up an image by reference or identifier in the image store.
+func (i *ImageService) ResolveImage(ctx context.Context, refOrID string) (containerdimages.Image, error) {
+	return i.resolveImage(ctx, refOrID)
+}
+
 func (i *ImageService) resolveImage(ctx context.Context, refOrID string) (containerdimages.Image, error) {
 	parsed, err := reference.ParseAnyReference(refOrID)
 	if err != nil {
@@ -321,9 +326,8 @@ func (i *ImageService) resolveImage(ctx context.Context, refOrID string) (contai
 		}
 	}
 
-	// If the identifier could be a short ID, attempt to match
-	if truncatedID.MatchString(refOrID) {
-		idWithoutAlgo := strings.TrimPrefix(refOrID, "sha256:")
+	// If the identifier could be a short ID, attempt to match.
+	if idWithoutAlgo := checkTruncatedID(refOrID); idWithoutAlgo != "" { // Valid ID.
 		filters := []string{
 			fmt.Sprintf("name==%q", ref), // Or it could just look like one.
 			"target.digest~=" + strconv.Quote(fmt.Sprintf(`^sha256:%s[0-9a-fA-F]{%d}$`, regexp.QuoteMeta(idWithoutAlgo), 64-len(idWithoutAlgo))),
@@ -430,7 +434,7 @@ func (i *ImageService) resolveAllReferences(ctx context.Context, refOrID string)
 	var dgst digest.Digest
 	var img *containerdimages.Image
 
-	if truncatedID.MatchString(refOrID) {
+	if idWithoutAlgo := checkTruncatedID(refOrID); idWithoutAlgo != "" { // Valid ID.
 		if d, ok := parsed.(reference.Digested); ok {
 			if cimg, err := i.images.Get(ctx, d.String()); err == nil {
 				img = &cimg
@@ -446,7 +450,6 @@ func (i *ImageService) resolveAllReferences(ctx context.Context, refOrID string)
 				dgst = d.Digest()
 			}
 		} else {
-			idWithoutAlgo := strings.TrimPrefix(refOrID, "sha256:")
 			name := reference.TagNameOnly(parsed.(reference.Named)).String()
 			filters := []string{
 				fmt.Sprintf("name==%q", name), // Or it could just look like one.
@@ -545,4 +548,21 @@ func (i *ImageService) resolveAllReferences(ctx context.Context, refOrID string)
 	}
 
 	return img, imgs, nil
+}
+
+// checkTruncatedID checks id for validity. If id is invalid, an empty string
+// is returned; otherwise, the ID without the optional "sha256:" prefix is
+// returned. The validity check is equivalent to
+// regexp.MustCompile(`^(sha256:)?([a-f0-9]{4,64})$`).MatchString(id).
+func checkTruncatedID(id string) string {
+	id = strings.TrimPrefix(id, "sha256:")
+	if l := len(id); l < 4 || l > 64 {
+		return ""
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return id
 }

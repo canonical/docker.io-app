@@ -8,12 +8,12 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/content"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/images/archive"
 	"github.com/containerd/containerd/leases"
-	"github.com/containerd/containerd/platforms"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/container"
@@ -67,19 +67,14 @@ func (i *ImageService) ExportImage(ctx context.Context, names []string, outStrea
 		archive.WithSkipMissing(i.content),
 	}
 
-	leasesManager := i.client.LeasesService()
-	lease, err := leasesManager.Create(ctx, leases.WithRandomID())
+	ctx, done, err := i.withLease(ctx, false)
 	if err != nil {
 		return errdefs.System(err)
 	}
-	defer func() {
-		if err := leasesManager.Delete(ctx, lease); err != nil {
-			log.G(ctx).WithError(err).Warn("cleaning up lease")
-		}
-	}()
+	defer done()
 
 	addLease := func(ctx context.Context, target ocispec.Descriptor) error {
-		return leaseContent(ctx, i.content, leasesManager, lease, target)
+		return i.leaseContent(ctx, i.content, target)
 	}
 
 	exportImage := func(ctx context.Context, target ocispec.Descriptor, ref reference.Named) error {
@@ -131,7 +126,6 @@ func (i *ImageService) ExportImage(ctx context.Context, names []string, outStrea
 
 		for _, img := range imgs {
 			ref, err := reference.ParseNamed(img.Name)
-
 			if err != nil {
 				log.G(ctx).WithFields(log.Fields{
 					"image": img.Name,
@@ -207,7 +201,13 @@ func (i *ImageService) ExportImage(ctx context.Context, names []string, outStrea
 
 // leaseContent will add a resource to the lease for each child of the descriptor making sure that it and
 // its children won't be deleted while the lease exists
-func leaseContent(ctx context.Context, store content.Store, leasesManager leases.Manager, lease leases.Lease, desc ocispec.Descriptor) error {
+func (i *ImageService) leaseContent(ctx context.Context, store content.Store, desc ocispec.Descriptor) error {
+	lid, ok := leases.FromContext(ctx)
+	if !ok {
+		return nil
+	}
+	lease := leases.Lease{ID: lid}
+	leasesManager := i.client.LeasesService()
 	return containerdimages.Walk(ctx, containerdimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 		_, err := store.Info(ctx, desc.Digest)
 		if err != nil {
@@ -291,6 +291,17 @@ func (i *ImageService) LoadImage(ctx context.Context, inTar io.ReadCloser, outSt
 				return nil
 			}
 
+			imgPlat, err := platformImg.ImagePlatform(ctx)
+			if err != nil {
+				logger.WithError(err).Warn("failed to read image platform, skipping unpack")
+				return nil
+			}
+
+			// Only unpack the image if it matches the host platform
+			if !i.hostPlatformMatcher().Match(imgPlat) {
+				return nil
+			}
+
 			unpacked, err := platformImg.IsUnpacked(ctx, i.snapshotter)
 			if err != nil {
 				logger.WithError(err).Warn("failed to check if image is unpacked")
@@ -299,7 +310,6 @@ func (i *ImageService) LoadImage(ctx context.Context, inTar io.ReadCloser, outSt
 
 			if !unpacked {
 				err = platformImg.Unpack(ctx, i.snapshotter)
-
 				if err != nil {
 					return errdefs.System(err)
 				}
@@ -307,12 +317,14 @@ func (i *ImageService) LoadImage(ctx context.Context, inTar io.ReadCloser, outSt
 			logger.WithField("alreadyUnpacked", unpacked).WithError(err).Debug("unpack")
 			return nil
 		})
-		if err != nil {
-			return errors.Wrap(err, "failed to unpack loaded image")
-		}
 
 		fmt.Fprintf(progress, "%s: %s\n", loadedMsg, name)
 		i.LogImageEvent(img.Target.Digest.String(), img.Target.Digest.String(), events.ActionLoad)
+
+		if err != nil {
+			// The image failed to unpack, but is already imported, log the error but don't fail the whole load.
+			fmt.Fprintf(progress, "Error unpacking image %s: %v\n", name, err)
+		}
 	}
 
 	return nil

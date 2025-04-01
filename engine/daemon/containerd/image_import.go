@@ -10,17 +10,16 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/content"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/platforms"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/pools"
 	"github.com/google/uuid"
@@ -50,7 +49,7 @@ func (i *ImageService) ImportImage(ctx context.Context, ref reference.Named, pla
 		return "", errdefs.System(err)
 	}
 	defer func() {
-		if err := release(compatcontext.WithoutCancel(ctx)); err != nil {
+		if err := release(context.WithoutCancel(ctx)); err != nil {
 			logger.WithError(err).Warn("failed to release lease created for import")
 		}
 	}()
@@ -328,7 +327,7 @@ func (i *ImageService) unpackImage(ctx context.Context, snapshotter string, img 
 	return nil
 }
 
-// detectCompression dectects the reader compression type.
+// detectCompression detects the reader compression type.
 func detectCompression(bufRd *bufio.Reader) (archive.Compression, error) {
 	bs, err := bufRd.Peek(10)
 	if err != nil && err != io.EOF {

@@ -18,17 +18,18 @@ import (
 	"github.com/containerd/log"
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/daemon/graphdriver/overlayutils"
+	"github.com/docker/docker/internal/containerfs"
+	"github.com/docker/docker/internal/directory"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
-	"github.com/docker/docker/pkg/containerfs"
-	"github.com/docker/docker/pkg/directory"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/quota"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
 	"github.com/moby/locker"
 	"github.com/moby/sys/mount"
+	"github.com/moby/sys/userns"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"golang.org/x/sys/unix"
 )
@@ -678,7 +679,6 @@ func (d *Driver) ApplyDiff(id string, parent string, diff io.Reader) (size int64
 		return d.naiveDiff.ApplyDiff(id, parent, diff)
 	}
 
-	// never reach here if we are running in UserNS
 	applyDir := d.getDiffPath(id)
 
 	logger.Debugf("Applying tar in %s", applyDir)
@@ -686,6 +686,7 @@ func (d *Driver) ApplyDiff(id string, parent string, diff io.Reader) (size int64
 	if err := untar(diff, applyDir, &archive.TarOptions{
 		IDMap:          d.idMap,
 		WhiteoutFormat: archive.OverlayWhiteoutFormat,
+		InUserNS:       userns.RunningInUserNS(),
 	}); err != nil {
 		return 0, err
 	}

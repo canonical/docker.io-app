@@ -13,11 +13,15 @@ import (
 
 // DefaultDaemonNetworkMode returns the default network stack the daemon should
 // use.
+//
+// Deprecated: this function is no longer in use and will be removed in the next release.
 func DefaultDaemonNetworkMode() container.NetworkMode {
 	return network.NetworkBridge
 }
 
 // IsPreDefinedNetwork indicates if a network is predefined by the daemon
+//
+// Deprecated: this function is no longer used and will be removed in the next release.
 func IsPreDefinedNetwork(network string) bool {
 	n := container.NetworkMode(network)
 	return n.IsBridge() || n.IsHost() || n.IsNone() || n.IsDefault()

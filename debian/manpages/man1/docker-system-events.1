@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-system-events - Get real time events from the server
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker system events [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 Get event information from the Docker daemon. Information can include historical
 information and real-time information.
 
@@ -21,7 +18,6 @@ Docker containers will report the following events:
 
 .EX
 attach, commit, copy, create, destroy, detach, die, exec_create, exec_detach, exec_start, export, kill, oom, pause, rename, resize, restart, start, stop, top, unpause, update
-
 .EE
 
 .PP
@@ -29,7 +25,6 @@ Docker images report the following events:
 
 .EX
 delete, import, load, pull, push, save, tag, untag
-
 .EE
 
 .PP
@@ -37,7 +32,6 @@ Docker volumes report the following events:
 
 .EX
 create, mount, unmount, destroy
-
 .EE
 
 .PP
@@ -45,18 +39,17 @@ Docker networks report the following events:
 
 .EX
 create, connect, disconnect, destroy
-
 .EE
 
 
 .SH OPTIONS
-.PP
 The \fB--since\fR and \fB--until\fR parameters can be Unix timestamps, date formatted
-timestamps, or Go duration strings (e.g. \fB10m\fR, \fB1h30m\fR) computed
+timestamps, or Go duration strings supported by ParseDuration
+\[la]https://pkg.go.dev/time#ParseDuration\[ra] (e.g. \fB10m\fR, \fB1h30m\fR) computed
 relative to the client machine's time. If you do not provide the \fB--since\fR option,
 the command returns only new and/or live events.  Supported formats for date
 formatted time stamps include RFC3339Nano, RFC3339, \fB2006-01-02T15:04:05\fR,
-\fB2006-01-02T15:04:05.999999999\fR, \fB2006-01-02Z07:00\fR, and \fB2006-01-02\fR\&. The local
+\fB2006-01-02T15:04:05.999999999\fR, \fB2006-01-02T07:00\fR, and \fB2006-01-02\fR\&. The local
 timezone on the client will be used if you do not provide either a \fBZ\fR or a
 \fB+-00:00\fR timezone offset at the end of the timestamp.  When providing Unix
 timestamps enter seconds[.nanoseconds], where seconds is the number of seconds
@@ -67,7 +60,6 @@ fraction of a second no more than nine digits long.
 
 .SH EXAMPLES
 .SH Listening for Docker events
-.PP
 After running docker events a container 786d698004576 is started and stopped
 (The container name has been shortened in the output below):
 
@@ -76,11 +68,9 @@ After running docker events a container 786d698004576 is started and stopped
 2015-01-28T20:21:31.000000000-08:00 59211849bc10: (from whenry/testimage:latest) start
 2015-01-28T20:21:31.000000000-08:00 59211849bc10: (from whenry/testimage:latest) die
 2015-01-28T20:21:32.000000000-08:00 59211849bc10: (from whenry/testimage:latest) stop
-
 .EE
 
 .SH Listening for events since a given date
-.PP
 Again the output container IDs have been shortened for the purposes of this document:
 
 .EX
@@ -94,7 +84,6 @@ Again the output container IDs have been shortened for the purposes of this docu
 2015-01-28T20:25:45.000000000-08:00 c21f6c22ba27: (from whenry/testimage:latest) start
 2015-01-28T20:25:45.000000000-08:00 c21f6c22ba27: (from whenry/testimage:latest) die
 2015-01-28T20:25:46.000000000-08:00 c21f6c22ba27: (from whenry/testimage:latest) stop
-
 .EE
 
 .PP
@@ -103,11 +92,10 @@ relative to the current time on the client machine:
 
 .EX
 # docker events --since '3m'
-2015-05-12T11:51:30.999999999Z07:00  4386fb97867d: (from ubuntu:22.04) die
-2015-05-12T15:52:12.999999999Z07:00  4386fb97867d: (from ubuntu:22.04) stop
-2015-05-12T15:53:45.999999999Z07:00  7805c1d35632: (from redis:2.8) die
-2015-05-12T15:54:03.999999999Z07:00  7805c1d35632: (from redis:2.8) stop
-
+2015-05-12T11:51:30.999999999Z07:00  4386fb97867d: (from ubuntu:24.04) die
+2015-05-12T15:52:12.999999999Z07:00  4386fb97867d: (from ubuntu:24.04) stop
+2015-05-12T15:53:45.999999999Z07:00  7805c1d35632: (from redis:7.2) die
+2015-05-12T15:54:03.999999999Z07:00  7805c1d35632: (from redis:7.2) stop
 .EE
 
 .PP
@@ -115,7 +103,6 @@ If you do not provide the --since option, the command returns only new and/or
 live events.
 
 .SH Format
-.PP
 If a format (\fB--format\fR) is specified, the given template will be executed
 instead of the default format. Go's \fBtext/template\fP package describes all the
 details of the format.
@@ -128,12 +115,11 @@ Type=container  Status=start  ID=2ee349dac409e97974ce8d01b70d250b85e0ba8189299c1
 Type=container  Status=resize  ID=2ee349dac409e97974ce8d01b70d250b85e0ba8189299c126a87812311951e26
 Type=container  Status=die  ID=2ee349dac409e97974ce8d01b70d250b85e0ba8189299c126a87812311951e26
 Type=container  Status=destroy  ID=2ee349dac409e97974ce8d01b70d250b85e0ba8189299c126a87812311951e26
-
 .EE
 
 .PP
 If a format is set to \fB{{json .}}\fR, the events are streamed as valid JSON
-Lines. For information about JSON Lines, please refer to https://jsonlines.org .
+Lines. For information about JSON Lines, refer to https://jsonlines.org .
 
 .EX
 # docker events --format '{{json .}}'
@@ -142,32 +128,31 @@ Lines. For information about JSON Lines, please refer to https://jsonlines.org .
 {"Type":"network","Action":"connect","Actor":{"ID":"1b50a5bf755f6021dfa78e..
 {"status":"start","id":"196016a57679bf42424484918746a9474cd905dd993c4d0f42..
 {"status":"resize","id":"196016a57679bf42424484918746a9474cd905dd993c4d0f4..
-
 .EE
 
 .SH Filters
 .EX
 $ docker events --filter 'event=stop'
-2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:22.04)
-2014-09-03T17:42:14.999999999Z07:00 container stop 7805c1d35632 (image=redis:2.8)
+2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:24.04)
+2014-09-03T17:42:14.999999999Z07:00 container stop 7805c1d35632 (image=redis:7.2)
 
-$ docker events --filter 'image=ubuntu:22.04'
-2014-05-10T17:42:14.999999999Z07:00 container start 4386fb97867d (image=ubuntu:22.04)
-2014-05-10T17:42:14.999999999Z07:00 container die 4386fb97867d (image=ubuntu:22.04)
-2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:22.04)
+$ docker events --filter 'image=ubuntu:24.04'
+2014-05-10T17:42:14.999999999Z07:00 container start 4386fb97867d (image=ubuntu:24.04)
+2014-05-10T17:42:14.999999999Z07:00 container die 4386fb97867d (image=ubuntu:24.04)
+2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:24.04)
 
 $ docker events --filter 'container=7805c1d35632'
-2014-05-10T17:42:14.999999999Z07:00 container die 7805c1d35632 (image=redis:2.8)
-2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image= redis:2.8)
+2014-05-10T17:42:14.999999999Z07:00 container die 7805c1d35632 (image=redis:7.2)
+2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image= redis:7.2)
 
 $ docker events --filter 'container=7805c1d35632' --filter 'container=4386fb97867d'
-2014-09-03T15:49:29.999999999Z07:00 container die 4386fb97867d (image=ubuntu:22.04)
-2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:22.04)
-2014-05-10T17:42:14.999999999Z07:00 container die 7805c1d35632 (image=redis:2.8)
-2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image=redis:2.8)
+2014-09-03T15:49:29.999999999Z07:00 container die 4386fb97867d (image=ubuntu:24.04)
+2014-05-10T17:42:14.999999999Z07:00 container stop 4386fb97867d (image=ubuntu:24.04)
+2014-05-10T17:42:14.999999999Z07:00 container die 7805c1d35632 (image=redis:7.2)
+2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image=redis:7.2)
 
 $ docker events --filter 'container=7805c1d35632' --filter 'event=stop'
-2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image=redis:2.8)
+2014-09-03T15:49:29.999999999Z07:00 container stop 7805c1d35632 (image=redis:7.2)
 
 $ docker events --filter 'type=volume'
 2015-12-23T21:05:28.136212689Z volume create test-event-volume-local (driver=local)
@@ -182,20 +167,18 @@ $ docker events --filter 'type=network'
 $ docker events --filter 'type=plugin' (experimental)
 2016-07-25T17:30:14.825557616Z plugin pull ec7b87f2ce84330fe076e666f17dfc049d2d7ae0b8190763de94e1f2d105993f (name=tiborvass/sample-volume-plugin:latest)
 2016-07-25T17:30:14.888127370Z plugin enable ec7b87f2ce84330fe076e666f17dfc049d2d7ae0b8190763de94e1f2d105993f (name=tiborvass/sample-volume-plugin:latest)
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--filter\fP=
 	Filter output based on conditions provided
 
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -212,5 +195,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-system(1)\fP

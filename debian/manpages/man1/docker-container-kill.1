@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-container-kill - Kill one or more running containers
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker container kill [OPTIONS] CONTAINER [CONTAINER...]\fP
 
 
 .SH DESCRIPTION
-.PP
 The \fBdocker kill\fR subcommand kills one or more containers. The main process
 inside the container is sent \fBSIGKILL\fR signal (default), or the signal that is
 specified with the \fB--signal\fR option. You can reference a container by its
@@ -45,7 +42,6 @@ not the container’s PID 1 and does not receive Unix signals.
 
 
 .SH OPTIONS
-.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for kill
 
@@ -55,5 +51,4 @@ not the container’s PID 1 and does not receive Unix signals.
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-container(1)\fP

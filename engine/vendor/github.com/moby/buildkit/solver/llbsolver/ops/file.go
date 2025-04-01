@@ -56,7 +56,7 @@ func (f *fileOp) CacheMap(ctx context.Context, g session.Group, index int) (*sol
 
 	actions := make([][]byte, 0, len(f.op.Actions))
 
-	markInvalid := func(idx pb.InputIndex) {
+	markInvalid := func(idx int64) {
 		if idx != -1 {
 			invalidSelectors[int(idx)] = struct{}{}
 		}
@@ -69,7 +69,7 @@ func (f *fileOp) CacheMap(ctx context.Context, g session.Group, index int) (*sol
 		var err error
 		switch a := action.Action.(type) {
 		case *pb.FileAction_Mkdir:
-			p := *a.Mkdir
+			p := a.Mkdir.CloneVT()
 			markInvalid(action.Input)
 			processOwner(p.Owner, selectors)
 			dt, err = json.Marshal(p)
@@ -77,7 +77,7 @@ func (f *fileOp) CacheMap(ctx context.Context, g session.Group, index int) (*sol
 				return nil, false, err
 			}
 		case *pb.FileAction_Mkfile:
-			p := *a.Mkfile
+			p := a.Mkfile.CloneVT()
 			markInvalid(action.Input)
 			processOwner(p.Owner, selectors)
 			dt, err = json.Marshal(p)
@@ -85,14 +85,14 @@ func (f *fileOp) CacheMap(ctx context.Context, g session.Group, index int) (*sol
 				return nil, false, err
 			}
 		case *pb.FileAction_Rm:
-			p := *a.Rm
+			p := a.Rm.CloneVT()
 			markInvalid(action.Input)
 			dt, err = json.Marshal(p)
 			if err != nil {
 				return nil, false, err
 			}
 		case *pb.FileAction_Copy:
-			p := *a.Copy
+			p := a.Copy.CloneVT()
 			markInvalid(action.Input)
 			processOwner(p.Owner, selectors)
 			if action.SecondaryInput != -1 && int(action.SecondaryInput) < f.numInputs {
@@ -169,7 +169,7 @@ func (f *fileOp) Exec(ctx context.Context, g session.Group, inputs []solver.Resu
 
 	backend, err := file.NewFileOpBackend(getReadUserFn(f.w))
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	fs := NewFileOpSolver(f.w, backend, f.refManager)
@@ -354,7 +354,7 @@ func (s *FileOpSolver) Solve(ctx context.Context, inputs []fileoptypes.Ref, acti
 	defer func() {
 		for _, in := range s.ins {
 			if in.ref == nil && in.mount != nil {
-				in.mount.Release(context.TODO())
+				in.mount.Release(context.WithoutCancel(ctx))
 			}
 		}
 	}()
@@ -432,6 +432,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 
 		defer func() {
 			if err != nil && inpMount != nil {
+				ctx := context.WithoutCancel(ctx)
 				inputRes := make([]solver.Result, len(inputs))
 				for i, input := range inputs {
 					inputRes[i] = worker.NewWorkerRefResult(input.(cache.ImmutableRef), s.w)
@@ -458,8 +459,9 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 
 				err = errdefs.WithExecErrorWithContext(ctx, err, inputRes, outputRes)
 			}
+			ctx := context.WithoutCancel(ctx)
 			for _, m := range toRelease {
-				m.Release(context.TODO())
+				m.Release(ctx)
 			}
 		}()
 
@@ -472,7 +474,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 				if inp.ref != nil {
 					m, err := s.r.Prepare(ctx, inp.ref, false, g)
 					if err != nil {
-						return err
+						return errors.WithStack(err)
 					}
 					inpMount = m
 					return nil
@@ -491,7 +493,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 				if inp.ref != nil {
 					m, err := s.r.Prepare(ctx, inp.ref, true, g)
 					if err != nil {
-						return err
+						return errors.WithStack(err)
 					}
 					inpMountSecondary = m
 					toRelease = append(toRelease, m)
@@ -519,7 +521,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 				if inp.ref != nil {
 					mm, err := s.r.Prepare(ctx, inp.ref, true, g)
 					if err != nil {
-						return nil, err
+						return nil, errors.WithStack(err)
 					}
 					toRelease = append(toRelease, mm)
 					m = mm
@@ -570,7 +572,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 		if inpMount == nil {
 			m, err := s.r.Prepare(ctx, nil, false, g)
 			if err != nil {
-				return input{}, err
+				return input{}, errors.WithStack(err)
 			}
 			inpMount = m
 		}
@@ -581,7 +583,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 			if err != nil {
 				return input{}, err
 			}
-			if err := s.b.Mkdir(ctx, inpMount, user, group, *a.Mkdir); err != nil {
+			if err := s.b.Mkdir(ctx, inpMount, user, group, a.Mkdir); err != nil {
 				return input{}, err
 			}
 		case *pb.FileAction_Mkfile:
@@ -589,11 +591,11 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 			if err != nil {
 				return input{}, err
 			}
-			if err := s.b.Mkfile(ctx, inpMount, user, group, *a.Mkfile); err != nil {
+			if err := s.b.Mkfile(ctx, inpMount, user, group, a.Mkfile); err != nil {
 				return input{}, err
 			}
 		case *pb.FileAction_Rm:
-			if err := s.b.Rm(ctx, inpMount, *a.Rm); err != nil {
+			if err := s.b.Rm(ctx, inpMount, a.Rm); err != nil {
 				return input{}, err
 			}
 		case *pb.FileAction_Copy:
@@ -608,7 +610,7 @@ func (s *FileOpSolver) getInput(ctx context.Context, idx int, inputs []fileoptyp
 			if err != nil {
 				return input{}, err
 			}
-			if err := s.b.Copy(ctx, inpMountSecondary, inpMount, user, group, *a.Copy); err != nil {
+			if err := s.b.Copy(ctx, inpMountSecondary, inpMount, user, group, a.Copy); err != nil {
 				return input{}, err
 			}
 		default:

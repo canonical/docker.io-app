@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-image-ls - List images
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker image ls [OPTIONS] [REPOSITORY[:TAG]]\fP
 
 
 .SH DESCRIPTION
-.PP
 This command lists the images stored in the local Docker repository.
 
 .PP
@@ -27,14 +24,11 @@ The title REPOSITORY for the first title may seem confusing. It is essentially
 the image name. However, because you can tag a specific image, and multiple tags
 (image instances) can be associated with a single name, the name is really a
 repository for all tagged images of the same name. For example consider an image
-called ubuntu. It may be tagged with 20.04 or 22.04, etc. to manage different
+called ubuntu. It may be tagged with 24.04 or 22.04, etc. to manage different
 versions.
 
 .SH Filters
-.PP
 Filters the output based on these conditions:
-
-.RS
 .IP \(bu 2
 dangling=(true|false) - find unused images
 .IP \(bu 2
@@ -48,10 +42,7 @@ since=([:tag]||image@digest
 .IP \(bu 2
 reference=(pattern of an image reference)
 
-.RE
-
 .SH Format
-.PP
 Format the output using the given Go template.
    Valid placeholders:
       .ID - Image ID
@@ -65,12 +56,10 @@ Format the output using the given Go template.
 
 .SH EXAMPLES
 .SH Listing the images
-.PP
 To list the images in a local repository (not the registry) run:
 
 .EX
 docker image ls
-
 .EE
 
 .PP
@@ -86,7 +75,6 @@ given repository.
 
 .EX
 docker image ls java
-
 .EE
 
 .PP
@@ -100,7 +88,6 @@ repository with tag "8" you can use:
 
 .EX
 docker image ls java:8
-
 .EE
 
 .PP
@@ -109,7 +96,6 @@ used in builds use \fB-a\fP:
 
 .EX
 docker image ls -a
-
 .EE
 
 .PP
@@ -119,7 +105,6 @@ this functionality in the 1.7 version. If you liked this functionality, you can
 still find it in the third-party dockviz tool: https://github.com/justone/dockviz.
 
 .SH Listing images in a desired format
-.PP
 When using the --format option, the image command will either output the data
 exactly as the template declares or, when using the \fBtable\fR directive, will
 include column headers as well. You can use special characters like \fB\\t\fR for
@@ -141,7 +126,6 @@ b6fa739cedf5: committ
 746b819f315e: postgres
 746b819f315e: postgres
 746b819f315e: postgres
-
 .EE
 
 .PP
@@ -159,7 +143,6 @@ b6fa739cedf5        committ                   latest
 746b819f315e        postgres                  9.3
 746b819f315e        postgres                  9.3.5
 746b819f315e        postgres                  latest
-
 .EE
 
 .PP
@@ -173,22 +156,18 @@ docker image ls --format json
 {"Containers":"N/A","CreatedAt":"2021-01-18 11:29:06 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"fbcf509fa16f","Repository":"docker","SharedSize":"N/A","Size":"235MB","Tag":"stable-dind","UniqueSize":"N/A","VirtualSize":"235.5MB"}
 {"Containers":"N/A","CreatedAt":"2021-01-18 11:24:48 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"08656a69ab2b","Repository":"docker-cli-e2e","SharedSize":"N/A","Size":"1.21GB","Tag":"latest","UniqueSize":"N/A","VirtualSize":"1.207GB"}
 {"Containers":"N/A","CreatedAt":"2021-01-18 10:43:44 +0100 CET","CreatedSince":"24 hours ago","Digest":"\\u003cnone\\u003e","ID":"abca5c07c1ba","Repository":"docker-cli-dev","SharedSize":"N/A","Size":"608MB","Tag":"latest","UniqueSize":"N/A","VirtualSize":"607.8MB"}
-
 .EE
 
 .SH Listing only the shortened image IDs
-.PP
 Listing just the shortened image IDs. This can be useful for some automated
 tools.
 
 .EX
 docker image ls -q
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-a\fP, \fB--all\fP[=false]
 	Show all images (default hides intermediate images)
 
@@ -203,10 +182,10 @@ docker image ls -q
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -221,7 +200,10 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 \fB-q\fP, \fB--quiet\fP[=false]
 	Only show image IDs
 
+.PP
+\fB--tree\fP[=false]
+	List multi-platform images as a tree (EXPERIMENTAL)
+
 
 .SH SEE ALSO
-.PP
 \fBdocker-image(1)\fP

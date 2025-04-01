@@ -7,14 +7,23 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/docker/distribution/manifest/schema2"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/distribution"
 	progressutils "github.com/docker/docker/distribution/utils"
 	"github.com/docker/docker/pkg/progress"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // PushImage initiates a push operation on the repository named localName.
-func (i *ImageService) PushImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *registry.AuthConfig, outStream io.Writer) error {
+func (i *ImageService) PushImage(ctx context.Context, ref reference.Named, platform *ocispec.Platform, metaHeaders map[string][]string, authConfig *registry.AuthConfig, outStream io.Writer) error {
+	if platform != nil {
+		// Check if the image is actually the platform we want to push.
+		_, err := i.GetImage(ctx, ref.String(), backend.GetImageOpts{Platform: platform})
+		if err != nil {
+			return err
+		}
+	}
 	start := time.Now()
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.

@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-container-pause - Pause all processes within one or more containers
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker container pause CONTAINER [CONTAINER...]\fP
 
 
 .SH DESCRIPTION
-.PP
 The \fBdocker container pause\fR command suspends all processes in the specified containers.
 On Linux, this uses the freezer cgroup. Traditionally, when suspending a process
 the \fBSIGSTOP\fR signal is used, which is observable by the process being suspended.
@@ -30,11 +27,9 @@ further details.
 
 
 .SH OPTIONS
-.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for pause
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-container(1)\fP

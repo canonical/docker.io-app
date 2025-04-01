@@ -23,7 +23,7 @@ type FileRange struct {
 	Length int
 }
 
-func withMount(ctx context.Context, mount snapshot.Mountable, cb func(string) error) error {
+func withMount(mount snapshot.Mountable, cb func(string) error) error {
 	lm := snapshot.LocalMounter(mount)
 
 	root, err := lm.Mount()
@@ -51,7 +51,7 @@ func withMount(ctx context.Context, mount snapshot.Mountable, cb func(string) er
 func ReadFile(ctx context.Context, mount snapshot.Mountable, req ReadRequest) ([]byte, error) {
 	var dt []byte
 
-	err := withMount(ctx, mount, func(root string) error {
+	err := withMount(mount, func(root string) error {
 		fp, err := fs.RootPath(root, req.Filename)
 		if err != nil {
 			return errors.WithStack(err)
@@ -95,7 +95,7 @@ func ReadDir(ctx context.Context, mount snapshot.Mountable, req ReadDirRequest) 
 	if req.IncludePattern != "" {
 		fo.IncludePatterns = append(fo.IncludePatterns, req.IncludePattern)
 	}
-	err := withMount(ctx, mount, func(root string) error {
+	err := withMount(mount, func(root string) error {
 		fp, err := fs.RootPath(root, req.Path)
 		if err != nil {
 			return errors.WithStack(err)
@@ -122,7 +122,7 @@ func ReadDir(ctx context.Context, mount snapshot.Mountable, req ReadDirRequest) 
 
 func StatFile(ctx context.Context, mount snapshot.Mountable, path string) (*fstypes.Stat, error) {
 	var st *fstypes.Stat
-	err := withMount(ctx, mount, func(root string) error {
+	err := withMount(mount, func(root string) error {
 		fp, err := fs.RootPath(root, path)
 		if err != nil {
 			return errors.WithStack(err)
@@ -131,16 +131,24 @@ func StatFile(ctx context.Context, mount snapshot.Mountable, path string) (*fsty
 			// The filename here is internal to the mount, so we can restore
 			// the request base path for error reporting.
 			// See os.DirFS.Open for details.
-			err1 := err
-			if err := errors.Cause(err); err != nil {
-				err1 = err
-			}
-			if pe, ok := err1.(*os.PathError); ok {
-				pe.Path = path
-			}
+			replaceErrorPath(err, path)
 			return errors.WithStack(err)
 		}
 		return nil
 	})
 	return st, err
+}
+
+// replaceErrorPath will override the path in an os.PathError in the error chain.
+// This works with the fsutil library, but it isn't necessarily the correct
+// way to do this because the error message of wrapped errors doesn't necessarily
+// update or change when a wrapped error is changed.
+//
+// Still, this method of updating the path works with the way this specific
+// library returns errors.
+func replaceErrorPath(err error, path string) {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		pe.Path = path
+	}
 }

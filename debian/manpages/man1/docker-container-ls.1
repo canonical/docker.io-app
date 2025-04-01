@@ -1,23 +1,19 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-container-ls - List containers
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker container ls [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 List the containers in the local repository. By default this shows only
 the running containers.
 
 .SH Filters
-.PP
 Filter output based on these conditions:
    - ancestor=([:tag]||image@digest
 \[la]mailto:image@digest\[ra])
@@ -38,7 +34,6 @@ Filter output based on these conditions:
    - volume=(|)
 
 .SH Format
-.PP
 The formatting option (\fB--format\fP) pretty-prints container output
 using a Go template.
 
@@ -65,11 +60,10 @@ Valid placeholders for the Go template are listed below:
 .EX
 $ docker container ls -a
 CONTAINER ID        IMAGE                 COMMAND                CREATED             STATUS      PORTS    NAMES
-a87ecb4f327c        ubuntu:22.04          /bin/sh -c #(nop) MA   20 minutes ago      Exit 0               desperate_brattain
+a87ecb4f327c        ubuntu:24.04          /bin/sh -c #(nop) MA   20 minutes ago      Exit 0               desperate_brattain
 01946d9d34d8        busybox               /bin/sh -c #(nop) MA   33 minutes ago      Exit 0               thirsty_bell
 c1d3b0166030        acffc0358b9e          /bin/sh -c yum -y up   2 weeks ago         Exit 1               determined_torvalds
-41d50ecd2f57        ubuntu:22.04          /bin/sh -c #(nop) MA   2 weeks ago         Exit 0               drunk_pike
-
+41d50ecd2f57        ubuntu:24.04          /bin/sh -c #(nop) MA   2 weeks ago         Exit 0               drunk_pike
 .EE
 
 .SH Display only IDs of all containers, including non-running
@@ -79,14 +73,12 @@ a87ecb4f327c
 01946d9d34d8
 c1d3b0166030
 41d50ecd2f57
-
 .EE
 
 .SH Display only IDs of all containers that have the name \fBdetermined_torvalds\fR
 .EX
 $ docker container ls -a -q --filter=name=determined_torvalds
 c1d3b0166030
-
 .EE
 
 .SH Display containers with their commands
@@ -96,7 +88,6 @@ a87ecb4f327c: /bin/sh -c #(nop) MA
 01946d9d34d8: /bin/sh -c #(nop) MA
 c1d3b0166030: /bin/sh -c yum -y up
 41d50ecd2f57: /bin/sh -c #(nop) MA
-
 .EE
 
 .SH Display containers with their labels in a table
@@ -107,7 +98,6 @@ a87ecb4f327c        com.docker.swarm.node=ubuntu,com.docker.swarm.storage=ssd
 01946d9d34d8
 c1d3b0166030        com.docker.swarm.node=debian,com.docker.swarm.cpu=6
 41d50ecd2f57        com.docker.swarm.node=fedora,com.docker.swarm.cpu=3,com.docker.swarm.storage=ssd
-
 .EE
 
 .SH Display containers with their node label in a table
@@ -118,7 +108,6 @@ a87ecb4f327c        worker-1
 01946d9d34d8
 c1d3b0166030        worker-1
 41d50ecd2f57        worker-2
-
 .EE
 
 .SH Display containers with \fBremote-volume\fR mounted
@@ -126,7 +115,6 @@ c1d3b0166030        worker-1
 $ docker container ls --filter volume=remote-volume --format "table {{.ID}}\\t{{.Mounts}}"
 CONTAINER ID        MOUNTS
 9c3527ed70ce        remote-volume
-
 .EE
 
 .SH Display containers with a volume mounted in \fB/data\fR
@@ -134,7 +122,6 @@ CONTAINER ID        MOUNTS
 $ docker container ls --filter volume=/data --format "table {{.ID}}\\t{{.Mounts}}"
 CONTAINER ID        MOUNTS
 9c3527ed70ce        remote-volume
-
 .EE
 
 .SH Display containers that have published port of 80:
@@ -142,7 +129,6 @@ CONTAINER ID        MOUNTS
 $ docker ps --filter publish=80
 CONTAINER ID        IMAGE               COMMAND             CREATED              STATUS              PORTS                   NAMES
 fc7e477723b7        busybox             "top"               About a minute ago   Up About a minute   0.0.0.0:32768->80/tcp   admiring_roentgen
-
 .EE
 
 .SH Display containers that have exposed TCP port in the range of \fB8000-8080\fR:
@@ -150,19 +136,16 @@ fc7e477723b7        busybox             "top"               About a minute ago  
 $ docker ps --filter expose=8000-8080/tcp
 CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
 9833437217a5        busybox             "top"               21 seconds ago      Up 19 seconds       8080/tcp            dreamy_mccarthy
-
 .EE
 
 .SH Display containers in JSON format:
 .EX
 $ docker ps --format json
 {"Command":"\\"/docker-entrypoint.…\\"","CreatedAt":"2021-03-10 00:15:05 +0100 CET","ID":"a762a2b37a1d","Image":"nginx","Labels":"maintainer=NGINX Docker Maintainers \\u003cdocker-maint@nginx.com\\u003e","LocalVolumes":"0","Mounts":"","Names":"boring_keldysh","Networks":"bridge","Ports":"80/tcp","RunningFor":"4 seconds ago","Size":"0B","State":"running","Status":"Up 3 seconds"}
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-a\fP, \fB--all\fP[=false]
 	Show all containers (default shows just running)
 
@@ -173,10 +156,10 @@ $ docker ps --format json
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -205,5 +188,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-container(1)\fP

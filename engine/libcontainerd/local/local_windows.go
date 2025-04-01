@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,16 +19,16 @@ import (
 	"github.com/Microsoft/hcsshim"
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
-	cerrdefs "github.com/containerd/containerd/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd/queue"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
-	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/windows"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type process struct {
@@ -365,7 +366,7 @@ func (c *client) extractResourcesFromSpec(spec *specs.Spec, configuration *hcssh
 				// because we don't want to update the HostConfig in case this container
 				// is moved to a host with more CPUs than this one.
 				cpuCount := *spec.Windows.Resources.CPU.Count
-				hostCPUCount := uint64(sysinfo.NumCPU())
+				hostCPUCount := uint64(runtime.NumCPU())
 				if cpuCount > hostCPUCount {
 					c.logger.Warnf("Changing requested CPUCount of %d to current number of processors, %d", cpuCount, hostCPUCount)
 					cpuCount = hostCPUCount
@@ -941,7 +942,7 @@ func (t *task) Summary(_ context.Context) ([]libcontainerdtypes.Summary, error) 
 	for i := range p {
 		pl[i] = libcontainerdtypes.Summary{
 			ImageName:                    p[i].ImageName,
-			CreatedAt:                    p[i].CreateTimestamp,
+			CreatedAt:                    timestamppb.New(p[i].CreateTimestamp),
 			KernelTime_100Ns:             p[i].KernelTime100ns,
 			MemoryCommitBytes:            p[i].MemoryCommitBytes,
 			MemoryWorkingSetPrivateBytes: p[i].MemoryWorkingSetPrivateBytes,

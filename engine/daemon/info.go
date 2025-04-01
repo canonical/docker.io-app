@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.19
+//go:build go1.22
 
 package daemon // import "github.com/docker/docker/daemon"
 
@@ -16,15 +16,15 @@ import (
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/cli/debug"
+	"github.com/docker/docker/cmd/dockerd/debug"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/logger"
 	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/internal/platform"
 	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/meminfo"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/parsers/operatingsystem"
-	"github.com/docker/docker/pkg/platform"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/registry"
 	metrics "github.com/docker/go-metrics"
@@ -63,9 +63,9 @@ func (daemon *Daemon) SystemInfo(ctx context.Context) (*system.Info, error) {
 		OSVersion:          osVersion(ctx),
 		IndexServerAddress: registry.IndexServer,
 		OSType:             runtime.GOOS,
-		Architecture:       platform.Architecture,
+		Architecture:       platform.Architecture(),
 		RegistryConfig:     doWithTrace(ctx, "registry.ServiceConfig", daemon.registryService.ServiceConfig),
-		NCPU:               doWithTrace(ctx, "sysinfo.NumCPU", sysinfo.NumCPU),
+		NCPU:               doWithTrace(ctx, "runtime.NumCPU", runtime.NumCPU),
 		MemTotal:           memInfo(ctx).MemTotal,
 		GenericResources:   daemon.genericResources,
 		DockerRootDir:      cfg.Root,
@@ -82,7 +82,9 @@ func (daemon *Daemon) SystemInfo(ctx context.Context) (*system.Info, error) {
 
 	daemon.fillContainerStates(v)
 	daemon.fillDebugInfo(ctx, v)
+	daemon.fillContainerdInfo(v, &cfg.Config)
 	daemon.fillAPIInfo(v, &cfg.Config)
+
 	// Retrieve platform specific info
 	if err := daemon.fillPlatformInfo(ctx, v, sysInfo, cfg); err != nil {
 		return nil, err
@@ -229,11 +231,30 @@ func (daemon *Daemon) fillDebugInfo(ctx context.Context, v *system.Info) {
 	v.NEventsListener = daemon.EventsService.SubscribersCount()
 }
 
+// fillContainerdInfo provides information about the containerd configuration
+// for debugging purposes.
+func (daemon *Daemon) fillContainerdInfo(v *system.Info, cfg *config.Config) {
+	if cfg.ContainerdAddr == "" {
+		return
+	}
+	v.Containerd = &system.ContainerdInfo{
+		Address: cfg.ContainerdAddr,
+		Namespaces: system.ContainerdNamespaces{
+			Containers: cfg.ContainerdNamespace,
+			Plugins:    cfg.ContainerdPluginNamespace,
+		},
+	}
+}
+
 func (daemon *Daemon) fillAPIInfo(v *system.Info, cfg *config.Config) {
 	const warn string = `
          Access to the remote API is equivalent to root access on the host. Refer
          to the 'Docker daemon attack surface' section in the documentation for
          more information: https://docs.docker.com/go/attack-surface/`
+
+	if cfg.CorsHeaders != "" {
+		v.Warnings = append(v.Warnings, `DEPRECATED: The "api-cors-header" config parameter and the dockerd "--api-cors-header" option will be removed in the next release. Use a reverse proxy if you need CORS headers.`)
+	}
 
 	for _, host := range cfg.Hosts {
 		// cnf.Hosts is normalized during startup, so should always have a scheme/proto
@@ -258,7 +279,7 @@ func (daemon *Daemon) fillDefaultAddressPools(ctx context.Context, v *system.Inf
 	defer span.End()
 	for _, pool := range cfg.DefaultAddressPools.Value() {
 		v.DefaultAddressPools = append(v.DefaultAddressPools, system.NetworkAddressPool{
-			Base: pool.Base,
+			Base: pool.Base.String(),
 			Size: pool.Size,
 		})
 	}

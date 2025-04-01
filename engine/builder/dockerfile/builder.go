@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
@@ -159,7 +159,7 @@ func newBuilder(ctx context.Context, options builderOptions) (*Builder, error) {
 	if config.Platform != "" {
 		sp, err := platforms.Parse(config.Platform)
 		if err != nil {
-			return nil, err
+			return nil, errdefs.InvalidParameter(err)
 		}
 		b.platform = &sp
 	}
@@ -187,7 +187,7 @@ func buildLabelOptions(labels map[string]string, stages []instructions.Stage) {
 func (b *Builder) build(ctx context.Context, source builder.Source, dockerfile *parser.Result) (*builder.Result, error) {
 	defer b.imageSources.Unmount()
 
-	stages, metaArgs, err := instructions.Parse(dockerfile.AST)
+	stages, metaArgs, err := instructions.Parse(dockerfile.AST, nil)
 	if err != nil {
 		var uiErr *instructions.UnknownInstructionError
 		if errors.As(err, &uiErr) {
@@ -228,9 +228,10 @@ func emitImageID(aux *streamformatter.AuxFormatter, state *dispatchState) error 
 
 func processMetaArg(meta instructions.ArgCommand, shlex *shell.Lex, args *BuildArgs) error {
 	// shell.Lex currently only support the concatenated string format
-	envs := convertMapToEnvList(args.GetAllAllowed())
+	envs := shell.EnvsFromSlice(convertMapToEnvList(args.GetAllAllowed()))
 	if err := meta.Expand(func(word string) (string, error) {
-		return shlex.ProcessWord(word, envs)
+		newword, _, err := shlex.ProcessWord(word, envs)
+		return newword, err
 	}); err != nil {
 		return err
 	}
@@ -378,5 +379,16 @@ func convertMapToEnvList(m map[string]string) []string {
 	for k, v := range m {
 		result = append(result, k+"="+v)
 	}
+	return result
+}
+
+// convertKVStringsToMap converts ["key=value"] to {"key":"value"}
+func convertKVStringsToMap(values []string) map[string]string {
+	result := make(map[string]string, len(values))
+	for _, value := range values {
+		k, v, _ := strings.Cut(value, "=")
+		result[k] = v
+	}
+
 	return result
 }

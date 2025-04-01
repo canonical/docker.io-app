@@ -2,12 +2,10 @@
 .TH "DOCKERD" "8" "SEPTEMBER 2015" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
-dockerd - Enable daemon mode
+dockerd \- Enable daemon mode
 
 
 .SH SYNOPSIS
-.PP
 \fBdockerd\fP
 [\fB--add-runtime\fP[=\fI[]\fP]]
 [\fB--allow-nondistributable-artifacts\fP[=\fI[]\fP]]
@@ -35,6 +33,7 @@ dockerd - Enable daemon mode
 [\fB--exec-opt\fP[=\fI[]\fP]]
 [\fB--exec-root\fP[=\fI/var/run/docker\fP]]
 [\fB--experimental\fP[=\fBfalse\fP]]
+[\fB--feature\fP[=\fINAME\fP[=\fBtrue\fP|\fBfalse\fP]]
 [\fB--fixed-cidr\fP[=\fIFIXED-CIDR\fP]]
 [\fB--fixed-cidr-v6\fP[=\fIFIXED-CIDR-V6\fP]]
 [\fB-G\fP|\fB--group\fP[=\fIdocker\fP]]
@@ -56,6 +55,7 @@ dockerd - Enable daemon mode
 [\fB--label\fP[=\fI[]\fP]]
 [\fB--live-restore\fP[=\fBfalse\fP]]
 [\fB--log-driver\fP[=\fIjson-file\fP]]
+[\fB--log-format\fP="\fItext\fP|\fIjson\fP"]
 [\fB--log-opt\fP[=\fImap[]\fP]]
 [\fB--mtu\fP[=\fI0\fP]]
 [\fB--max-concurrent-downloads\fP[=\fI3\fP]]
@@ -84,7 +84,6 @@ dockerd - Enable daemon mode
 
 
 .SH DESCRIPTION
-.PP
 \fBdockerd\fP is used for starting the Docker daemon (i.e., to command the daemon
 to manage images, containers etc).  So \fBdockerd\fP is a server, as a daemon.
 
@@ -99,7 +98,6 @@ following format.
 
 
 .SH OPTIONS
-.PP
 \fB--add-runtime\fP=[]
   Runtimes can be registered with the daemon either via the
 configuration file or using the \fB--add-runtime\fR command line argument.
@@ -122,7 +120,6 @@ The following is an example adding 2 runtimes via the configuration:
 		}
 	}
 }
-
 .EE
 
 .PP
@@ -130,7 +127,6 @@ This is the same example via the command line:
 
 .EX
 $ sudo dockerd --add-runtime runc=runc --add-runtime custom=/usr/local/bin/my-runc-replacement
-
 .EE
 
 .PP
@@ -265,6 +261,15 @@ This option is useful when pushing images containing nondistributable
   Enable the daemon experimental features.
 
 .PP
+\fB--feature\fP=\fINAME\fP[=\fBtrue\fP|\fBfalse\fP]
+  Enable or disable a feature in the daemon. This option corresponds
+  with the "features" field in the daemon.json configuration file. Using
+  both the command-line option and the "features" field in the configuration
+  file produces an error. The feature option can be specified multiple times
+  to configure multiple features.
+  Usage example: \fB--feature containerd-snapshotter\fR or \fB--feature containerd-snapshotter=true\fR\&.
+
+.PP
 \fB--fixed-cidr\fP=""
   IPv4 subnet for fixed IPs (e.g., 10.20.0.0/16); this subnet must be nested in
   the bridge subnet (which is defined by -b or --bip).
@@ -344,7 +349,7 @@ Enabling \fB--insecure-registry\fR is useful when running a local registry.
 This setting will also enable IPv6 forwarding if you have both
   \fB--ip-forward=true\fP and \fB--fixed-cidr-v6\fP set. Note that this may reject
   Router Advertisements and interfere with the host's existing IPv6
-  configuration. For more information, please consult the documentation about
+  configuration. For more information, consult the documentation about
   "Advanced Networking - IPv6".
 
 .PP
@@ -362,7 +367,7 @@ This setting will also enable IPv6 forwarding if you have both
   containers. Use together with \fB--fixed-cidr-v6\fP to provide globally routable
   IPv6 addresses. IPv6 forwarding will be enabled if not used with
   \fB--ip-forward=false\fP\&. This may collide with your host's current IPv6
-  settings. For more information please consult the documentation about
+  settings. For more information consult the documentation about
   "Advanced Networking - IPv6".
 
 .PP
@@ -389,6 +394,10 @@ This setting will also enable IPv6 forwarding if you have both
 \fB--log-driver\fP="\fBjson-file\fP|\fBsyslog\fP|\fBjournald\fP|\fBgelf\fP|\fBfluentd\fP|\fBawslogs\fP|\fBsplunk\fP|\fBetwlogs\fP|\fBgcplogs\fP|\fBnone\fP"
   Default driver for container logs. Default is \fBjson-file\fP\&.
   \fBWarning\fP: \fBdocker logs\fP command works only for \fBjson-file\fP logging driver.
+
+.PP
+\fB--log-format\fP="\fItext\fP|\fIjson\fP"
+  Set the format for logs produced by the daemon. Default is "text".
 
 .PP
 \fB--log-opt\fP=[]
@@ -510,7 +519,6 @@ This setting will also enable IPv6 forwarding if you have both
 
 
 .SH STORAGE DRIVER OPTIONS
-.PP
 Docker uses storage backends (known as "storage drivers" in the Docker
 internals) to create writable containers from images.  Many of these
 backends use operating system level technologies and can be
@@ -524,7 +532,6 @@ with \fBbtrfs.\fP\&.
 
 .SH ZFS options
 .SS zfs.fsname
-.PP
 Set zfs filesystem under which docker will create its own datasets.  By default
 docker will pick up the zfs filesystem where docker graph (\fB/var/lib/docker\fR)
 is located.
@@ -534,7 +541,6 @@ Example use: \fBdockerd -s zfs --storage-opt zfs.fsname=zroot/docker\fR
 
 .SH Btrfs options
 .SS btrfs.min_space
-.PP
 Specifies the minimum size to use when creating the subvolume which is used for
 containers. If user uses disk quota for btrfs when creating or running a
 container with \fB--storage-opt size\fP option, docker should ensure the \fBsize\fP
@@ -545,7 +551,6 @@ Example use: \fBdocker daemon -s btrfs --storage-opt btrfs.min_space=10G\fR
 
 
 .SH Access authorization
-.PP
 Docker's access authorization can be extended by authorization plugins that
 your organization can purchase or build themselves. You can install one or more
 authorization plugins when you start the Docker \fBdaemon\fR using the
@@ -553,7 +558,6 @@ authorization plugins when you start the Docker \fBdaemon\fR using the
 
 .EX
 dockerd --authorization-plugin=plugin1 --authorization-plugin=plugin2,...
-
 .EE
 
 .PP
@@ -576,7 +580,6 @@ Docker extend section of this documentation.
 
 
 .SH RUNTIME EXECUTION OPTIONS
-.PP
 You can configure the runtime using options specified with the \fB--exec-opt\fR flag.
 All the flag's options have the \fBnative\fR prefix. A single \fBnative.cgroupdriver\fR
 option is available.
@@ -593,7 +596,6 @@ This example sets the \fBcgroupdriver\fR to \fBsystemd\fR:
 
 .EX
 $ sudo dockerd --exec-opt native.cgroupdriver=systemd
-
 .EE
 
 .PP
@@ -601,7 +603,6 @@ Setting this option applies to all containers the daemon launches.
 
 
 .SH HISTORY
-.PP
 Sept 2015, Originally compiled by Shishir Mahajan shishir.mahajan@redhat.com
 \[la]mailto:shishir.mahajan@redhat.com\[ra]
 based on docker.com source material and internal work.
