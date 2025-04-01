@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/containerd/cgroups/v3"
-	"github.com/containerd/containerd/pkg/userns"
 	"github.com/containerd/log"
 	"github.com/docker/docker/api/types/blkiodev"
 	pblkiodev "github.com/docker/docker/api/types/blkiodev"
@@ -28,6 +27,7 @@ import (
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/initlayer"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/libcontainerd/remote"
 	"github.com/docker/docker/libnetwork"
 	nwconfig "github.com/docker/docker/libnetwork/config"
@@ -43,6 +43,7 @@ import (
 	"github.com/docker/docker/runconfig"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/moby/sys/mount"
+	"github.com/moby/sys/userns"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/opencontainers/selinux/go-selinux/label"
@@ -490,8 +491,11 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 	// https://www.kernel.org/doc/Documentation/scheduler/sched-bwc.txt
 	// Here we don't set the lower limit and it is up to the underlying platform (e.g., Linux) to return an error.
 	// The error message is 0.01 so that this is consistent with Windows
-	if resources.NanoCPUs < 0 || resources.NanoCPUs > int64(sysinfo.NumCPU())*1e9 {
-		return warnings, fmt.Errorf("Range of CPUs is from 0.01 to %d.00, as there are only %d CPUs available", sysinfo.NumCPU(), sysinfo.NumCPU())
+	if resources.NanoCPUs != 0 {
+		nc := runtime.NumCPU()
+		if resources.NanoCPUs < 0 || resources.NanoCPUs > int64(nc)*1e9 {
+			return warnings, fmt.Errorf("range of CPUs is from 0.01 to %[1]d.00, as there are only %[1]d CPUs available", nc)
+		}
 	}
 
 	if resources.CPUShares > 0 && !sysInfo.CPUShares {
@@ -737,11 +741,13 @@ func verifyDaemonSettings(conf *config.Config) error {
 	if conf.BridgeConfig.Iface != "" && conf.BridgeConfig.IP != "" {
 		return fmt.Errorf("You specified -b & --bip, mutually exclusive options. Please specify only one")
 	}
-	if !conf.BridgeConfig.EnableIPTables && !conf.BridgeConfig.InterContainerCommunication {
-		return fmt.Errorf("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true")
-	}
-	if conf.BridgeConfig.EnableIP6Tables && !conf.Experimental {
-		return fmt.Errorf("ip6tables rules are only available if experimental features are enabled")
+	if !conf.BridgeConfig.InterContainerCommunication {
+		if !conf.BridgeConfig.EnableIPTables {
+			return fmt.Errorf("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true")
+		}
+		if conf.BridgeConfig.EnableIPv6 && !conf.BridgeConfig.EnableIP6Tables {
+			return fmt.Errorf("You specified --ip6tables=false with --icc=false. ICC=false uses ip6tables to function. Please set --icc or --ip6tables to true")
+		}
 	}
 	if !conf.BridgeConfig.EnableIPTables && conf.BridgeConfig.EnableIPMasq {
 		conf.BridgeConfig.EnableIPMasq = false
@@ -833,7 +839,7 @@ func configureKernelSecuritySupport(config *config.Config, driverName string) er
 // network settings. If there's active sandboxes, configuration changes will not
 // take effect.
 func (daemon *Daemon) initNetworkController(cfg *config.Config, activeSandboxes map[string]interface{}) error {
-	netOptions, err := daemon.networkOptions(cfg, daemon.PluginStore, activeSandboxes)
+	netOptions, err := daemon.networkOptions(cfg, daemon.PluginStore, daemon.id, activeSandboxes)
 	if err != nil {
 		return err
 	}
@@ -847,6 +853,10 @@ func (daemon *Daemon) initNetworkController(cfg *config.Config, activeSandboxes 
 		log.G(context.TODO()).Info("there are running containers, updated network configuration will not take affect")
 	} else if err := configureNetworking(daemon.netController, cfg); err != nil {
 		return err
+	}
+
+	if err := daemon.netController.SetupUserChains(); err != nil {
+		log.G(context.TODO()).WithError(err).Warnf("initNetworkController")
 	}
 
 	// Set HostGatewayIP to the default bridge's IP if it is empty
@@ -1062,7 +1072,7 @@ func initBridgeDriver(controller *libnetwork.Controller, cfg config.BridgeConfig
 
 // Remove default bridge interface if present (--bridge=none use case)
 func removeDefaultBridgeInterface() {
-	if lnk, err := netlink.LinkByName(bridge.DefaultBridgeName); err == nil {
+	if lnk, err := nlwrap.LinkByName(bridge.DefaultBridgeName); err == nil {
 		if err := netlink.LinkDel(lnk); err != nil {
 			log.G(context.TODO()).Warnf("Failed to remove bridge interface (%s): %v", bridge.DefaultBridgeName, err)
 		}

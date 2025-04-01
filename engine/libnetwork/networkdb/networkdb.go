@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.22
+
 package networkdb
 
 //go:generate protoc -I=. -I=../../vendor/ --gogofaster_out=import_path=github.com/docker/docker/libnetwork/networkdb:. networkdb.proto
@@ -189,7 +192,7 @@ type Config struct {
 	// reapEntryInterval duration of a deleted entry before being garbage collected
 	reapEntryInterval time.Duration
 
-	// reapNetworkInterval duration of a delted network before being garbage collected
+	// reapNetworkInterval duration of a deleted network before being garbage collected
 	// NOTE this MUST always be higher than reapEntryInterval
 	reapNetworkInterval time.Duration
 
@@ -724,7 +727,7 @@ func (nDB *NetworkDB) deleteNetworkNode(nid string, nodeName string) {
 	nDB.networkNodes[nid] = newNodes
 }
 
-// findCommonnetworks find the networks that both this node and the
+// findCommonNetworks find the networks that both this node and the
 // passed node have joined.
 func (nDB *NetworkDB) findCommonNetworks(nodeName string) []string {
 	nDB.RLock()

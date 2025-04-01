@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-image-import - Import the contents from a tarball to create a filesystem image
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker image import [OPTIONS] file|URL|- [REPOSITORY[:TAG]]\fP
 
 
 .SH DESCRIPTION
-.PP
 Create a new filesystem image from the contents of a tarball (\fB\&.tar\fR,
 \fB\&.tar.gz\fR, \fB\&.tgz\fR, \fB\&.bzip\fR, \fB\&.tar.xz\fR, \fB\&.txz\fR) into it, then optionally tag it.
 
@@ -21,16 +18,13 @@ Create a new filesystem image from the contents of a tarball (\fB\&.tar\fR,
 .SH Import from a remote location
 .EX
 # docker image import http://example.com/exampleimage.tgz example/imagerepo
-
 .EE
 
 .SH Import from a local file
-.PP
 Import to docker via pipe and stdin:
 
 .EX
 # cat exampleimage.tgz | docker image import - example/imagelocal
-
 .EE
 
 .PP
@@ -38,7 +32,6 @@ Import with a commit message.
 
 .EX
 # cat exampleimage.tgz | docker image import --message "New image imported from tarball" - exampleimagelocal:new
-
 .EE
 
 .PP
@@ -46,35 +39,28 @@ Import to a Docker image from a local file.
 
 .EX
 # docker image import /path/to/exampleimage.tgz 
-
 .EE
 
 .SH Import from a local file and tag
-.PP
 Import to docker via pipe and stdin:
 
 .EX
 # cat exampleimageV2.tgz | docker image import - example/imagelocal:V-2.0
-
 .EE
 
 .SH Import from a local directory
 .EX
 # tar -c . | docker image import - exampleimagedir
-
 .EE
 
 .SH Apply specified Dockerfile instructions while importing the image
-.PP
 This example sets the docker image ENV variable DEBUG to true by default.
 
 .EX
 # tar -c . | docker image import -c="ENV DEBUG=true" - exampleimagedir
-
 .EE
 
 .SH When the daemon supports multiple operating systems
-.PP
 If the daemon supports multiple operating systems, and the image being imported
 does not match the default operating system, it may be necessary to add
 \fB--platform\fR\&. This would be necessary when importing a Linux image into a Windows
@@ -82,17 +68,14 @@ daemon.
 
 .EX
 # docker image import --platform=linux .\\linuximage.tar
-
 .EE
 
 
 .SH See also
-.PP
 \fBdocker-export(1)\fP to export the contents of a filesystem as a tar archive to STDOUT.
 
 
 .SH OPTIONS
-.PP
 \fB-c\fP, \fB--change\fP=
 	Apply Dockerfile instruction to the created image
 
@@ -110,5 +93,4 @@ daemon.
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-image(1)\fP

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/buildkit/cache"
 	cacheconfig "github.com/moby/buildkit/cache/config"
+	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/containerimage"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
@@ -34,8 +36,8 @@ import (
 type ExporterVariant string
 
 const (
-	VariantOCI    = "oci"
-	VariantDocker = "docker"
+	VariantOCI    = client.ExporterOCI
+	VariantDocker = client.ExporterDocker
 )
 
 const (
@@ -62,6 +64,7 @@ func (e *imageExporter) Resolve(ctx context.Context, id int, opt map[string]stri
 	i := &imageExporterInstance{
 		imageExporter: e,
 		id:            id,
+		attrs:         opt,
 		tar:           true,
 		opts: containerimage.ImageCommitOpts{
 			RefCfg: cacheconfig.RefConfig{
@@ -100,7 +103,8 @@ func (e *imageExporter) Resolve(ctx context.Context, id int, opt map[string]stri
 
 type imageExporterInstance struct {
 	*imageExporter
-	id int
+	id    int
+	attrs map[string]string
 
 	opts containerimage.ImageCommitOpts
 	tar  bool
@@ -113,6 +117,14 @@ func (e *imageExporterInstance) ID() int {
 
 func (e *imageExporterInstance) Name() string {
 	return fmt.Sprintf("exporting to %s image format", e.opt.Variant)
+}
+
+func (e *imageExporterInstance) Type() string {
+	return string(e.opt.Variant)
+}
+
+func (e *imageExporterInstance) Attrs() map[string]string {
+	return e.attrs
 }
 
 func (e *imageExporterInstance) Config() *exporter.Config {
@@ -128,9 +140,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 	if src.Metadata == nil {
 		src.Metadata = make(map[string][]byte)
 	}
-	for k, v := range e.meta {
-		src.Metadata[k] = v
-	}
+	maps.Copy(src.Metadata, e.meta)
 
 	opts := e.opts
 	as, _, err := containerimage.ParseAnnotations(src.Metadata)
@@ -145,7 +155,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 	}
 	defer func() {
 		if descref == nil {
-			done(context.TODO())
+			done(context.WithoutCancel(ctx))
 		}
 	}()
 
@@ -208,7 +218,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 
 	timeoutCtx, cancel := context.WithCancelCause(ctx)
 	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 5*time.Second, errors.WithStack(context.DeadlineExceeded))
-	defer cancel(errors.WithStack(context.Canceled))
+	defer func() { cancel(errors.WithStack(context.Canceled)) }()
 
 	caller, err := e.opt.SessionManager.Get(timeoutCtx, sessionID, false)
 	if err != nil {

@@ -3,6 +3,16 @@ name: .windows
 
 # TODO: hide reusable workflow from the UI. Tracked in https://github.com/community/community/discussions/12025
 
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
+
 on:
   workflow_call:
     inputs:
@@ -19,7 +29,7 @@ on:
         default: false
 
 env:
-  GO_VERSION: "1.21.10"
+  GO_VERSION: "1.22.11"
   GOTESTLIST_VERSION: v0.3.1
   TESTSTAT_VERSION: v0.1.25
   WINDOWS_BASE_IMAGE: mcr.microsoft.com/windows/servercore
@@ -33,6 +43,7 @@ env:
 jobs:
   build:
     runs-on: ${{ inputs.os }}
+    timeout-minutes: 120 # guardrails timeout for the whole job
     env:
       GOPATH: ${{ github.workspace }}\go
       GOBIN: ${{ github.workspace }}\go\bin
@@ -112,7 +123,7 @@ jobs:
 
   unit-test:
     runs-on: ${{ inputs.os }}
-    timeout-minutes: 120
+    timeout-minutes: 120 # guardrails timeout for the whole job
     env:
       GOPATH: ${{ github.workspace }}\go
       GOBIN: ${{ github.workspace }}\go\bin
@@ -193,7 +204,8 @@ jobs:
           retention-days: 1
 
   unit-test-report:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     if: always()
     needs:
       - unit-test
@@ -219,7 +231,8 @@ jobs:
           find /tmp/artifacts -type f -name '*-go-test-report.json' -exec teststat -markdown {} \+ >> $GITHUB_STEP_SUMMARY
 
   integration-test-prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     outputs:
       matrix: ${{ steps.tests.outputs.matrix }}
     steps:
@@ -253,8 +266,8 @@ jobs:
 
   integration-test:
     runs-on: ${{ inputs.os }}
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ inputs.storage == 'snapshotter' && github.event_name != 'pull_request' }}
-    timeout-minutes: 120
     needs:
       - build
       - integration-test-prepare
@@ -512,7 +525,8 @@ jobs:
           retention-days: 1
 
   integration-test-report:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ inputs.storage == 'snapshotter' && github.event_name != 'pull_request' }}
     if: always()
     needs:

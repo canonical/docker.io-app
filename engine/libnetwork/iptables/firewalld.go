@@ -9,23 +9,31 @@ import (
 
 	"github.com/containerd/log"
 	dbus "github.com/godbus/dbus/v5"
+	"github.com/pkg/errors"
 )
 
 // IPV defines the table string
-type IPV string
+//
+// Deprecated: use [IPVersion]
+type IPV = IPVersion
 
 const (
 	// Iptables point ipv4 table
-	Iptables IPV = "ipv4"
+	//
+	// Deprecated: use [IPv4].
+	Iptables IPV = IPv4
 	// IP6Tables point to ipv6 table
-	IP6Tables IPV = "ipv6"
+	//
+	// Deprecated: use [IPv6].
+	IP6Tables IPV = IPv6
 )
 
 const (
-	dbusInterface  = "org.fedoraproject.FirewallD1"
-	dbusPath       = "/org/fedoraproject/FirewallD1"
-	dbusConfigPath = "/org/fedoraproject/FirewallD1/config"
-	dockerZone     = "docker"
+	dbusInterface   = "org.fedoraproject.FirewallD1"
+	dbusPath        = "/org/fedoraproject/FirewallD1"
+	dbusConfigPath  = "/org/fedoraproject/FirewallD1/config"
+	dockerZone      = "docker"
+	dockerFwdPolicy = "docker-forwarding"
 )
 
 // Conn is a connection to firewalld dbus endpoint.
@@ -57,8 +65,20 @@ func firewalldInit() error {
 	}
 	if connection != nil {
 		go signalHandler()
-		if err := setupDockerZone(); err != nil {
+		zoneAdded, err := setupDockerZone()
+		if err != nil {
 			return err
+		}
+		policyAdded, policyAddErr := setupDockerForwardingPolicy()
+		if policyAddErr != nil {
+			// Log the error, but still reload firewalld if necessary.
+			log.G(context.TODO()).WithError(policyAddErr).Warnf("Firewalld: failed to add policy %s", dockerFwdPolicy)
+		}
+		if zoneAdded || policyAdded {
+			// Reload for changes to take effect.
+			if err := connection.sysObj.Call(dbusInterface+".reload", 0).Err; err != nil {
+				return err
+			}
 		}
 	}
 
@@ -154,8 +174,15 @@ func checkRunning() bool {
 	return err == nil
 }
 
-// Passthrough method simply passes args through to iptables/ip6tables
-func Passthrough(ipv IPV, args ...string) ([]byte, error) {
+// Passthrough method simply passes args through to iptables/ip6tables.
+//
+// Deprecated: this function is only used internally and will be removed in the next release.
+func Passthrough(ipv IPVersion, args ...string) ([]byte, error) {
+	return passthrough(ipv, args...)
+}
+
+// passthrough method simply passes args through to iptables/ip6tables
+func passthrough(ipv IPVersion, args ...string) ([]byte, error) {
 	var output string
 	log.G(context.TODO()).Debugf("Firewalld passthrough: %s, %s", ipv, args)
 	if err := connection.sysObj.Call(dbusInterface+".direct.passthrough", 0, ipv, args).Store(&output); err != nil {
@@ -186,10 +213,12 @@ type firewalldZone struct {
 	icmpBlockInversion bool
 }
 
-// settings returns the firewalldZone struct as an interface slice,
-// which can be passed to "org.fedoraproject.FirewallD1.config.addZone".
+// settings returns the firewalldZone struct as an interface slice, which can be
+// passed to "org.fedoraproject.FirewallD1.config.addZone". Note that 'addZone',
+// which is deprecated, requires this whole struct. Its replacement, 'addZone2'
+// (introduced in firewalld 0.9.0) accepts a dictionary where only non-default
+// values need to be specified.
 func (z firewalldZone) settings() []interface{} {
-	// TODO(thaJeztah): does D-Bus require optional fields to be passed as well?
 	return []interface{}{
 		z.version,
 		z.name,
@@ -211,16 +240,16 @@ func (z firewalldZone) settings() []interface{} {
 }
 
 // setupDockerZone creates a zone called docker in firewalld which includes docker interfaces to allow
-// container networking
-func setupDockerZone() error {
+// container networking. The bool return value is true if a firewalld reload is required.
+func setupDockerZone() (bool, error) {
 	var zones []string
 	// Check if zone exists
 	if err := connection.sysObj.Call(dbusInterface+".zone.getZones", 0).Store(&zones); err != nil {
-		return err
+		return false, err
 	}
 	if contains(zones, dockerZone) {
 		log.G(context.TODO()).Infof("Firewalld: %s zone already exists, returning", dockerZone)
-		return nil
+		return false, nil
 	}
 	log.G(context.TODO()).Debugf("Firewalld: creating %s zone", dockerZone)
 
@@ -232,14 +261,39 @@ func setupDockerZone() error {
 		target:      "ACCEPT",
 	}
 	if err := connection.sysConfObj.Call(dbusInterface+".config.addZone", 0, dockerZone, dz.settings()).Err; err != nil {
-		return err
+		return false, err
 	}
-	// Reload for change to take effect
-	if err := connection.sysObj.Call(dbusInterface+".reload", 0).Err; err != nil {
-		return err
-	}
+	return true, nil
+}
 
-	return nil
+// setupDockerForwardingPolicy creates a policy to allow forwarding to anywhere to the docker
+// zone (where packets will be dealt with by docker's usual/non-firewalld configuration).
+// The bool return value is true if a firewalld reload is required.
+func setupDockerForwardingPolicy() (bool, error) {
+	// https://firewalld.org/documentation/man-pages/firewalld.dbus.html#FirewallD1.config
+	policy := map[string]interface{}{
+		"version":       "1.0",
+		"description":   "allow forwarding to the docker zone",
+		"ingress_zones": []string{"ANY"},
+		"egress_zones":  []string{dockerZone},
+		"target":        "ACCEPT",
+	}
+	if err := connection.sysConfObj.Call(dbusInterface+".config.addPolicy", 0, dockerFwdPolicy, policy).Err; err != nil {
+		var derr dbus.Error
+		if errors.As(err, &derr) {
+			if derr.Name == dbusInterface+".Exception" && strings.HasPrefix(err.Error(), "NAME_CONFLICT") {
+				log.G(context.TODO()).Debugf("Firewalld: %s policy already exists", dockerFwdPolicy)
+				return false, nil
+			}
+			if derr.Name == dbus.ErrMsgUnknownMethod.Name {
+				log.G(context.TODO()).Debugf("Firewalld: addPolicy %s: unknown method", dockerFwdPolicy)
+				return false, nil
+			}
+		}
+		return false, err
+	}
+	log.G(context.TODO()).Infof("Firewalld: created %s policy", dockerFwdPolicy)
+	return true, nil
 }
 
 // AddInterfaceFirewalld adds the interface to the trusted zone. It is a

@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-volume-ls - List volumes
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker volume ls [OPTIONS]\fP
 
 
 .SH DESCRIPTION
-.PP
 Lists all the volumes Docker manages. You can filter using the \fB-f\fR or
 \fB--filter\fR flag. The filtering format is a \fBkey=value\fR pair. To specify
 more than one filter,  pass multiple flags (for example,
@@ -20,8 +17,6 @@ more than one filter,  pass multiple flags (for example,
 
 .PP
 The currently supported filters are:
-
-.RS
 .IP \(bu 2
 \fBdangling\fR (boolean - \fBtrue\fR or \fBfalse\fR, \fB1\fR or \fB0\fR)
 .IP \(bu 2
@@ -31,11 +26,8 @@ The currently supported filters are:
 .IP \(bu 2
 \fBname\fR (a volume's name)
 
-.RE
-
 
 .SH OPTIONS
-.PP
 \fB--cluster\fP[=false]
 	Display only cluster volumes, and use cluster volume list formatting
 
@@ -46,10 +38,10 @@ The currently supported filters are:
 .PP
 \fB--format\fP=""
 	Format output using a custom template:
-'table':            Print output in table format with column headers (default)
-'table TEMPLATE':   Print output in table format using the given Go template
-'json':             Print in JSON format
-'TEMPLATE':         Print output using the given Go template.
+\&'table':            Print output in table format with column headers (default)
+\&'table TEMPLATE':   Print output in table format using the given Go template
+\&'json':             Print in JSON format
+\&'TEMPLATE':         Print output using the given Go template.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
@@ -62,5 +54,4 @@ Refer to https://docs.docker.com/go/formatting/ for more information about forma
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-volume(1)\fP

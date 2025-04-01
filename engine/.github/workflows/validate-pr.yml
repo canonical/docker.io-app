@@ -1,5 +1,14 @@
 name: validate-pr
 
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
 on:
   pull_request:
     types: [opened, edited, labeled, unlabeled]
@@ -7,6 +16,7 @@ on:
 jobs:
   check-area-label:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     steps:
       - name: Missing `area/` label
         if: contains(join(github.event.pull_request.labels.*.name, ','), 'impact/') && !contains(join(github.event.pull_request.labels.*.name, ','), 'area/')
@@ -19,6 +29,7 @@ jobs:
   check-changelog:
     if: contains(join(github.event.pull_request.labels.*.name, ','), 'impact/')
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     env:
       PR_BODY: |
         ${{ github.event.pull_request.body }}
@@ -47,16 +58,23 @@ jobs:
 
   check-pr-branch:
     runs-on: ubuntu-20.04
+    timeout-minutes: 120 # guardrails timeout for the whole job
     env:
       PR_TITLE: ${{ github.event.pull_request.title }}
     steps:
       # Backports or PR that target a release branch directly should mention the target branch in the title, for example:
       # [X.Y backport] Some change that needs backporting to X.Y
       # [X.Y] Change directly targeting the X.Y branch
-      - name: Get branch from PR title
-        id: title_branch
-        run: echo "$PR_TITLE" | sed -n 's/^\[\([0-9]*\.[0-9]*\)[^]]*\].*/branch=\1/p' >> $GITHUB_OUTPUT
-
       - name: Check release branch
-        if: github.event.pull_request.base.ref != steps.title_branch.outputs.branch && !(github.event.pull_request.base.ref == 'master' && steps.title_branch.outputs.branch == '')
-        run: echo "::error::PR title suggests targetting the ${{ steps.title_branch.outputs.branch }} branch, but is opened against ${{ github.event.pull_request.base.ref }}" && exit 1
+        id: title_branch
+        run: |
+          # get the intended major version prefix ("[27.1 backport]" -> "27.") from the PR title.
+          [[ "$PR_TITLE" =~ ^\[([0-9]*\.)[^]]*\] ]] && branch="${BASH_REMATCH[1]}"
+
+          # get major version prefix from the release branch ("27.x -> "27.")
+          [[ "$GITHUB_BASE_REF" =~ ^([0-9]*\.) ]] && target_branch="${BASH_REMATCH[1]}" || target_branch="$GITHUB_BASE_REF"
+
+          if [[ "$target_branch" != "$branch" ]] && ! [[ "$GITHUB_BASE_REF" == "master" && "$branch" == "" ]]; then
+              echo "::error::PR is opened against the $GITHUB_BASE_REF branch, but its title suggests otherwise."
+              exit 1
+          fi

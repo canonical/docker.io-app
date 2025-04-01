@@ -1,25 +1,21 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-network-connect - Connect a container to a network
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker network connect [OPTIONS] NETWORK CONTAINER\fP
 
 
 .SH DESCRIPTION
-.PP
 Connects a container to a network. You can connect a container by name
 or by ID. Once connected, the container can communicate with other containers in
 the same network.
 
 .EX
 $ docker network connect multi-host-network container1
-
 .EE
 
 .PP
@@ -27,7 +23,6 @@ You can also use the \fBdocker run --network=<network-name>\fR option to start a
 
 .EX
 $ docker run -itd --network=multi-host-network --ip 172.20.88.22 --ip6 2001:db8::8822 busybox
-
 .EE
 
 .PP
@@ -46,7 +41,6 @@ given to another container while this container is not on the network.
 $ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.240.0/20 multi-host-network
 
 $ docker network connect --ip 172.20.128.2 multi-host-network container2
-
 .EE
 
 .PP
@@ -63,7 +57,6 @@ You can connect a container to one or more networks. The networks need not be th
 
 
 .SH OPTIONS
-.PP
 \fB--alias\fP=[]
 	Add network-scoped alias for the container
 
@@ -93,5 +86,4 @@ You can connect a container to one or more networks. The networks need not be th
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-network(1)\fP

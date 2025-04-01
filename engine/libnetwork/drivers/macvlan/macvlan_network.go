@@ -12,7 +12,6 @@ import (
 	"github.com/docker/docker/libnetwork/ns"
 	"github.com/docker/docker/libnetwork/options"
 	"github.com/docker/docker/libnetwork/types"
-	"github.com/docker/docker/pkg/stringid"
 )
 
 // CreateNetwork the network for the specified driver type
@@ -30,7 +29,7 @@ func (d *driver) CreateNetwork(nid string, option map[string]interface{}, nInfo 
 
 	// if parent interface not specified, create a dummy type link to use named dummy+net_id
 	if config.Parent == "" {
-		config.Parent = getDummyName(stringid.TruncateID(config.ID))
+		config.Parent = getDummyName(config.ID)
 		config.Internal = true
 	}
 	foundExisting, err := d.createNetwork(config)
@@ -60,8 +59,20 @@ func (d *driver) createNetwork(config *configuration) (bool, error) {
 	for _, nw := range networkList {
 		if config.Parent == nw.config.Parent {
 			if config.ID != nw.config.ID {
-				return false, fmt.Errorf("network %s is already using parent interface %s",
-					getDummyName(stringid.TruncateID(nw.config.ID)), config.Parent)
+				if config.MacvlanMode == modePassthru {
+					return false, fmt.Errorf(
+						"cannot use mode passthru, macvlan network %s is already using parent interface %s",
+						nw.config.ID,
+						config.Parent,
+					)
+				} else if nw.config.MacvlanMode == modePassthru {
+					return false, fmt.Errorf(
+						"macvlan network %s is already using parent interface %s in mode passthru",
+						nw.config.ID,
+						config.Parent,
+					)
+				}
+				continue
 			}
 			log.G(context.TODO()).Debugf("Create Network for the same ID %s\n", config.ID)
 			foundExisting = true
@@ -70,7 +81,7 @@ func (d *driver) createNetwork(config *configuration) (bool, error) {
 	}
 	if !parentExists(config.Parent) {
 		// Create a dummy link if a dummy name is set for parent
-		if dummyName := getDummyName(stringid.TruncateID(config.ID)); dummyName == config.Parent {
+		if dummyName := getDummyName(config.ID); dummyName == config.Parent {
 			err := createDummyLink(config.Parent, dummyName)
 			if err != nil {
 				return false, err
@@ -90,6 +101,15 @@ func (d *driver) createNetwork(config *configuration) (bool, error) {
 			// if driver created the networks slave link, record it for future deletion
 			config.CreatedSlaveLink = true
 		}
+	} else {
+		// Check and mark this network if the interface was created for another network
+		networkList := d.getNetworks()
+		for _, testN := range networkList {
+			if config.Parent == testN.config.Parent && testN.config.CreatedSlaveLink {
+				config.CreatedSlaveLink = true
+				break
+			}
+		}
 	}
 	if !foundExisting {
 		n := &network{
@@ -105,30 +125,38 @@ func (d *driver) createNetwork(config *configuration) (bool, error) {
 	return foundExisting, nil
 }
 
+func (d *driver) parentHasSingleUser(n *network) bool {
+	users := 0
+	networkList := d.getNetworks()
+	for _, testN := range networkList {
+		if n.config.Parent == testN.config.Parent {
+			users += 1
+		}
+	}
+	return users == 1
+}
+
 // DeleteNetwork deletes the network for the specified driver type
 func (d *driver) DeleteNetwork(nid string) error {
 	n := d.network(nid)
 	if n == nil {
 		return fmt.Errorf("network id %s not found", nid)
 	}
-	// if the driver created the slave interface, delete it, otherwise leave it
-	if ok := n.config.CreatedSlaveLink; ok {
-		// if the interface exists, only delete if it matches iface.vlan or dummy.net_id naming
-		if ok := parentExists(n.config.Parent); ok {
-			// only delete the link if it is named the net_id
-			if n.config.Parent == getDummyName(stringid.TruncateID(nid)) {
-				err := delDummyLink(n.config.Parent)
-				if err != nil {
-					log.G(context.TODO()).Debugf("link %s was not deleted, continuing the delete network operation: %v",
-						n.config.Parent, err)
-				}
-			} else {
-				// only delete the link if it matches iface.vlan naming
-				err := delVlanLink(n.config.Parent)
-				if err != nil {
-					log.G(context.TODO()).Debugf("link %s was not deleted, continuing the delete network operation: %v",
-						n.config.Parent, err)
-				}
+	// if the driver created the slave interface and this network is the last user, delete it, otherwise leave it
+	if n.config.CreatedSlaveLink && parentExists(n.config.Parent) && d.parentHasSingleUser(n) {
+		// only delete the link if it is named the net_id
+		if n.config.Parent == getDummyName(nid) {
+			err := delDummyLink(n.config.Parent)
+			if err != nil {
+				log.G(context.TODO()).Debugf("link %s was not deleted, continuing the delete network operation: %v",
+					n.config.Parent, err)
+			}
+		} else {
+			// only delete the link if it matches iface.vlan naming
+			err := delVlanLink(n.config.Parent)
+			if err != nil {
+				log.G(context.TODO()).Debugf("link %s was not deleted, continuing the delete network operation: %v",
+					n.config.Parent, err)
 			}
 		}
 	}

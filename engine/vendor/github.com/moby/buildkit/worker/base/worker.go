@@ -11,8 +11,8 @@ import (
 	"github.com/containerd/containerd/diff"
 	"github.com/containerd/containerd/gc"
 	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/hashicorp/go-multierror"
 	"github.com/moby/buildkit/cache"
@@ -62,6 +62,7 @@ const labelCreatedAt = "buildkit/createdat"
 // See also CommonOpt.
 type WorkerOpt struct {
 	ID               string
+	Root             string
 	Labels           map[string]string
 	Platforms        []ocispecs.Platform
 	GCPolicy         []client.PruneInfo
@@ -110,6 +111,7 @@ func NewWorker(ctx context.Context, opt WorkerOpt) (*Worker, error) {
 		ContentStore:    opt.ContentStore,
 		Differ:          opt.Differ,
 		MetadataStore:   opt.MetadataStore,
+		Root:            opt.Root,
 		MountPoolRoot:   opt.MountPoolRoot,
 	})
 	if err != nil {
@@ -209,6 +211,14 @@ func NewWorker(ctx context.Context, opt WorkerOpt) (*Worker, error) {
 	}, nil
 }
 
+func (w *Worker) GarbageCollect(ctx context.Context) error {
+	if w.WorkerOpt.GarbageCollect == nil {
+		return nil
+	}
+	_, err := w.WorkerOpt.GarbageCollect(ctx)
+	return err
+}
+
 func (w *Worker) Close() error {
 	var rerr error
 	if err := w.MetadataStore.Close(); err != nil {
@@ -245,10 +255,14 @@ func (w *Worker) Labels() map[string]string {
 
 func (w *Worker) Platforms(noCache bool) []ocispecs.Platform {
 	if noCache {
+		matchers := make([]platforms.MatchComparer, len(w.WorkerOpt.Platforms))
+		for i, p := range w.WorkerOpt.Platforms {
+			matchers[i] = platforms.Only(p)
+		}
 		for _, p := range archutil.SupportedPlatforms(noCache) {
 			exists := false
-			for _, pp := range w.WorkerOpt.Platforms {
-				if platforms.Only(pp).Match(p) {
+			for _, m := range matchers {
+				if m.Match(p) {
 					exists = true
 					break
 				}
@@ -337,13 +351,13 @@ func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *se
 	return nil, errors.Errorf("could not resolve %v", v)
 }
 
-func (w *Worker) PruneCacheMounts(ctx context.Context, ids []string) error {
+func (w *Worker) PruneCacheMounts(ctx context.Context, ids map[string]bool) error {
 	mu := mounts.CacheMountsLocker()
 	mu.Lock()
 	defer mu.Unlock()
 
-	for _, id := range ids {
-		mds, err := mounts.SearchCacheDir(ctx, w.CacheMgr, id)
+	for id, nested := range ids {
+		mds, err := mounts.SearchCacheDir(ctx, w.CacheMgr, id, nested)
 		if err != nil {
 			return err
 		}
@@ -472,14 +486,12 @@ func (w *Worker) Exporter(name string, sm *session.Manager) (exporter.Exporter, 
 }
 
 func (w *Worker) FromRemote(ctx context.Context, remote *solver.Remote) (ref cache.ImmutableRef, err error) {
-	if cd, ok := remote.Provider.(interface {
-		CheckDescriptor(context.Context, ocispecs.Descriptor) error
-	}); ok && len(remote.Descriptors) > 0 {
+	if len(remote.Descriptors) > 0 {
 		var eg errgroup.Group
 		for _, desc := range remote.Descriptors {
 			desc := desc
 			eg.Go(func() error {
-				if err := cd.CheckDescriptor(ctx, desc); err != nil {
+				if _, err := remote.Provider.Info(ctx, desc.Digest); err != nil {
 					return err
 				}
 				return nil

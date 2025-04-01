@@ -1,18 +1,15 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-image-pull - Download an image from a registry
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker image pull [OPTIONS] NAME[:TAG|@DIGEST]\fP
 
 
 .SH DESCRIPTION
-.PP
 This command pulls down an image or a repository from a registry. If
 there is more than one image for a repository (e.g., fedora) then all
 images for that repository name can be pulled down including any tags
@@ -25,7 +22,6 @@ registry located at \fBregistry-1.docker.io\fR by default.
 
 .SH EXAMPLES
 .SS Pull an image from Docker Hub
-.PP
 To download a particular image, or set of images (i.e., a repository), use
 \fBdocker image pull\fR (or the \fBdocker pull\fR shorthand). If no tag is provided,
 Docker Engine uses the \fB:latest\fR tag as a default. This example pulls the
@@ -40,7 +36,6 @@ e756f3fdd6a3: Pull complete
 Digest: sha256:3f1d6c17773a45c97bd8f158d665c9709d7b29ed7917ac934086ad96f92e4510
 Status: Downloaded newer image for debian:latest
 docker.io/library/debian:latest
-
 .EE
 
 .PP
@@ -60,7 +55,6 @@ bookworm: Pulling from library/debian
 Digest: sha256:3f1d6c17773a45c97bd8f158d665c9709d7b29ed7917ac934086ad96f92e4510
 Status: Downloaded newer image for debian:bookworm
 docker.io/library/debian:bookworm
-
 .EE
 
 .PP
@@ -73,7 +67,6 @@ $ docker images
 REPOSITORY   TAG        IMAGE ID       CREATED        SIZE
 debian       bookworm   4eacea30377a   8 days ago     124MB
 debian       latest     4eacea30377a   8 days ago     124MB
-
 .EE
 
 .PP
@@ -90,12 +83,11 @@ refer to understand images, containers, and storage drivers
 in the online documentation.
 
 .SH Pull an image by digest (immutable identifier)
-.PP
 So far, you've pulled images by their name (and "tag"). Using names and tags is
 a convenient way to work with images. When using tags, you can \fBdocker image pull\fR an
 image again to make sure you have the most up-to-date version of that image.
-For example, \fBdocker image pull ubuntu:22.04\fR pulls the latest version of the Ubuntu
-22.04 image.
+For example, \fBdocker image pull ubuntu:24.04\fR pulls the latest version of the Ubuntu
+24.04 image.
 
 .PP
 In some cases you don't want images to be updated to newer versions, but prefer
@@ -106,17 +98,16 @@ and guarantee that the image you're using is always the same.
 
 .PP
 To know the digest of an image, pull the image first. Let's pull the latest
-\fBubuntu:22.04\fR image from Docker Hub:
+\fBubuntu:24.04\fR image from Docker Hub:
 
 .EX
-$ docker image pull ubuntu:22.04
+$ docker image pull ubuntu:24.04
 
-22.04: Pulling from library/ubuntu
+24.04: Pulling from library/ubuntu
 125a6e411906: Pull complete
-Digest: sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
-Status: Downloaded newer image for ubuntu:22.04
-docker.io/library/ubuntu:22.04
-
+Digest: sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
+Status: Downloaded newer image for ubuntu:24.04
+docker.io/library/ubuntu:24.04
 .EE
 
 .PP
@@ -124,8 +115,7 @@ Docker prints the digest of the image after the pull has finished. In the exampl
 above, the digest of the image is:
 
 .EX
-sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
-
+sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
 .EE
 
 .PP
@@ -137,22 +127,20 @@ A digest takes the place of the tag when pulling an image, for example, to
 pull the above image by digest, run the following command:
 
 .EX
-$ docker image pull ubuntu@sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
+$ docker image pull ubuntu@sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
 
-docker.io/library/ubuntu@sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d: Pulling from library/ubuntu
-Digest: sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
-Status: Image is up to date for ubuntu@sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
-docker.io/library/ubuntu@sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
-
+docker.io/library/ubuntu@sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30: Pulling from library/ubuntu
+Digest: sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
+Status: Image is up to date for ubuntu@sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
+docker.io/library/ubuntu@sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
 .EE
 
 .PP
 Digest can also be used in the \fBFROM\fR of a Dockerfile, for example:
 
 .EX
-FROM ubuntu@sha256:26c68657ccce2cb0a31b330cb0be2b5e108d467f641c62e13ab40cbec258c68d
+FROM ubuntu@sha256:2e863c44b718727c860746568e1d54afd13b2fa71b160f5cd9058fc436217b30
 LABEL org.opencontainers.image.authors="some maintainer <maintainer@example.com>"
-
 .EE
 
 .PP
@@ -170,7 +158,6 @@ digest accordingly.
 .RE
 
 .SH Pull from a different registry
-.PP
 By default, \fBdocker image pull\fR pulls images from Docker Hub. It is also possible to
 manually specify the path of a registry to pull from. For example, if you have
 set up a local registry, you can specify its path to pull from it. A registry
@@ -182,7 +169,6 @@ listening on port 5000 (\fBmyregistry.local:5000\fR):
 
 .EX
 $ docker image pull myregistry.local:5000/testing/test-image
-
 .EE
 
 .PP
@@ -196,7 +182,6 @@ insecure registries
 section in the online documentation for more information.
 
 .SH Pull a repository with multiple images
-.PP
 By default, \fBdocker image pull\fR pulls a \fIsingle\fP image from the registry. A repository
 can contain multiple images. To pull all images from a repository, provide the
 \fB-a\fR (or \fB--all-tags\fR) option when using \fBdocker image pull\fR\&.
@@ -212,10 +197,9 @@ ad57ef8d78d7: Download complete
 105182bb5e8b: Download complete
 511136ea3c5a: Download complete
 73bd853d2ea5: Download complete
-....
+\&....
 
 Status: Downloaded newer image for ubuntu
-
 .EE
 
 .PP
@@ -226,19 +210,14 @@ images that are present locally:
 .EX
 $ docker image ls --filter reference=ubuntu
 REPOSITORY   TAG       IMAGE ID       CREATED        SIZE
-ubuntu       18.04     c6ad7e71ba7d   5 weeks ago    63.2MB
-ubuntu       bionic    c6ad7e71ba7d   5 weeks ago    63.2MB
-ubuntu       22.04     5ccefbfc0416   2 months ago   78MB
-ubuntu       focal     ff0fea8310f3   2 months ago   72.8MB
-ubuntu       latest    ff0fea8310f3   2 months ago   72.8MB
-ubuntu       jammy     41ba606c8ab9   3 months ago   79MB
-ubuntu       20.04     ba6acccedd29   7 months ago   72.8MB
-...
-
+ubuntu       22.04     8a3cdc4d1ad3   3 weeks ago    77.9MB
+ubuntu       jammy     8a3cdc4d1ad3   3 weeks ago    77.9MB
+ubuntu       24.04     35a88802559d   6 weeks ago    78.1MB
+ubuntu       latest    35a88802559d   6 weeks ago    78.1MB
+ubuntu       noble     35a88802559d   6 weeks ago    78.1MB
 .EE
 
 .SH Cancel a pull
-.PP
 Killing the \fBdocker image pull\fR process, for example by pressing \fBCTRL-c\fR while it is
 running in a terminal, will terminate the pull operation.
 
@@ -250,7 +229,6 @@ latest: Pulling from library/ubuntu
 a3ed95caeb02: Pulling fs layer
 236608c7b546: Pulling fs layer
 ^C
-
 .EE
 
 .PP
@@ -261,7 +239,6 @@ interaction, the pull is also aborted.
 
 
 .SH OPTIONS
-.PP
 \fB-a\fP, \fB--all-tags\fP[=false]
 	Download all tagged images in the repository
 
@@ -283,5 +260,4 @@ interaction, the pull is also aborted.
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-image(1)\fP

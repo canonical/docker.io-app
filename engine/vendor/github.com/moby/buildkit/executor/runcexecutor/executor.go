@@ -1,3 +1,5 @@
+//go:build linux
+
 package runcexecutor
 
 import (
@@ -7,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -216,7 +219,7 @@ func (w *runcExecutor) Run(ctx context.Context, id string, root executor.Mount, 
 	bundle := filepath.Join(w.root, id)
 
 	if err := os.Mkdir(bundle, 0o711); err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	defer os.RemoveAll(bundle)
 
@@ -227,23 +230,23 @@ func (w *runcExecutor) Run(ctx context.Context, id string, root executor.Mount, 
 
 	rootFSPath := filepath.Join(bundle, "rootfs")
 	if err := idtools.MkdirAllAndChown(rootFSPath, 0o700, identity); err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	if err := mount.All(rootMount, rootFSPath); err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	defer mount.Unmount(rootFSPath, 0)
 
-	defer executor.MountStubsCleaner(ctx, rootFSPath, mounts, meta.RemoveMountStubsRecursive)()
+	defer executor.MountStubsCleaner(context.WithoutCancel(ctx), rootFSPath, mounts, meta.RemoveMountStubsRecursive)()
 
 	uid, gid, sgids, err := oci.GetUser(rootFSPath, meta.User)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	f, err := os.Create(filepath.Join(bundle, "config.json"))
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	defer f.Close()
 
@@ -294,7 +297,7 @@ func (w *runcExecutor) Run(ctx context.Context, id string, root executor.Mount, 
 	}
 
 	if err := json.NewEncoder(f).Encode(spec); err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	bklog.G(ctx).Debugf("> creating %s %v", id, meta.Args)
@@ -332,7 +335,7 @@ func (w *runcExecutor) Run(ctx context.Context, id string, root executor.Mount, 
 	}
 	doReleaseNetwork = false
 
-	err = exitError(ctx, err)
+	err = exitError(ctx, cgroupPath, err, process.Meta.ValidExitCodes)
 	if err != nil {
 		if rec != nil {
 			rec.Close()
@@ -348,38 +351,44 @@ func (w *runcExecutor) Run(ctx context.Context, id string, root executor.Mount, 
 	return rec, rec.CloseAsync(releaseContainer)
 }
 
-func exitError(ctx context.Context, err error) error {
-	if err != nil {
-		exitErr := &gatewayapi.ExitError{
-			ExitCode: gatewayapi.UnknownExitStatus,
-			Err:      err,
-		}
+func exitError(ctx context.Context, cgroupPath string, err error, validExitCodes []int) error {
+	exitErr := &gatewayapi.ExitError{ExitCode: uint32(gatewayapi.UnknownExitStatus), Err: err}
+
+	if err == nil {
+		exitErr.ExitCode = 0
+	} else {
 		var runcExitError *runc.ExitError
-		if errors.As(err, &runcExitError) && runcExitError.Status >= 0 {
-			exitErr = &gatewayapi.ExitError{
-				ExitCode: uint32(runcExitError.Status),
-			}
+		if errors.As(err, &runcExitError) {
+			exitErr = &gatewayapi.ExitError{ExitCode: uint32(runcExitError.Status)}
 		}
-		trace.SpanFromContext(ctx).AddEvent(
-			"Container exited",
-			trace.WithAttributes(
-				attribute.Int("exit.code", int(exitErr.ExitCode)),
-			),
-		)
-		select {
-		case <-ctx.Done():
-			exitErr.Err = errors.Wrapf(context.Cause(ctx), exitErr.Error())
-			return exitErr
-		default:
-			return stack.Enable(exitErr)
-		}
+
+		detectOOM(ctx, cgroupPath, exitErr)
 	}
 
 	trace.SpanFromContext(ctx).AddEvent(
 		"Container exited",
-		trace.WithAttributes(attribute.Int("exit.code", 0)),
+		trace.WithAttributes(attribute.Int("exit.code", int(exitErr.ExitCode))),
 	)
-	return nil
+
+	if validExitCodes == nil {
+		// no exit codes specified, so only 0 is allowed
+		if exitErr.ExitCode == 0 {
+			return nil
+		}
+	} else {
+		// exit code in allowed list, so exit cleanly
+		if slices.Contains(validExitCodes, int(exitErr.ExitCode)) {
+			return nil
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		exitErr.Err = errors.Wrap(context.Cause(ctx), exitErr.Error())
+		return exitErr
+	default:
+		return stack.Enable(exitErr)
+	}
 }
 
 func (w *runcExecutor) Exec(ctx context.Context, id string, process executor.ProcessInfo) (err error) {
@@ -419,8 +428,12 @@ func (w *runcExecutor) Exec(ctx context.Context, id string, process executor.Pro
 	defer f.Close()
 
 	spec := &specs.Spec{}
-	if err := json.NewDecoder(f).Decode(spec); err != nil {
+	dec := json.NewDecoder(f)
+	if err := dec.Decode(spec); err != nil {
 		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.Errorf("unexpected data after JSON spec object")
 	}
 
 	if process.Meta.User != "" {
@@ -445,8 +458,8 @@ func (w *runcExecutor) Exec(ctx context.Context, id string, process executor.Pro
 		spec.Process.Env = process.Meta.Env
 	}
 
-	err = w.exec(ctx, id, state.Bundle, spec.Process, process, nil)
-	return exitError(ctx, err)
+	err = w.exec(ctx, id, spec.Process, process, nil)
+	return exitError(ctx, "", err, process.Meta.ValidExitCodes)
 }
 
 type forwardIO struct {
@@ -476,7 +489,7 @@ func (s *forwardIO) Stderr() io.ReadCloser {
 	return nil
 }
 
-// newRuncProcKiller returns an abstraction for sending SIGKILL to the
+// newRunProcKiller returns an abstraction for sending SIGKILL to the
 // process inside the container initiated from `runc run`.
 func newRunProcKiller(runC *runc.Runc, id string) procKiller {
 	return procKiller{runC: runC, id: id}
@@ -533,7 +546,7 @@ func (k procKiller) Kill(ctx context.Context) (err error) {
 	// shorter timeout but here as a fail-safe for future refactoring.
 	ctx, cancel := context.WithCancelCause(ctx)
 	ctx, _ = context.WithTimeoutCause(ctx, 10*time.Second, errors.WithStack(context.DeadlineExceeded))
-	defer cancel(errors.WithStack(context.Canceled))
+	defer func() { cancel(errors.WithStack(context.Canceled)) }()
 
 	if k.pidfile == "" {
 		// for `runc run` process we use `runc kill` to terminate the process
@@ -607,9 +620,14 @@ func runcProcessHandle(ctx context.Context, killer procKiller) (*procHandle, con
 	go func() {
 		// Wait for pid
 		select {
-		case <-ctx.Done():
+		case <-p.ended:
 			return // nothing to kill
 		case <-p.ready:
+			select {
+			case <-p.ended:
+				return
+			default:
+			}
 		}
 
 		for {
@@ -675,7 +693,7 @@ func (p *procHandle) WaitForReady(ctx context.Context) error {
 func (p *procHandle) WaitForStart(ctx context.Context, startedCh <-chan int, started func()) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	ctx, _ = context.WithTimeoutCause(ctx, 10*time.Second, errors.WithStack(context.DeadlineExceeded))
-	defer cancel(errors.WithStack(context.Canceled))
+	defer func() { cancel(errors.WithStack(context.Canceled)) }()
 	select {
 	case <-ctx.Done():
 		return errors.New("go-runc started message never received")

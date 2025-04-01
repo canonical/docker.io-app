@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/builder"
@@ -166,17 +166,17 @@ func initializeStage(ctx context.Context, d dispatchRequest, cmd *instructions.S
 
 		p, err := platforms.Parse(v)
 		if err != nil {
-			return errors.Wrapf(err, "failed to parse platform %s", v)
+			return errors.Wrapf(errdefs.InvalidParameter(err), "failed to parse platform %s", v)
 		}
 		platform = &p
 	}
 
-	image, err := d.getFromImage(ctx, d.shlex, cmd.BaseName, platform)
+	img, err := d.getFromImage(ctx, d.shlex, cmd.BaseName, platform)
 	if err != nil {
 		return err
 	}
 	state := d.state
-	if err := state.beginStage(cmd.Name, image); err != nil {
+	if err := state.beginStage(cmd.Name, img); err != nil {
 		return err
 	}
 	if len(state.runConfig.OnBuild) > 0 {
@@ -224,7 +224,7 @@ func (d *dispatchRequest) getExpandedString(shlex *shell.Lex, str string) (strin
 		substitutionArgs = append(substitutionArgs, key+"="+value)
 	}
 
-	name, err := shlex.ProcessWord(str, substitutionArgs)
+	name, _, err := shlex.ProcessWord(str, shell.EnvsFromSlice(substitutionArgs))
 	if err != nil {
 		return "", err
 	}
@@ -508,7 +508,7 @@ func dispatchEntrypoint(ctx context.Context, d dispatchRequest, c *instructions.
 //
 // Expose ports for links and port mappings. This all ends up in
 // req.runConfig.ExposedPorts for runconfig.
-func dispatchExpose(ctx context.Context, d dispatchRequest, c *instructions.ExposeCommand, envs []string) error {
+func dispatchExpose(ctx context.Context, d dispatchRequest, c *instructions.ExposeCommand, envs shell.EnvGetter) error {
 	// custom multi word expansion
 	// expose $FOO with FOO="80 443" is expanded as EXPOSE [80,443]. This is the only command supporting word to words expansion
 	// so the word processing has been de-generalized

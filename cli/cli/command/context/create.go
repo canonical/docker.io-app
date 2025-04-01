@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.19
+//go:build go1.22
 
 package context
 
@@ -24,6 +24,10 @@ type CreateOptions struct {
 	Description string
 	Docker      map[string]string
 	From        string
+
+	// Additional Metadata to store in the context. This option is not
+	// currently exposed to the user.
+	metaData map[string]any
 }
 
 func longCreateDescription() string {
@@ -94,7 +98,8 @@ func createNewContext(contextStore store.ReaderWriter, o *CreateOptions) error {
 			docker.DockerEndpoint: dockerEP,
 		},
 		Metadata: command.DockerContext{
-			Description: o.Description,
+			Description:      o.Description,
+			AdditionalFields: o.metaData,
 		},
 		Name: o.Name,
 	}

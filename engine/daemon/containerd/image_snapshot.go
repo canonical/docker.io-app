@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/containerd/containerd"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	containerdimages "github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/snapshots"
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/platforms"
 	"github.com/docker/docker/errdefs"
 	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -58,6 +58,11 @@ func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentIma
 		parentSnapshot = identity.ChainID(diffIDs).String()
 	}
 
+	// TODO: Consider a better way to do this. It is better to have a container directly
+	// reference a snapshot, however, that is not done today because a container may
+	// removed and recreated with nothing holding the snapshot in between. Consider
+	// removing this lease and only temporarily holding a lease on re-create, using
+	// non-expiring leases introduces the possibility of leaking resources.
 	ls := i.client.LeasesService()
 	lease, err := ls.Create(ctx, leases.WithID(id))
 	if err != nil {
