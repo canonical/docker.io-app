@@ -1,3 +1,15 @@
+docker.io-app (27.5.1-0ubuntu3~20.04.1) focal; urgency=medium
+
+  * Backport from plucky to focal (LP: #2085187)
+  * d/control: build with golang 1.22 for consistency across the supported
+    release
+  * d/rules: add golang 1.22 to PATH
+  * d/t/basic-smoke: import GPG key from Debian stable. The
+    debian-archive-keyring package is out-dated after the release of Debian
+    12. Now, the key is downloaded from the ftp-master keyring directly
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:18:58 -0300
+
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 
   * d/control: set a version for the docker-cli Provides
