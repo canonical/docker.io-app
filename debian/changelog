@@ -1,3 +1,12 @@
+docker.io-app (27.5.1-0ubuntu3~24.10.1) oracular; urgency=medium
+
+  * Backport from plucky to oracular (LP: #2085187)
+  * d/control: build with golang 1.22 for consistency across the supported
+    release
+  * d/rules: add golang 1.22 to PATH
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:07:21 -0300
+
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 
   * d/control: set a version for the docker-cli Provides
