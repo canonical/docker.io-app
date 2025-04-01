@@ -112,7 +112,7 @@ func TestJoinWithSymlinkReplace(t *testing.T) {
 		// On Linux we can delete it just fine.
 		assert.NilError(t, err, "failed to remove symlink")
 
-		// Replace target with a symlink to /etc/paswd
+		// Replace target with a symlink to /etc/passwd
 		err = os.Symlink("/etc/passwd", target)
 		assert.NilError(t, err, "failed to create symlink")
 	}
@@ -122,7 +122,6 @@ func TestJoinWithSymlinkReplace(t *testing.T) {
 	assert.NilError(t, err, "failed to read file")
 
 	assert.Check(t, is.Equal(string(data), "bar"))
-
 }
 
 func TestJoinCloseInvalidates(t *testing.T) {

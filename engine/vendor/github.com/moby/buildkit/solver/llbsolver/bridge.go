@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/platforms"
+	"github.com/containerd/platforms"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/moby/buildkit/cache/remotecache"
 	"github.com/moby/buildkit/client"
@@ -90,18 +90,14 @@ func (b *llbBridge) loadResult(ctx context.Context, def *pb.Definition, cacheImp
 			if p == nil {
 				return nil, errors.Errorf("invalid nil policy")
 			}
-			if err := validateSourcePolicy(*p); err != nil {
+			if err := validateSourcePolicy(p); err != nil {
 				return nil, err
 			}
 		}
 		if srcPol != nil {
 			pol = append([]*spb.Policy{srcPol}, pol...)
 		}
-
 		polEngine = sourcepolicy.NewEngine(pol)
-		if err != nil {
-			return nil, err
-		}
 	}
 	var cms []solver.CacheManager
 	for _, im := range cacheImports {
@@ -148,12 +144,8 @@ func (b *llbBridge) loadResult(ctx context.Context, def *pb.Definition, cacheImp
 	}
 
 	if len(dpc.ids) > 0 {
-		ids := make([]string, 0, len(dpc.ids))
-		for id := range dpc.ids {
-			ids = append(ids, id)
-		}
 		if err := b.eachWorker(func(w worker.Worker) error {
-			return w.PruneCacheMounts(ctx, ids)
+			return w.PruneCacheMounts(ctx, dpc.ids)
 		}); err != nil {
 			return nil, err
 		}
@@ -276,7 +268,7 @@ func (rp *resultProxy) wrapError(err error) error {
 			locs, ok := rp.req.Definition.Source.Locations[string(ve.Digest)]
 			if ok {
 				for _, loc := range locs.Locations {
-					err = errdefs.WithSource(err, errdefs.Source{
+					err = errdefs.WithSource(err, &errdefs.Source{
 						Info:   rp.req.Definition.Source.Infos[loc.SourceIndex],
 						Ranges: loc.Ranges,
 					})
@@ -402,6 +394,7 @@ type lazyCacheManager struct {
 func (lcm *lazyCacheManager) ID() string {
 	return lcm.id
 }
+
 func (lcm *lazyCacheManager) Query(inp []solver.CacheKeyWithSelector, inputIndex solver.Index, dgst digest.Digest, outputIndex solver.Index) ([]*solver.CacheKey, error) {
 	lcm.wait()
 	if lcm.main == nil {
@@ -409,6 +402,7 @@ func (lcm *lazyCacheManager) Query(inp []solver.CacheKeyWithSelector, inputIndex
 	}
 	return lcm.main.Query(inp, inputIndex, dgst, outputIndex)
 }
+
 func (lcm *lazyCacheManager) Records(ctx context.Context, ck *solver.CacheKey) ([]*solver.CacheRecord, error) {
 	lcm.wait()
 	if lcm.main == nil {
@@ -416,17 +410,26 @@ func (lcm *lazyCacheManager) Records(ctx context.Context, ck *solver.CacheKey) (
 	}
 	return lcm.main.Records(ctx, ck)
 }
+
 func (lcm *lazyCacheManager) Load(ctx context.Context, rec *solver.CacheRecord) (solver.Result, error) {
 	if err := lcm.wait(); err != nil {
 		return nil, err
 	}
 	return lcm.main.Load(ctx, rec)
 }
+
 func (lcm *lazyCacheManager) Save(key *solver.CacheKey, s solver.Result, createdAt time.Time) (*solver.ExportableCacheKey, error) {
 	if err := lcm.wait(); err != nil {
 		return nil, err
 	}
 	return lcm.main.Save(key, s, createdAt)
+}
+
+func (lcm *lazyCacheManager) ReleaseUnreferenced(ctx context.Context) error {
+	if err := lcm.wait(); err != nil {
+		return err
+	}
+	return lcm.main.ReleaseUnreferenced(ctx)
 }
 
 func (lcm *lazyCacheManager) wait() error {

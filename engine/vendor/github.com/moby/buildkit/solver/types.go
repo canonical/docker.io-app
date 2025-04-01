@@ -112,6 +112,9 @@ type CacheExportOpt struct {
 	CompressionOpt *compression.Config
 	// ExportRoots defines if records for root vertexes should be exported.
 	ExportRoots bool
+	// IgnoreBacklinks defines if other cache chains for same result that did not
+	// participate in the current build should be exported.
+	IgnoreBacklinks bool
 }
 
 // CacheExporter can export the artifacts of the build chain
@@ -264,4 +267,6 @@ type CacheManager interface {
 
 	// Save saves a result based on a cache key
 	Save(key *CacheKey, s Result, createdAt time.Time) (*ExportableCacheKey, error)
+
+	ReleaseUnreferenced(context.Context) error
 }

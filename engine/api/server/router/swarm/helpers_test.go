@@ -4,8 +4,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/go-units"
 )
 
 func TestAdjustForAPIVersion(t *testing.T) {
@@ -38,11 +39,23 @@ func TestAdjustForAPIVersion(t *testing.T) {
 						ConfigName: "configRuntime",
 					},
 				},
-				Ulimits: []*units.Ulimit{
+				Ulimits: []*container.Ulimit{
 					{
 						Name: "nofile",
 						Soft: 100,
 						Hard: 200,
+					},
+				},
+				Mounts: []mount.Mount{
+					{
+						Type:   mount.TypeTmpfs,
+						Source: "/foo",
+						Target: "/bar",
+						TmpfsOptions: &mount.TmpfsOptions{
+							Options: [][]string{
+								{"exec"},
+							},
+						},
 					},
 				},
 			},
@@ -55,6 +68,19 @@ func TestAdjustForAPIVersion(t *testing.T) {
 				},
 			},
 		},
+	}
+
+	adjustForAPIVersion("1.46", spec)
+	if !reflect.DeepEqual(
+		spec.TaskTemplate.ContainerSpec.Mounts[0].TmpfsOptions.Options,
+		[][]string{{"exec"}},
+	) {
+		t.Error("TmpfsOptions.Options was stripped from spec")
+	}
+
+	adjustForAPIVersion("1.45", spec)
+	if len(spec.TaskTemplate.ContainerSpec.Mounts[0].TmpfsOptions.Options) != 0 {
+		t.Error("TmpfsOptions.Options not stripped from spec")
 	}
 
 	// first, does calling this with a later version correctly NOT strip

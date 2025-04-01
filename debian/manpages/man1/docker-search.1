@@ -1,24 +1,20 @@
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-search - Search Docker Hub for images
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker search [OPTIONS] TERM\fP
 
 
 .SH DESCRIPTION
-.PP
 Search Docker Hub for images that match the specified \fBTERM\fR\&. The table
 of images returned displays the name, description (truncated by default), number
 of stars awarded, whether the image is official, and whether it is automated.
 
 .SH Filter
-.PP
 Filter output based on these conditions:
    - stars=
    - is-automated=(true|false) (deprecated)
@@ -27,7 +23,6 @@ Filter output based on these conditions:
 
 .SH EXAMPLES
 .SH Search Docker Hub for ranked images
-.PP
 Search a registry for the term 'fedora' and only display those images
 ranked 3 or higher:
 
@@ -35,12 +30,10 @@ ranked 3 or higher:
 $ docker search --filter=stars=3 fedora
 NAME      DESCRIPTION                        STARS     OFFICIAL
 fedora    Official Docker builds of Fedora   1150      [OK]
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB-f\fP, \fB--filter\fP=
 	Filter output based on conditions provided
 
@@ -62,5 +55,4 @@ fedora    Official Docker builds of Fedora   1150      [OK]
 
 
 .SH SEE ALSO
-.PP
 \fBdocker(1)\fP

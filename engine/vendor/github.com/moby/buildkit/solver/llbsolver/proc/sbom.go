@@ -12,15 +12,19 @@ import (
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver"
 	"github.com/moby/buildkit/solver/result"
+	"github.com/moby/buildkit/util/tracing"
 	"github.com/pkg/errors"
 )
 
-func SBOMProcessor(scannerRef string, useCache bool, resolveMode string) llbsolver.Processor {
+func SBOMProcessor(scannerRef string, useCache bool, resolveMode string, params map[string]string) llbsolver.Processor {
 	return func(ctx context.Context, res *llbsolver.Result, s *llbsolver.Solver, j *solver.Job, usage *resources.SysSampler) (*llbsolver.Result, error) {
 		// skip sbom generation if we already have an sbom
 		if sbom.HasSBOM(res.Result) {
 			return res, nil
 		}
+
+		span, ctx := tracing.StartSpan(ctx, "create sbom attestation")
+		defer span.End()
 
 		ps, err := exptypes.ParsePlatforms(res.Metadata)
 		if err != nil {
@@ -31,7 +35,7 @@ func SBOMProcessor(scannerRef string, useCache bool, resolveMode string) llbsolv
 			ImageOpt: &sourceresolver.ResolveImageOpt{
 				ResolveMode: resolveMode,
 			},
-		})
+		}, params)
 		if err != nil {
 			return nil, err
 		}

@@ -1,18 +1,16 @@
+'\" t
 .nh
-.TH "DOCKER" "1" "Jun 2024" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
-.PP
 docker-network-create - Create a network
 
 
 .SH SYNOPSIS
-.PP
 \fBdocker network create [OPTIONS] NETWORK\fP
 
 
 .SH DESCRIPTION
-.PP
 Creates a new network. The \fBDRIVER\fR accepts \fBbridge\fR or \fBoverlay\fR which are the
 built-in network drivers. If you have installed a third party or your own custom
 network driver you can specify that \fBDRIVER\fR here also. If you don't specify the
@@ -25,7 +23,6 @@ create new ones using the \fBnetwork create\fR command.
 
 .EX
 $ docker network create -d bridge my-bridge-network
-
 .EE
 
 .PP
@@ -40,7 +37,6 @@ Once you have enabled swarm mode, you can create a swarm-scoped overlay network:
 
 .EX
 $ docker network create --scope=swarm --attachable -d overlay my-multihost-network
-
 .EE
 
 .PP
@@ -60,7 +56,6 @@ conflicts but this is not guaranteed. It is the user's responsibility to avoid
 name conflicts.
 
 .SS Overlay network limitations
-.PP
 You should create overlay networks with \fB/24\fR blocks (the default), which limits
 you to 256 IP addresses, when you create networks using the default VIP-based
 endpoint-mode. This recommendation addresses
@@ -74,13 +69,11 @@ Configure service discovery
 for more information about different endpoint modes.
 
 .SH Connect containers
-.PP
 When you start a container, use the \fB--network\fR flag to connect it to a network.
 This example adds the \fBbusybox\fR container to the \fBmynet\fR network:
 
 .EX
 $ docker run -itd --network=mynet busybox
-
 .EE
 
 .PP
@@ -99,7 +92,6 @@ You can disconnect a container from a network using the \fBdocker network
 disconnect\fR command.
 
 .SS Specify advanced options
-.PP
 When you create a network, Engine creates a non-overlapping subnetwork for the
 network by default. This subnetwork is not a subdivision of an existing network.
 It is purely for ip-addressing purposes. You can override this default and
@@ -108,7 +100,6 @@ specify subnetwork values directly using the \fB--subnet\fR option. On a
 
 .EX
 $ docker network create --driver=bridge --subnet=192.168.0.0/16 br0
-
 .EE
 
 .PP
@@ -122,7 +113,6 @@ $ docker network create \\
   --ip-range=172.28.5.0/24 \\
   --gateway=172.28.5.254 \\
   br0
-
 .EE
 
 .PP
@@ -141,7 +131,6 @@ $ docker network create -d overlay \\
   --aux-address="my-router=192.168.10.5" --aux-address="my-switch=192.168.10.6" \\
   --aux-address="my-printer=192.168.20.5" --aux-address="my-nas=192.168.20.6" \\
   my-multihost-network
-
 .EE
 
 .PP
@@ -149,7 +138,6 @@ Be sure that your subnetworks do not overlap. If they do, the network create
 fails and Engine returns an error.
 
 .SS Bridge driver options
-.PP
 When creating a custom network, the default network driver (i.e. \fBbridge\fR) has
 additional options that can be passed. The following are those options and the
 equivalent docker daemon flags used for docker0 bridge:
@@ -203,18 +191,15 @@ when publishing ports:
 $ docker network create \\
     -o "com.docker.network.bridge.host_binding_ipv4"="172.19.0.1" \\
     simple-network
-
 .EE
 
 .SS Network internal mode
-.PP
 By default, when you connect a container to an \fBoverlay\fR network, Docker also
 connects a bridge network to it to provide external connectivity. If you want
 to create an externally isolated \fBoverlay\fR network, you can specify the
 \fB--internal\fR option.
 
 .SS Network ingress mode
-.PP
 You can create the network which will be used to provide the routing-mesh in the
 swarm cluster. You do so by specifying \fB--ingress\fR when creating the network. Only
 one ingress network can be created at the time. The network can be removed only
@@ -228,11 +213,9 @@ $ docker network create -d overlay \\
   --opt com.docker.network.driver.mtu=9216 \\
   --opt encrypted=true \\
   my-ingress-network
-
 .EE
 
 .SS Run services on predefined networks
-.PP
 You can create services on the predefined docker networks \fBbridge\fR and \fBhost\fR\&.
 
 .EX
@@ -240,11 +223,9 @@ $ docker service create --name my-service \\
   --network host \\
   --replicas 2 \\
   busybox top
-
 .EE
 
 .SS Swarm networks with local scope drivers
-.PP
 You can create a swarm network with local scope network drivers. You do so
 by promoting the network scope to \fBswarm\fR during the creation of the network.
 You will then be able to use this network when creating services.
@@ -254,7 +235,6 @@ $ docker network create -d bridge \\
   --scope swarm \\
   --attachable \\
   swarm-network
-
 .EE
 
 .PP
@@ -268,12 +248,10 @@ network which contains the configuration.
 node1$ docker network create --config-only --subnet 192.168.100.0/24 --gateway 192.168.100.115 mv-config
 node2$ docker network create --config-only --subnet 192.168.200.0/24 --gateway 192.168.200.202 mv-config
 node1$ docker network create -d macvlan --scope swarm --config-from mv-config --attachable swarm-network
-
 .EE
 
 
 .SH OPTIONS
-.PP
 \fB--attachable\fP[=false]
 	Enable manual container attachment
 
@@ -323,7 +301,7 @@ node1$ docker network create -d macvlan --scope swarm --config-from mv-config --
 
 .PP
 \fB--ipv6\fP[=false]
-	Enable IPv6 networking
+	Enable or disable IPv6 networking
 
 .PP
 \fB--label\fP=
@@ -343,5 +321,4 @@ node1$ docker network create -d macvlan --scope swarm --config-from mv-config --
 
 
 .SH SEE ALSO
-.PP
 \fBdocker-network(1)\fP

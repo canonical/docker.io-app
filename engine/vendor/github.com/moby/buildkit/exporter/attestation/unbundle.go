@@ -3,6 +3,7 @@ package attestation
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -32,7 +33,7 @@ func Unbundle(ctx context.Context, s session.Group, bundled []exporter.Attestati
 		i, att := i, att
 		eg.Go(func() error {
 			switch att.Kind {
-			case gatewaypb.AttestationKindInToto:
+			case gatewaypb.AttestationKind_InToto:
 				if strings.HasPrefix(att.InToto.PredicateType, "https://slsa.dev/provenance/") {
 					if att.ContentFunc == nil {
 						// provenance may only be set buildkit-side using ContentFunc
@@ -40,7 +41,7 @@ func Unbundle(ctx context.Context, s session.Group, bundled []exporter.Attestati
 					}
 				}
 				unbundled[i] = append(unbundled[i], att)
-			case gatewaypb.AttestationKindBundle:
+			case gatewaypb.AttestationKind_Bundle:
 				if att.ContentFunc != nil {
 					return errors.New("attestation bundle cannot have callback")
 				}
@@ -59,7 +60,7 @@ func Unbundle(ctx context.Context, s session.Group, bundled []exporter.Attestati
 				}
 				defer lm.Unmount()
 
-				atts, err := unbundle(ctx, src, att)
+				atts, err := unbundle(src, att)
 				if err != nil {
 					return err
 				}
@@ -116,7 +117,7 @@ func sort(atts []exporter.Attestation) []exporter.Attestation {
 	return result
 }
 
-func unbundle(ctx context.Context, root string, bundle exporter.Attestation) ([]exporter.Attestation, error) {
+func unbundle(root string, bundle exporter.Attestation) ([]exporter.Attestation, error) {
 	dir, err := fs.RootPath(root, bundle.Path)
 	if err != nil {
 		return nil, err
@@ -141,6 +142,9 @@ func unbundle(ctx context.Context, root string, bundle exporter.Attestation) ([]
 		if err := dec.Decode(&stmt); err != nil {
 			return nil, errors.Wrap(err, "cannot decode in-toto statement")
 		}
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			return nil, errors.New("in-toto statement is not a single JSON object")
+		}
 		if bundle.InToto.PredicateType != "" && stmt.PredicateType != bundle.InToto.PredicateType {
 			return nil, errors.Errorf("bundle entry %s does not match required predicate type %s", stmt.PredicateType, bundle.InToto.PredicateType)
 		}
@@ -153,13 +157,13 @@ func unbundle(ctx context.Context, root string, bundle exporter.Attestation) ([]
 		subjects := make([]result.InTotoSubject, len(stmt.Subject))
 		for i, subject := range stmt.Subject {
 			subjects[i] = result.InTotoSubject{
-				Kind:   gatewaypb.InTotoSubjectKindRaw,
+				Kind:   gatewaypb.InTotoSubjectKind_Raw,
 				Name:   subject.Name,
 				Digest: result.FromDigestMap(subject.Digest),
 			}
 		}
 		unbundled = append(unbundled, exporter.Attestation{
-			Kind:        gatewaypb.AttestationKindInToto,
+			Kind:        gatewaypb.AttestationKind_InToto,
 			Metadata:    bundle.Metadata,
 			Path:        path.Join(bundle.Path, entry.Name()),
 			ContentFunc: func() ([]byte, error) { return predicate, nil },
@@ -182,7 +186,7 @@ func Validate(atts []exporter.Attestation) error {
 }
 
 func validate(att exporter.Attestation) error {
-	if att.Kind != gatewaypb.AttestationKindBundle && att.Path == "" {
+	if att.Kind != gatewaypb.AttestationKind_Bundle && att.Path == "" {
 		return errors.New("attestation does not have set path")
 	}
 	if att.Ref == nil && att.ContentFunc == nil {

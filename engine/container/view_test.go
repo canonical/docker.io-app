@@ -1,6 +1,7 @@
 package container // import "github.com/docker/docker/container"
 
 import (
+	"context"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
@@ -46,7 +48,7 @@ func TestViewSaveDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := newContainer(t)
-	if err := c.CheckpointTo(db); err != nil {
+	if err := c.CheckpointTo(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Delete(c); err != nil {
@@ -61,11 +63,11 @@ func TestViewAll(t *testing.T) {
 		two   = newContainer(t)
 	)
 	one.Pid = 10
-	if err := one.CheckpointTo(db); err != nil {
+	if err := one.CheckpointTo(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	two.Pid = 20
-	if err := two.CheckpointTo(db); err != nil {
+	if err := two.CheckpointTo(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,7 +96,7 @@ func TestViewGet(t *testing.T) {
 		one   = newContainer(t)
 	)
 	one.ImageID = "some-image-123"
-	if err := one.CheckpointTo(db); err != nil {
+	if err := one.CheckpointTo(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	s, err := db.Snapshot().Get(one.ID)
@@ -114,7 +116,10 @@ func TestNames(t *testing.T) {
 	assert.Check(t, db.ReserveName("name1", "containerid1"))
 	assert.Check(t, db.ReserveName("name1", "containerid1")) // idempotent
 	assert.Check(t, db.ReserveName("name2", "containerid2"))
-	assert.Check(t, is.Error(db.ReserveName("name2", "containerid3"), ErrNameReserved.Error()))
+
+	err = db.ReserveName("name2", "containerid3")
+	assert.Check(t, is.ErrorType(err, errdefs.IsConflict))
+	assert.Check(t, is.ErrorIs(err, ErrNameReserved)) //nolint:staticcheck  // ignore SA1019: ErrNameReserved is deprecated.
 
 	// Releasing a name allows the name to point to something else later.
 	assert.Check(t, db.ReleaseName("name2"))
@@ -131,7 +136,8 @@ func TestNames(t *testing.T) {
 	assert.Check(t, is.Equal("containerid3", id))
 
 	_, err = view.GetID("notreserved")
-	assert.Check(t, is.Error(err, ErrNameNotReserved.Error()))
+	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorIs(err, ErrNameNotReserved)) //nolint:staticcheck  // ignore SA1019: ErrNameNotReserved is deprecated.
 
 	// Releasing and re-reserving a name doesn't affect the snapshot.
 	assert.Check(t, db.ReleaseName("name2"))
@@ -174,7 +180,7 @@ func TestViewWithHealthCheck(t *testing.T) {
 			Status: "starting",
 		},
 	}
-	if err := one.CheckpointTo(db); err != nil {
+	if err := one.CheckpointTo(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	s, err := db.Snapshot().Get(one.ID)

@@ -12,15 +12,13 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/diff"
-	cerrdefs "github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/cleanup"
 	"github.com/containerd/containerd/snapshots"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/pkg/archive"
 	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
@@ -68,16 +66,11 @@ func (i *ImageService) CommitImage(ctx context.Context, cc backend.CommitConfig)
 		sn     = i.client.SnapshotService(container.Driver)
 	)
 
-	// Don't gc me and clean the dirty data after 1 hour!
-	ctx, release, err := i.client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+	ctx, release, err := i.withLease(ctx, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to create lease for commit: %w", err)
 	}
-	defer func() {
-		if err := release(compatcontext.WithoutCancel(ctx)); err != nil {
-			log.G(ctx).WithError(err).Warn("failed to release lease created for commit")
-		}
-	}()
+	defer release()
 
 	diffLayerDesc, diffID, err := i.createDiff(ctx, cc.ContainerID, sn, cs, differ)
 	if err != nil {

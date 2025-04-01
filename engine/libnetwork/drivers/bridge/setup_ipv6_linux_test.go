@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/internal/testutils/netnsutils"
 	"github.com/vishvananda/netlink"
 )
@@ -14,7 +15,7 @@ import (
 func TestSetupIPv6(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	nh, err := netlink.NewHandle()
+	nh, err := nlwrap.NewHandle()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +44,14 @@ func TestSetupIPv6(t *testing.T) {
 
 	var found bool
 	for _, addr := range addrsv6 {
-		if bridgeIPv6.String() == addr.IPNet.String() {
+		if config.AddressIPv6.String() == addr.IPNet.String() {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Fatalf("Bridge device does not have requested IPv6 address %v", bridgeIPv6)
+		t.Fatalf("Bridge device does not have requested IPv6 address %v", config.AddressIPv6)
 	}
 }
 
@@ -66,7 +67,7 @@ func TestSetupGatewayIPv6(t *testing.T) {
 		DefaultGatewayIPv6: gw,
 	}
 
-	nh, err := netlink.NewHandle()
+	nh, err := nlwrap.NewHandle()
 	if err != nil {
 		t.Fatal(err)
 	}

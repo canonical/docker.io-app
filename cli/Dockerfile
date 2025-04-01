@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
 ARG BASE_VARIANT=alpine
-ARG ALPINE_VERSION=3.18
+ARG ALPINE_VERSION=3.20
 ARG BASE_DEBIAN_DISTRO=bookworm
 
-ARG GO_VERSION=1.21.10
-ARG XX_VERSION=1.4.0
+ARG GO_VERSION=1.22.11
+ARG XX_VERSION=1.6.1
 ARG GOVERSIONINFO_VERSION=v1.3.0
 ARG GOTESTSUM_VERSION=v1.10.0
-ARG BUILDX_VERSION=0.12.1
-ARG COMPOSE_VERSION=v2.24.3
+ARG BUILDX_VERSION=0.20.0
+ARG COMPOSE_VERSION=v2.32.4
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
 
@@ -63,7 +63,6 @@ ARG PACKAGER_NAME
 COPY --link --from=goversioninfo /out/goversioninfo /usr/bin/goversioninfo
 RUN --mount=type=bind,target=.,ro \
     --mount=type=cache,target=/root/.cache \
-    --mount=from=dockercore/golang-cross:xx-sdk-extras,target=/xx-sdk,src=/xx-sdk \
     --mount=type=tmpfs,target=cli/winresources \
     # override the default behavior of go with xx-go
     xx-go --wrap && \
@@ -89,7 +88,6 @@ ARG GO_STRIP
 ARG CGO_ENABLED
 ARG VERSION
 RUN --mount=ro --mount=type=cache,target=/root/.cache \
-    --mount=from=dockercore/golang-cross:xx-sdk-extras,target=/xx-sdk,src=/xx-sdk \
     xx-go --wrap && \
     TARGET=/out ./scripts/build/plugins e2e/cli-plugins/plugins/*
 

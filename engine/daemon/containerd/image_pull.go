@@ -9,19 +9,18 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
-	cerrdefs "github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/pkg/snapshotters"
-	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/remotes/docker"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/events"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	dimages "github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/compatcontext"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
@@ -39,6 +38,12 @@ func (i *ImageService) PullImage(ctx context.Context, baseRef reference.Named, p
 		}
 	}()
 	out := streamformatter.NewJSONProgressOutput(outStream, false)
+
+	ctx, done, err := i.withLease(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer done()
 
 	if !reference.IsNameOnly(baseRef) {
 		return i.pullTag(ctx, baseRef, platform, metaHeaders, authConfig, out)
@@ -80,10 +85,32 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	resolver, _ := i.newResolverFromAuthConfig(ctx, authConfig, ref)
 	opts = append(opts, containerd.WithResolver(resolver))
 
-	old, err := i.resolveDescriptor(ctx, ref.String())
+	oldImage, err := i.resolveImage(ctx, ref.String())
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
+
+	// Will be set to the new image after pull succeeds.
+	var outNewImg containerd.Image
+
+	if oldImage.Target.Digest != "" {
+		err = i.leaseContent(ctx, i.content, oldImage.Target)
+		if err != nil {
+			return errdefs.System(fmt.Errorf("failed to lease content: %w", err))
+		}
+
+		// If the pulled image is different than the old image, we will keep the old image as a dangling image.
+		defer func() {
+			if outNewImg != nil {
+				if outNewImg.Target().Digest != oldImage.Target.Digest {
+					if err := i.ensureDanglingImage(ctx, oldImage); err != nil {
+						log.G(ctx).WithError(err).Warn("failed to keep the previous image as dangling")
+					}
+				}
+			}
+		}()
+	}
+
 	p := platforms.Default()
 	if platform != nil {
 		p = platforms.Only(*platform)
@@ -101,7 +128,6 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	pp := pullProgress{store: i.content, showExists: true}
 	finishProgress := jobs.showProgress(ctx, out, pp)
 
-	var outNewImg *containerd.Image
 	defer func() {
 		finishProgress()
 
@@ -115,9 +141,10 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 		// Status: Downloaded newer image for hello-world:latest
 		// docker.io/library/hello-world:latest
 		if outNewImg != nil {
-			img := *outNewImg
+			img := outNewImg
 			progress.Message(out, "", "Digest: "+img.Target().Digest.String())
-			writeStatus(out, reference.FamiliarString(ref), old.Digest != img.Target().Digest)
+			newer := oldImage.Target.Digest != img.Target().Digest
+			writeStatus(out, reference.FamiliarString(ref), newer)
 		}
 	}()
 
@@ -185,6 +212,18 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 			}
 			return errdefs.NotFound(fmt.Errorf("pull access denied for %s, repository does not exist or may require 'docker login'", reference.FamiliarName(ref)))
 		}
+		if cerrdefs.IsNotFound(err) {
+			// Transform "no match for platform in manifest" error returned by containerd into
+			// the same message as the graphdrivers backend.
+			// The one returned by containerd doesn't contain the platform and is much less informative.
+			if strings.Contains(err.Error(), "platform") {
+				platformStr := platforms.DefaultString()
+				if platform != nil {
+					platformStr = platforms.Format(*platform)
+				}
+				return errdefs.NotFound(fmt.Errorf("no matching manifest for %s in the manifest list entries: %w", platformStr, err))
+			}
+		}
 		return err
 	}
 
@@ -195,7 +234,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	logger.Info("image pulled")
 
 	// The pull succeeded, so try to remove any dangling image we have for this target
-	err = i.images.Delete(compatcontext.WithoutCancel(ctx), danglingImageName(img.Target().Digest))
+	err = i.images.Delete(context.WithoutCancel(ctx), danglingImageName(img.Target().Digest))
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		// Image pull succeeded, but cleaning up the dangling image failed. Ignore the
 		// error to not mark the pull as failed.
@@ -203,7 +242,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	}
 
 	i.LogImageEvent(reference.FamiliarString(ref), reference.FamiliarName(ref), events.ActionPull)
-	outNewImg = &img
+	outNewImg = img
 	return nil
 }
 
