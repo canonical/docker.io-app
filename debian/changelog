@@ -1,3 +1,9 @@
+docker.io-app (27.5.1-0ubuntu3~22.04.2) jammy-security; urgency=medium
+
+  * No-change rebuild to copy previous update to the security pocket.
+
+ -- Hlib Korzhynskyy <hlib.korzhynskyy@canonical.com>  Mon, 02 Jun 2025 09:48:38 -0230
+
 docker.io-app (27.5.1-0ubuntu3~22.04.1) jammy; urgency=medium
 
   * Backport from plucky to jammy (LP: #2085187)
