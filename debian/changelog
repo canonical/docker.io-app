@@ -1,3 +1,9 @@
+docker.io-app (27.5.1-0ubuntu3~24.04.2) noble-security; urgency=medium
+
+  * No-change rebuild to copy previous update to the security pocket.
+
+ -- Hlib Korzhynskyy <hlib.korzhynskyy@canonical.com>  Mon, 02 Jun 2025 09:21:53 -0230
+
 docker.io-app (27.5.1-0ubuntu3~24.04.1) noble; urgency=medium
 
   * Backport from plucky to noble (LP: #2085187)
