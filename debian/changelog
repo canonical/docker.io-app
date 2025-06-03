@@ -1,3 +1,9 @@
+docker.io-app (27.5.1-0ubuntu4) questing; urgency=medium
+
+  * d/control: conflicts/replaces podman-docker (LP: #2037905)
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 03 Jun 2025 13:35:31 -0300
+
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 
   * d/control: set a version for the docker-cli Provides
