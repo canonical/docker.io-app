@@ -34,6 +34,9 @@ Depends: adduser,
          iptables,
          ${misc:Depends},
          ${shlibs:Depends}
+# podman-docker provides an alternative docker implementation
+Conflicts: podman-docker
+Replaces: podman-docker
 # Debian split the daemon and the docker binary into docker.io and docker-cli,
 # respectively. Instead of splitting it here, let's add a Provides: docker-cli
 # https://salsa.debian.org/ci-team/autopkgtest/-/merge_requests/399#note_543111
