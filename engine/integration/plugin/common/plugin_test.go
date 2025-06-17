@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/remotes/docker"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/docker/docker/api/types"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/system"
@@ -43,7 +43,6 @@ func TestPluginInvalidJSON(t *testing.T) {
 	}
 
 	for _, ep := range endpoints {
-		ep := ep
 		t.Run(ep[1:], func(t *testing.T) {
 			t.Parallel()
 
@@ -343,7 +342,7 @@ func TestPluginBackCompatMediaTypes(t *testing.T) {
 	// that the default resolver code uses. "Older registries" here would be
 	// like the one currently included in the test suite.
 	headers := http.Header{}
-	headers.Add("Accept", images.MediaTypeDockerSchema2Manifest)
+	headers.Add("Accept", c8dimages.MediaTypeDockerSchema2Manifest)
 
 	resolver := docker.NewResolver(docker.ResolverOptions{
 		Headers: headers,
@@ -362,7 +361,7 @@ func TestPluginBackCompatMediaTypes(t *testing.T) {
 
 	var m ocispec.Manifest
 	assert.NilError(t, json.NewDecoder(rdr).Decode(&m))
-	assert.Check(t, is.Equal(m.MediaType, images.MediaTypeDockerSchema2Manifest))
+	assert.Check(t, is.Equal(m.MediaType, c8dimages.MediaTypeDockerSchema2Manifest))
 	assert.Check(t, is.Len(m.Layers, 1))
-	assert.Check(t, is.Equal(m.Layers[0].MediaType, images.MediaTypeDockerSchema2LayerGzip))
+	assert.Check(t, is.Equal(m.Layers[0].MediaType, c8dimages.MediaTypeDockerSchema2LayerGzip))
 }

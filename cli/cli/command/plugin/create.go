@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -13,7 +12,8 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/pkg/archive"
+	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -35,7 +35,7 @@ func validateConfig(path string) error {
 
 	m := types.PluginConfig{}
 	err = json.NewDecoder(dt).Decode(&m)
-	dt.Close()
+	_ = dt.Close()
 
 	return err
 }
@@ -87,11 +87,6 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 }
 
 func runCreate(ctx context.Context, dockerCli command.Cli, options pluginCreateOptions) error {
-	var (
-		createCtx io.ReadCloser
-		err       error
-	)
-
 	if err := validateTag(options.repoName); err != nil {
 		return err
 	}
@@ -105,23 +100,23 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options pluginCreateO
 		return err
 	}
 
-	compression := archive.Uncompressed
+	comp := compression.None
 	if options.compress {
 		logrus.Debugf("compression enabled")
-		compression = archive.Gzip
+		comp = compression.Gzip
 	}
 
-	createCtx, err = archive.TarWithOptions(absContextDir, &archive.TarOptions{
-		Compression: compression,
+	createCtx, err := archive.TarWithOptions(absContextDir, &archive.TarOptions{
+		Compression: comp,
 	})
 	if err != nil {
 		return err
 	}
 
-	createOptions := types.PluginCreateOptions{RepoName: options.repoName}
-	if err = dockerCli.Client().PluginCreate(ctx, createCtx, createOptions); err != nil {
+	err = dockerCli.Client().PluginCreate(ctx, createCtx, types.PluginCreateOptions{RepoName: options.repoName})
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(dockerCli.Out(), options.repoName)
+	_, _ = fmt.Fprintln(dockerCli.Out(), options.repoName)
 	return nil
 }

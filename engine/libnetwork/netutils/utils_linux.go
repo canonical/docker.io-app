@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22 && linux
+//go:build go1.23 && linux
 
 package netutils
 
@@ -99,7 +99,7 @@ func queryOnLinkRoutes() []netip.Prefix {
 
 // GenerateIfaceName returns an interface name using the passed in
 // prefix and the length of random bytes. The api ensures that the
-// there are is no interface which exists with that name.
+// there is no interface which exists with that name.
 func GenerateIfaceName(nlh nlwrap.Handle, prefix string, len int) (string, error) {
 	for i := 0; i < 3; i++ {
 		name, err := GenerateRandomName(prefix, len)

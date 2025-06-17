@@ -89,7 +89,7 @@ func TestSharedTempFileConverter(t *testing.T) {
 		name := filepath.Join(dir, "test.txt")
 		createFile(t, name, "hi there")
 
-		var conversions int32
+		var conversions atomic.Uint32
 		notify := make(chan chan struct{}, 1)
 		firstConversionStarted := make(chan struct{})
 		notify <- firstConversionStarted
@@ -104,7 +104,7 @@ func TestSharedTempFileConverter(t *testing.T) {
 				default:
 				}
 				<-unblock
-				atomic.AddInt32(&conversions, 1)
+				conversions.Add(1)
 				return copyTransform(strings.ToUpper)(dst, src)
 			},
 		)
@@ -114,7 +114,6 @@ func TestSharedTempFileConverter(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(3)
 		for i := 0; i < 3; i++ {
-			i := i
 			go func() {
 				defer wg.Done()
 				t.Logf("goroutine %v: enter", i)
@@ -143,7 +142,7 @@ func TestSharedTempFileConverter(t *testing.T) {
 			assert.Check(t, c.Close())
 		}
 
-		assert.Check(t, is.Equal(int32(1), conversions))
+		assert.Check(t, is.Equal(uint32(1), conversions.Load()))
 
 		assert.NilError(t, os.Remove(name))
 		checkDirEmpty(t, dir)
@@ -176,14 +175,13 @@ func TestSharedTempFileConverter(t *testing.T) {
 		var done sync.WaitGroup
 		done.Add(3)
 		for i := 0; i < 3; i++ {
-			i := i
 			go func() {
 				defer done.Done()
 				t.Logf("goroutine %v: enter", i)
 				defer t.Logf("goroutine %v: exit", i)
 				start.Done()
 				_, err := uut.Do(src)
-				assert.Check(t, errors.Is(err, fakeErr), "in goroutine %v", i)
+				assert.Check(t, is.ErrorIs(err, fakeErr), "in goroutine %v", i)
 			}()
 		}
 		done.Wait()
@@ -192,7 +190,7 @@ func TestSharedTempFileConverter(t *testing.T) {
 		// request should retry from scratch.
 		fakeErr = errors.New("another fake error")
 		_, err = uut.Do(src)
-		assert.Check(t, errors.Is(err, fakeErr))
+		assert.Check(t, is.ErrorIs(err, fakeErr))
 
 		fakeErr = nil
 		f, err := uut.Do(src)

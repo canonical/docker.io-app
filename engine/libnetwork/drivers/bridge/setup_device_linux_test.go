@@ -6,10 +6,12 @@ import (
 	"syscall"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/internal/testutils/netnsutils"
 	"github.com/docker/docker/libnetwork/netutils"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestSetupNewBridge(t *testing.T) {
@@ -42,22 +44,15 @@ func TestSetupNewNonDefaultBridge(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
 	nh, err := nlwrap.NewHandle()
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	defer nh.Close()
 
 	config := &networkConfiguration{BridgeName: "test0", DefaultBridge: true}
 	br := &bridgeInterface{nlh: nh}
 
 	err = setupDevice(config, br)
-	if err == nil {
-		t.Fatal(`Expected bridge creation failure with "non default name", succeeded`)
-	}
-
-	if _, ok := err.(NonDefaultBridgeExistError); !ok {
-		t.Fatalf("Did not fail with expected error. Actual error: %v", err)
-	}
+	assert.Check(t, is.Error(err, "bridge device with non default name test0 must be created manually"))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsPermissionDenied))
 }
 
 func TestSetupDeviceUp(t *testing.T) {
@@ -95,6 +90,11 @@ func TestGenerateRandomMAC(t *testing.T) {
 	}
 }
 
+// TestMTUBiggerThan1500 tests that setting an MTU bigger than 1500 succeeds.
+// Since v4.17, the kernel allows setting an MTU bigger than 1500 on a bridge
+// device even if there's no links attached yet. Relevant kernel commit: [1].
+//
+// [1]: https://github.com/torvalds/linux/commit/804b854d374e39f5f8bff9638fd274b9a9ca7d33
 func TestMTUBiggerThan1500(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
@@ -111,6 +111,10 @@ func TestMTUBiggerThan1500(t *testing.T) {
 	assert.NilError(t, setupMTU(config, br))
 }
 
+// TestMTUBiggerThan64K tests that setting an MTU bigger than 64k fails
+// properly. The kernel caps the MTU at this value -- see [1].
+//
+// [1]: https://github.com/torvalds/linux/blob/a446e965a188ee8f745859e63ce046fe98577d45/net/bridge/br_device.c#L527
 func TestMTUBiggerThan64K(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 

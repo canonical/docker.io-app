@@ -7,14 +7,14 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/internal/testutils/netnsutils"
 	"github.com/docker/docker/libnetwork/config"
+	"github.com/docker/docker/libnetwork/drivers/bridge"
 	"github.com/docker/docker/libnetwork/ipams/defaultipam"
 	"github.com/docker/docker/libnetwork/ipamutils"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/options"
-	"github.com/docker/docker/libnetwork/osl"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -22,7 +22,8 @@ import (
 func getTestEnv(t *testing.T, opts ...[]NetworkOption) (*Controller, []*Network) {
 	const netType = "bridge"
 	c, err := New(
-		OptionBoltdbWithRandomDBFile(t),
+		context.Background(),
+		config.OptionDataDir(t.TempDir()),
 		config.OptionDriverConfig(netType, map[string]any{
 			netlabel.GenericData: options.Generic{"EnableIPForwarding": true},
 		}),
@@ -42,11 +43,13 @@ func getTestEnv(t *testing.T, opts ...[]NetworkOption) (*Controller, []*Network)
 		name := "test_nw_" + strconv.Itoa(i)
 		newOptions := []NetworkOption{
 			NetworkOptionGeneric(options.Generic{
-				netlabel.GenericData: options.Generic{"BridgeName": name},
+				netlabel.GenericData: map[string]string{
+					bridge.BridgeName: name,
+				},
 			}),
 		}
 		newOptions = append(newOptions, opt...)
-		n, err := c.NewNetwork(netType, name, "", newOptions...)
+		n, err := c.NewNetwork(context.Background(), netType, name, "", newOptions...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,14 +65,15 @@ func TestControllerGetSandbox(t *testing.T) {
 	t.Run("invalid id", func(t *testing.T) {
 		const cID = ""
 		sb, err := ctrlr.GetSandbox(cID)
-		_, ok := err.(ErrInvalidID)
-		assert.Check(t, ok, "expected ErrInvalidID, got %[1]v (%[1]T)", err)
+		assert.Check(t, cerrdefs.IsInvalidArgument(err), "expected a ErrInvalidParameter, got %[1]v (%[1]T)", err)
+		assert.Check(t, is.Error(err, "invalid id: id is empty"))
 		assert.Check(t, is.Nil(sb))
 	})
 	t.Run("not found", func(t *testing.T) {
 		const cID = "container-id-with-no-sandbox"
 		sb, err := ctrlr.GetSandbox(cID)
-		assert.Check(t, errdefs.IsNotFound(err), "expected  a ErrNotFound, got %[1]v (%[1]T)", err)
+		assert.Check(t, cerrdefs.IsNotFound(err), "expected a ErrNotFound, got %[1]v (%[1]T)", err)
+		assert.Check(t, is.Error(err, "network sandbox for container container-id-with-no-sandbox not found"))
 		assert.Check(t, is.Nil(sb))
 	})
 	t.Run("existing sandbox", func(t *testing.T) {
@@ -88,7 +92,8 @@ func TestControllerGetSandbox(t *testing.T) {
 		assert.Check(t, err)
 
 		sb, err = ctrlr.GetSandbox(cID)
-		assert.Check(t, errdefs.IsNotFound(err), "expected  a ErrNotFound, got %[1]v (%[1]T)", err)
+		assert.Check(t, cerrdefs.IsNotFound(err), "expected a ErrNotFound, got %[1]v (%[1]T)", err)
+		assert.Check(t, is.Error(err, "network sandbox for container test-container-id not found"))
 		assert.Check(t, is.Nil(sb))
 	})
 }
@@ -108,8 +113,6 @@ func TestSandboxAddEmpty(t *testing.T) {
 	if len(ctrlr.sandboxes) != 0 {
 		t.Fatalf("controller sandboxes is not empty. len = %d", len(ctrlr.sandboxes))
 	}
-
-	osl.GC()
 }
 
 // // If different priorities are specified, internal option and ipv6 addresses mustn't influence endpoint order
@@ -117,9 +120,18 @@ func TestSandboxAddMultiPrio(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
 	opts := [][]NetworkOption{
-		{NetworkOptionEnableIPv6(true), NetworkOptionIpam(defaultipam.DriverName, "", nil, []*IpamConf{{PreferredPool: "fe90::/64"}}, nil)},
-		{NetworkOptionInternalNetwork()},
-		{},
+		{
+			NetworkOptionEnableIPv4(true),
+			NetworkOptionEnableIPv6(true),
+			NetworkOptionIpam(defaultipam.DriverName, "", nil, []*IpamConf{{PreferredPool: "fe90::/64"}}, nil),
+		},
+		{
+			NetworkOptionEnableIPv4(true),
+			NetworkOptionInternalNetwork(),
+		},
+		{
+			NetworkOptionEnableIPv4(true),
+		},
 	}
 
 	ctrlr, nws := getTestEnv(t, opts...)
@@ -193,18 +205,27 @@ func TestSandboxAddMultiPrio(t *testing.T) {
 	if len(ctrlr.sandboxes) != 0 {
 		t.Fatalf("controller sandboxes is not empty. len = %d", len(ctrlr.sandboxes))
 	}
-
-	osl.GC()
 }
 
 func TestSandboxAddSamePrio(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
 	opts := [][]NetworkOption{
-		{},
-		{},
-		{NetworkOptionEnableIPv6(true), NetworkOptionIpam(defaultipam.DriverName, "", nil, []*IpamConf{{PreferredPool: "fe90::/64"}}, nil)},
-		{NetworkOptionInternalNetwork()},
+		{
+			NetworkOptionEnableIPv4(true),
+		},
+		{
+			NetworkOptionEnableIPv4(true),
+		},
+		{
+			NetworkOptionEnableIPv4(true),
+			NetworkOptionEnableIPv6(true),
+			NetworkOptionIpam(defaultipam.DriverName, "", nil, []*IpamConf{{PreferredPool: "fe90::/64"}}, nil),
+		},
+		{
+			NetworkOptionEnableIPv4(true),
+			NetworkOptionInternalNetwork(),
+		},
 	}
 
 	ctrlr, nws := getTestEnv(t, opts...)
@@ -285,6 +306,4 @@ func TestSandboxAddSamePrio(t *testing.T) {
 	if len(ctrlr.sandboxes) != 0 {
 		t.Fatalf("controller containers is not empty. len = %d", len(ctrlr.sandboxes))
 	}
-
-	osl.GC()
 }

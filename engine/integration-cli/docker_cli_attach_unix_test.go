@@ -13,6 +13,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/docker/docker/integration-cli/cli"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 // #9860 Make sure attach ends when container ends (with no errors)
@@ -103,11 +104,11 @@ func (s *DockerCLIAttachSuite) TestAttachAfterDetach(c *testing.T) {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		cpty.Write([]byte("\n"))
+		_, _ = cpty.WriteString("\n")
 		time.Sleep(500 * time.Millisecond)
 
 		nBytes, err = cpty.Read(bytes)
-		cpty.Close()
+		_ = cpty.Close()
 		readErr <- err
 	}()
 
@@ -118,7 +119,7 @@ func (s *DockerCLIAttachSuite) TestAttachAfterDetach(c *testing.T) {
 		c.Fatal("timeout waiting for attach read")
 	}
 
-	assert.Assert(c, strings.Contains(string(bytes[:nBytes]), "/ #"))
+	assert.Assert(c, is.Contains(string(bytes[:nBytes]), "/ #"))
 }
 
 // TestAttachDetach checks that attach in tty mode can be detached using the long container ID
@@ -140,7 +141,7 @@ func (s *DockerCLIAttachSuite) TestAttachDetach(c *testing.T) {
 	assert.NilError(c, err)
 	cli.WaitRun(c, id)
 
-	_, err = cpty.Write([]byte("hello\n"))
+	_, err = cpty.WriteString("hello\n")
 	assert.NilError(c, err)
 	out, err = bufio.NewReader(stdout).ReadString('\n')
 	assert.NilError(c, err)

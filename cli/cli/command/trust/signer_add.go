@@ -6,13 +6,13 @@ import (
 	"io"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/cli/cli/trust"
+	"github.com/docker/cli/internal/lazyregexp"
 	"github.com/docker/cli/opts"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -45,7 +45,7 @@ func newSignerAddCommand(dockerCLI command.Cli) *cobra.Command {
 	return cmd
 }
 
-var validSignerName = regexp.MustCompile(`^[a-z0-9][a-z0-9\_\-]*$`).MatchString
+var validSignerName = lazyregexp.New(`^[a-z0-9][a-z0-9\_\-]*$`).MatchString
 
 func addSigner(ctx context.Context, dockerCLI command.Cli, options signerAddOptions) error {
 	signerName := options.signer
@@ -59,18 +59,18 @@ func addSigner(ctx context.Context, dockerCLI command.Cli, options signerAddOpti
 	if options.keys.Len() == 0 {
 		return errors.New("path to a public key must be provided using the `--key` flag")
 	}
-	signerPubKeys, err := ingestPublicKeys(options.keys.GetAll())
+	signerPubKeys, err := ingestPublicKeys(options.keys.GetSlice())
 	if err != nil {
 		return err
 	}
 	var errRepos []string
 	for _, repoName := range options.repos {
-		fmt.Fprintf(dockerCLI.Out(), "Adding signer \"%s\" to %s...\n", signerName, repoName)
+		_, _ = fmt.Fprintf(dockerCLI.Out(), "Adding signer \"%s\" to %s...\n", signerName, repoName)
 		if err := addSignerToRepo(ctx, dockerCLI, signerName, repoName, signerPubKeys); err != nil {
-			fmt.Fprintln(dockerCLI.Err(), err.Error()+"\n")
+			_, _ = fmt.Fprintln(dockerCLI.Err(), err.Error()+"\n")
 			errRepos = append(errRepos, repoName)
 		} else {
-			fmt.Fprintf(dockerCLI.Out(), "Successfully added signer: %s to %s\n\n", signerName, repoName)
+			_, _ = fmt.Fprintf(dockerCLI.Out(), "Successfully added signer: %s to %s\n\n", signerName, repoName)
 		}
 	}
 	if len(errRepos) > 0 {
@@ -85,7 +85,7 @@ func addSignerToRepo(ctx context.Context, dockerCLI command.Cli, signerName stri
 		return err
 	}
 
-	notaryRepo, err := dockerCLI.NotaryClient(imgRefAndAuth, trust.ActionsPushAndPull)
+	notaryRepo, err := newNotaryClient(dockerCLI, imgRefAndAuth, trust.ActionsPushAndPull)
 	if err != nil {
 		return trust.NotaryError(imgRefAndAuth.Reference().Name(), err)
 	}
@@ -93,11 +93,11 @@ func addSignerToRepo(ctx context.Context, dockerCLI command.Cli, signerName stri
 	if _, err = notaryRepo.ListTargets(); err != nil {
 		switch err.(type) {
 		case client.ErrRepoNotInitialized, client.ErrRepositoryNotExist:
-			fmt.Fprintf(dockerCLI.Out(), "Initializing signed repository for %s...\n", repoName)
+			_, _ = fmt.Fprintf(dockerCLI.Out(), "Initializing signed repository for %s...\n", repoName)
 			if err := getOrGenerateRootKeyAndInitRepo(notaryRepo); err != nil {
 				return trust.NotaryError(repoName, err)
 			}
-			fmt.Fprintf(dockerCLI.Out(), "Successfully initialized %q\n", repoName)
+			_, _ = fmt.Fprintf(dockerCLI.Out(), "Successfully initialized %q\n", repoName)
 		default:
 			return trust.NotaryError(repoName, err)
 		}

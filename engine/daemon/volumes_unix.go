@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	mounttypes "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/internal/cleanups"
+	"github.com/docker/docker/pkg/idtools"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/pkg/errors"
 )
@@ -37,9 +37,9 @@ func (daemon *Daemon) setupMounts(ctx context.Context, c *container.Container) (
 		tmpfsMounts[m.Destination] = true
 	}
 
-	cleanups := cleanups.Composite{}
+	mntCleanups := cleanups.Composite{}
 	defer func() {
-		if err := cleanups.Call(context.WithoutCancel(ctx)); err != nil {
+		if err := mntCleanups.Call(context.WithoutCancel(ctx)); err != nil {
 			log.G(ctx).WithError(err).Warn("failed to cleanup temporary mounts created by MountPoint.Setup")
 		}
 	}()
@@ -62,11 +62,12 @@ func (daemon *Daemon) setupMounts(ctx context.Context, c *container.Container) (
 			return nil
 		}
 
-		path, clean, err := m.Setup(ctx, c.MountLabel, daemon.idMapping.RootPair(), checkfunc)
+		uid, gid := daemon.idMapping.RootPair()
+		path, clean, err := m.Setup(ctx, c.MountLabel, idtools.Identity{UID: uid, GID: gid}, checkfunc)
 		if err != nil {
 			return nil, nil, err
 		}
-		cleanups.Add(clean)
+		mntCleanups.Add(clean)
 
 		if !c.TrySetNetworkMount(m.Destination, path) {
 			mnt := container.Mount{
@@ -107,26 +108,18 @@ func (daemon *Daemon) setupMounts(ctx context.Context, c *container.Container) (
 	// if we are going to mount any of the network files from container
 	// metadata, the ownership must be set properly for potential container
 	// remapped root (user namespaces)
-	rootIDs := daemon.idMapping.RootPair()
+	uid, gid := daemon.idMapping.RootPair()
 	for _, mnt := range netMounts {
 		// we should only modify ownership of network files within our own container
 		// metadata repository. If the user specifies a mount path external, it is
 		// up to the user to make sure the file has proper ownership for userns
 		if strings.Index(mnt.Source, daemon.repository) == 0 {
-			if err := os.Chown(mnt.Source, rootIDs.UID, rootIDs.GID); err != nil {
+			if err := os.Chown(mnt.Source, uid, gid); err != nil {
 				return nil, nil, err
 			}
 		}
 	}
-	return append(mounts, netMounts...), cleanups.Release(), nil
-}
-
-// sortMounts sorts an array of mounts in lexicographic order. This ensure that
-// when mounting, the mounts don't shadow other mounts. For example, if mounting
-// /etc and /etc/resolv.conf, /etc/resolv.conf must not be mounted first.
-func sortMounts(m []container.Mount) []container.Mount {
-	sort.Sort(mounts(m))
-	return m
+	return append(mounts, netMounts...), mntCleanups.Release(), nil
 }
 
 // setBindModeIfNull is platform specific processing to ensure the

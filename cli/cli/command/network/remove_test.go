@@ -2,16 +2,23 @@ package network
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
+
+type forBiddenErr struct{ error }
+
+func (forBiddenErr) Forbidden() {}
+
+type notFoundErr struct{ error }
+
+func (notFoundErr) NotFound() {}
 
 func TestNetworkRemoveForce(t *testing.T) {
 	tests := []struct {
@@ -63,15 +70,14 @@ func TestNetworkRemoveForce(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			fakeCli := test.NewFakeCli(&fakeClient{
 				networkRemoveFunc: func(ctx context.Context, networkID string) error {
 					switch networkID {
 					case "no-such-network":
-						return errdefs.NotFound(errors.New("no such network: no-such-network"))
+						return notFoundErr{errors.New("no such network: no-such-network")}
 					case "in-use-network":
-						return errdefs.Forbidden(errors.New("network is in use"))
+						return forBiddenErr{errors.New("network is in use")}
 					case "existing-network":
 						return nil
 					default:
@@ -90,7 +96,7 @@ func TestNetworkRemoveForce(t *testing.T) {
 				assert.NilError(t, err)
 			} else {
 				assert.Check(t, is.Contains(fakeCli.ErrBuffer().String(), tc.expectedErr))
-				assert.ErrorContains(t, err, "Code: 1")
+				assert.ErrorContains(t, err, "exit status 1")
 			}
 		})
 	}

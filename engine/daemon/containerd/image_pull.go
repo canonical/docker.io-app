@@ -4,23 +4,23 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/pkg/snapshotters"
-	"github.com/containerd/containerd/remotes/docker"
+	containerd "github.com/containerd/containerd/v2/client"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
+	"github.com/containerd/containerd/v2/pkg/snapshotters"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/events"
 	registrytypes "github.com/docker/docker/api/types/registry"
-	dimages "github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/metrics"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
@@ -34,7 +34,7 @@ func (i *ImageService) PullImage(ctx context.Context, baseRef reference.Named, p
 	start := time.Now()
 	defer func() {
 		if retErr == nil {
-			dimages.ImageActions.WithValues("pull").UpdateSince(start)
+			metrics.ImageActions.WithValues("pull").UpdateSince(start)
 		}
 	}()
 	out := streamformatter.NewJSONProgressOutput(outStream, false)
@@ -79,14 +79,14 @@ func (i *ImageService) PullImage(ctx context.Context, baseRef reference.Named, p
 func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platform *ocispec.Platform, metaHeaders map[string][]string, authConfig *registrytypes.AuthConfig, out progress.Output) error {
 	var opts []containerd.RemoteOpt
 	if platform != nil {
-		opts = append(opts, containerd.WithPlatform(platforms.Format(*platform)))
+		opts = append(opts, containerd.WithPlatform(platforms.FormatAll(*platform)))
 	}
 
 	resolver, _ := i.newResolverFromAuthConfig(ctx, authConfig, ref)
 	opts = append(opts, containerd.WithResolver(resolver))
 
 	oldImage, err := i.resolveImage(ctx, ref.String())
-	if err != nil && !errdefs.IsNotFound(err) {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 
@@ -117,15 +117,18 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	}
 
 	jobs := newJobs()
-	h := images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
-		if images.IsLayerType(desc.MediaType) {
+	opts = append(opts, containerd.WithImageHandler(c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+		if showBlobProgress(desc) {
 			jobs.Add(desc)
 		}
 		return nil, nil
-	})
-	opts = append(opts, containerd.WithImageHandler(h))
+	})))
 
-	pp := pullProgress{store: i.content, showExists: true}
+	pp := &pullProgress{
+		store:       i.content,
+		snapshotter: i.snapshotterService(i.snapshotter),
+		showExists:  true,
+	}
 	finishProgress := jobs.showProgress(ctx, out, pp)
 
 	defer func() {
@@ -148,23 +151,27 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 		}
 	}()
 
-	var sentPullingFrom, sentSchema1Deprecation bool
-	ah := images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
-		if desc.MediaType == images.MediaTypeDockerSchema1Manifest && !sentSchema1Deprecation {
-			err := distribution.DeprecatedSchema1ImageError(ref)
-			if os.Getenv("DOCKER_ENABLE_DEPRECATED_PULL_SCHEMA_1_IMAGE") == "" {
-				log.G(context.TODO()).Warn(err.Error())
-				return nil, err
-			}
-			progress.Message(out, "", err.Error())
-			sentSchema1Deprecation = true
+	var sentPullingFrom, sentModelNotSupported atomic.Bool
+	ah := c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+		if desc.MediaType == c8dimages.MediaTypeDockerSchema1Manifest {
+			return nil, distribution.DeprecatedSchema1ImageError(ref)
 		}
-		if images.IsLayerType(desc.MediaType) {
+
+		ociAiArtifactManifest := c8dimages.IsManifestType(desc.MediaType) && isModelMediaType(desc.ArtifactType)
+		aiMediaType := isModelMediaType(desc.MediaType)
+
+		if ociAiArtifactManifest || aiMediaType {
+			if !sentModelNotSupported.Load() {
+				sentModelNotSupported.Store(true)
+				progress.Message(out, "", `WARNING: AI models are not supported by the Engine yet, did you mean to use "docker model pull/run" instead?`)
+			}
+		}
+		if c8dimages.IsLayerType(desc.MediaType) {
 			id := stringid.TruncateID(desc.Digest.String())
 			progress.Update(out, id, "Pulling fs layer")
 		}
-		if images.IsManifestType(desc.MediaType) {
-			if !sentPullingFrom {
+		if c8dimages.IsManifestType(desc.MediaType) {
+			if !sentPullingFrom.Load() {
 				var tagOrDigest string
 				if tagged, ok := ref.(reference.Tagged); ok {
 					tagOrDigest = tagged.Tag()
@@ -172,10 +179,10 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 					tagOrDigest = ref.String()
 				}
 				progress.Message(out, tagOrDigest, "Pulling from "+reference.Path(ref))
-				sentPullingFrom = true
+				sentPullingFrom.Store(true)
 			}
 
-			available, _, _, missing, err := images.Check(ctx, i.content, desc, p)
+			available, _, _, missing, err := c8dimages.Check(ctx, i.content, desc, p)
 			if err != nil {
 				return nil, err
 			}
@@ -195,6 +202,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 
 	// AppendInfoHandlerWrapper will annotate the image with basic information like manifest and layer digests as labels;
 	// this information is used to enable remote snapshotters like nydus and stargz to query a registry.
+	// This is also needed for the pull progress to detect the `Extracting` status.
 	infoHandler := snapshotters.AppendInfoHandlerWrapper(ref.String())
 	opts = append(opts, containerd.WithImageHandlerWrapper(infoHandler))
 
@@ -219,12 +227,12 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 			if strings.Contains(err.Error(), "platform") {
 				platformStr := platforms.DefaultString()
 				if platform != nil {
-					platformStr = platforms.Format(*platform)
+					platformStr = platforms.FormatAll(*platform)
 				}
 				return errdefs.NotFound(fmt.Errorf("no matching manifest for %s in the manifest list entries: %w", platformStr, err))
 			}
 		}
-		return err
+		return translateRegistryError(ctx, err)
 	}
 
 	logger := log.G(ctx).WithFields(log.Fields{
@@ -241,7 +249,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 		logger.WithError(err).Warn("unexpected error while removing outdated dangling image reference")
 	}
 
-	i.LogImageEvent(reference.FamiliarString(ref), reference.FamiliarName(ref), events.ActionPull)
+	i.LogImageEvent(ctx, reference.FamiliarString(ref), reference.FamiliarName(ref), events.ActionPull)
 	outNewImg = img
 	return nil
 }
@@ -256,4 +264,8 @@ func writeStatus(out progress.Output, requestedTag string, newerDownloaded bool)
 	} else {
 		progress.Message(out, "", "Status: Image is up to date for "+requestedTag)
 	}
+}
+
+func isModelMediaType(mediaType string) bool {
+	return strings.HasPrefix(strings.ToLower(mediaType), "application/vnd.docker.ai.")
 }

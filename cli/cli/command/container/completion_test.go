@@ -6,7 +6,6 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/moby/sys/signal"
 	"github.com/spf13/cobra"
@@ -27,7 +26,7 @@ func TestCompleteLinuxCapabilityNames(t *testing.T) {
 
 func TestCompletePid(t *testing.T) {
 	tests := []struct {
-		containerListFunc   func(container.ListOptions) ([]types.Container, error)
+		containerListFunc   func(container.ListOptions) ([]container.Summary, error)
 		toComplete          string
 		expectedCompletions []string
 		expectedDirective   cobra.ShellCompDirective
@@ -43,8 +42,8 @@ func TestCompletePid(t *testing.T) {
 			expectedDirective:   cobra.ShellCompDirectiveNoSpace,
 		},
 		{
-			containerListFunc: func(container.ListOptions) ([]types.Container, error) {
-				return []types.Container{
+			containerListFunc: func(container.ListOptions) ([]container.Summary, error) {
+				return []container.Summary{
 					*builders.Container("c1"),
 					*builders.Container("c2"),
 				}, nil

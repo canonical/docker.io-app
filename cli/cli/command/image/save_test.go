@@ -1,13 +1,14 @@
 package image
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/pkg/errors"
+	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -18,12 +19,12 @@ func TestNewSaveCommandErrors(t *testing.T) {
 		args          []string
 		isTerminal    bool
 		expectedError string
-		imageSaveFunc func(images []string) (io.ReadCloser, error)
+		imageSaveFunc func(images []string, options ...client.ImageSaveOption) (io.ReadCloser, error)
 	}{
 		{
 			name:          "wrong args",
 			args:          []string{},
-			expectedError: "requires at least 1 argument.",
+			expectedError: "requires at least 1 argument",
 		},
 		{
 			name:          "output to terminal",
@@ -36,23 +37,27 @@ func TestNewSaveCommandErrors(t *testing.T) {
 			args:          []string{"arg1"},
 			isTerminal:    false,
 			expectedError: "error saving image",
-			imageSaveFunc: func(images []string) (io.ReadCloser, error) {
-				return io.NopCloser(strings.NewReader("")), errors.Errorf("error saving image")
+			imageSaveFunc: func([]string, ...client.ImageSaveOption) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("")), errors.New("error saving image")
 			},
 		},
 		{
 			name:          "output directory does not exist",
 			args:          []string{"-o", "fakedir/out.tar", "arg1"},
-			expectedError: "failed to save image: invalid output path: directory \"fakedir\" does not exist",
+			expectedError: `failed to save image: invalid output path: stat fakedir: no such file or directory`,
 		},
 		{
 			name:          "output file is irregular",
 			args:          []string{"-o", "/dev/null", "arg1"},
-			expectedError: "failed to save image: invalid output path: \"/dev/null\" must be a directory or a regular file",
+			expectedError: `failed to save image: cannot write to a character device file`,
+		},
+		{
+			name:          "invalid platform",
+			args:          []string{"--platform", "<invalid>", "arg1"},
+			expectedError: `invalid platform`,
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imageSaveFunc: tc.imageSaveFunc})
 			cli.Out().SetIsTerminal(tc.isTerminal)
@@ -69,13 +74,13 @@ func TestNewSaveCommandSuccess(t *testing.T) {
 	testCases := []struct {
 		args          []string
 		isTerminal    bool
-		imageSaveFunc func(images []string) (io.ReadCloser, error)
+		imageSaveFunc func(images []string, options ...client.ImageSaveOption) (io.ReadCloser, error)
 		deferredFunc  func()
 	}{
 		{
 			args:       []string{"-o", "save_tmp_file", "arg1"},
 			isTerminal: true,
-			imageSaveFunc: func(images []string) (io.ReadCloser, error) {
+			imageSaveFunc: func(images []string, _ ...client.ImageSaveOption) (io.ReadCloser, error) {
 				assert.Assert(t, is.Len(images, 1))
 				assert.Check(t, is.Equal("arg1", images[0]))
 				return io.NopCloser(strings.NewReader("")), nil
@@ -87,21 +92,30 @@ func TestNewSaveCommandSuccess(t *testing.T) {
 		{
 			args:       []string{"arg1", "arg2"},
 			isTerminal: false,
-			imageSaveFunc: func(images []string) (io.ReadCloser, error) {
+			imageSaveFunc: func(images []string, _ ...client.ImageSaveOption) (io.ReadCloser, error) {
 				assert.Assert(t, is.Len(images, 2))
 				assert.Check(t, is.Equal("arg1", images[0]))
 				assert.Check(t, is.Equal("arg2", images[1]))
 				return io.NopCloser(strings.NewReader("")), nil
 			},
 		},
+		{
+			args:       []string{"--platform", "linux/amd64", "arg1"},
+			isTerminal: false,
+			imageSaveFunc: func(images []string, options ...client.ImageSaveOption) (io.ReadCloser, error) {
+				assert.Assert(t, is.Len(images, 1))
+				assert.Check(t, is.Equal("arg1", images[0]))
+				// FIXME(thaJeztah): need to find appropriate way to test the result of "ImageHistoryWithPlatform" being applied
+				assert.Check(t, len(options) > 0) // can be 1 or two depending on whether a terminal is attached :/
+				// assert.Check(t, is.Contains(options, client.ImageHistoryWithPlatform(ocispec.Platform{OS: "linux", Architecture: "amd64"})))
+				return io.NopCloser(strings.NewReader("")), nil
+			},
+		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			cmd := NewSaveCommand(test.NewFakeCli(&fakeClient{
-				imageSaveFunc: func(images []string) (io.ReadCloser, error) {
-					return io.NopCloser(strings.NewReader("")), nil
-				},
+				imageSaveFunc: tc.imageSaveFunc,
 			}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)

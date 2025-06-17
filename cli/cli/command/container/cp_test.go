@@ -10,11 +10,11 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/archive"
+	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
-	"gotest.tools/v3/skip"
 )
 
 func TestRunCopyWithInvalidArguments(t *testing.T) {
@@ -75,7 +75,7 @@ func TestRunCopyFromContainerToFilesystem(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
 		containerCopyFromFunc: func(ctr, srcPath string) (io.ReadCloser, container.PathStat, error) {
 			assert.Check(t, is.Equal("container", ctr))
-			readCloser, err := archive.Tar(srcDir.Path(), archive.Uncompressed)
+			readCloser, err := archive.Tar(srcDir.Path(), compression.None)
 			return readCloser, container.PathStat{}, err
 		},
 	})
@@ -152,7 +152,7 @@ func TestSplitCpArg(t *testing.T) {
 	}{
 		{
 			doc:          "absolute path with colon",
-			os:           "linux",
+			os:           "unix",
 			path:         "/abs/path:withcolon",
 			expectedPath: "/abs/path:withcolon",
 		},
@@ -180,9 +180,13 @@ func TestSplitCpArg(t *testing.T) {
 		},
 	}
 	for _, tc := range testcases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
-			skip.If(t, tc.os == "windows" && runtime.GOOS != "windows" || tc.os == "linux" && runtime.GOOS == "windows")
+			if tc.os == "windows" && runtime.GOOS != "windows" {
+				t.Skip("skipping windows test on non-windows platform")
+			}
+			if tc.os == "unix" && runtime.GOOS == "windows" {
+				t.Skip("skipping unix test on windows")
+			}
 
 			ctr, path := splitCpArg(tc.path)
 			assert.Check(t, is.Equal(tc.expectedContainer, ctr))

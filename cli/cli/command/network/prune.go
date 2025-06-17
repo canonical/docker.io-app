@@ -2,13 +2,13 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/internal/prompt"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/errdefs"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +31,7 @@ func NewPruneCommand(dockerCli command.Cli) *cobra.Command {
 				return err
 			}
 			if output != "" {
-				fmt.Fprintln(dockerCli.Out(), output)
+				_, _ = fmt.Fprintln(dockerCli.Out(), output)
 			}
 			return nil
 		},
@@ -52,12 +52,12 @@ func runPrune(ctx context.Context, dockerCli command.Cli, options pruneOptions) 
 	pruneFilters := command.PruneFilters(dockerCli, options.filter.Value())
 
 	if !options.force {
-		r, err := command.PromptForConfirmation(ctx, dockerCli.In(), dockerCli.Out(), warning)
+		r, err := prompt.Confirm(ctx, dockerCli.In(), dockerCli.Out(), warning)
 		if err != nil {
 			return "", err
 		}
 		if !r {
-			return "", errdefs.Cancelled(errors.New("network prune cancelled has been cancelled"))
+			return "", cancelledErr{errors.New("network prune has been cancelled")}
 		}
 	}
 
@@ -75,6 +75,10 @@ func runPrune(ctx context.Context, dockerCli command.Cli, options pruneOptions) 
 
 	return output, nil
 }
+
+type cancelledErr struct{ error }
+
+func (cancelledErr) Cancelled() {}
 
 // RunPrune calls the Network Prune API
 // This returns the amount of space reclaimed and a detailed output string

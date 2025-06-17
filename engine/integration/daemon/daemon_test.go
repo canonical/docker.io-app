@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/integration/internal/process"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -57,6 +57,18 @@ func TestConfigDaemonID(t *testing.T) {
 	d.Start(t, "--iptables=false", "--ip6tables=false")
 	info = d.Info(t)
 	assert.Equal(t, info.ID, engineID)
+	d.Stop(t)
+
+	// Verify that engine-id file is created if it doesn't exist
+	err = os.Remove(idFile)
+	assert.NilError(t, err)
+
+	d.Start(t, "--iptables=false")
+	id, err := os.ReadFile(idFile)
+	assert.NilError(t, err)
+
+	info = d.Info(t)
+	assert.Equal(t, string(id), info.ID)
 	d.Stop(t)
 }
 
@@ -112,7 +124,6 @@ func TestDaemonConfigValidation(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_ = testutil.StartSpan(ctx, t)
@@ -158,7 +169,6 @@ func TestConfigDaemonSeccompProfiles(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			_ = testutil.StartSpan(ctx, t)
 
@@ -231,7 +241,6 @@ func TestDaemonConfigFeatures(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_ = testutil.StartSpan(ctx, t)
@@ -443,7 +452,7 @@ func TestDaemonProxy(t *testing.T) {
 		err := d.Signal(syscall.SIGHUP)
 		assert.NilError(t, err)
 
-		poll.WaitOn(t, d.PollCheckLogs(ctx, daemon.ScanLogsMatchAll("Reloaded configuration:", proxyURL)))
+		poll.WaitOn(t, d.PollCheckLogs(ctx, daemon.ScanLogsMatchAll("Reloaded configuration", proxyURL)))
 
 		ok, logs := d.ScanLogsT(ctx, t, daemon.ScanLogsMatchString(userPass))
 		assert.Assert(t, !ok, "logs should not contain the non-sanitized proxy URL: %s", logs)
@@ -600,7 +609,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 		poll.WaitOn(t, func(t poll.LogT) poll.Result {
 			stat, err := c.ContainerStatPath(ctx, cID, "/foo/test.txt")
 			if err != nil {
-				if errdefs.IsNotFound(err) {
+				if cerrdefs.IsNotFound(err) {
 					return poll.Continue("file doesn't yet exist")
 				}
 				return poll.Error(err)
@@ -655,6 +664,54 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 		assert.NilError(t, err)
 	})
 
+	t.Run("image mount", func(t *testing.T) {
+		ctx := testutil.StartSpan(ctx, t)
+
+		mountedImage := "hello-world:frozen"
+		d.LoadImage(ctx, t, mountedImage)
+
+		m := mount.Mount{
+			Type:   mount.TypeImage,
+			Source: mountedImage,
+			Target: "/image",
+		}
+
+		cID := container.Run(ctx, t, c, container.WithMount(m))
+		defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+
+		waitFn := func(t poll.LogT) poll.Result {
+			_, err := c.ContainerStatPath(ctx, cID, "/image/hello")
+			if err != nil {
+				if cerrdefs.IsNotFound(err) {
+					return poll.Continue("file doesn't yet exist")
+				}
+				return poll.Error(err)
+			}
+
+			return poll.Success()
+		}
+
+		poll.WaitOn(t, waitFn)
+
+		d.Restart(t, "--live-restore", "--iptables=false", "--ip6tables=false")
+
+		t.Run("image still mounted", func(t *testing.T) {
+			skip.If(t, testEnv.IsRootless(), "restarted rootless daemon has a new mount namespace and it won't have the previous mounts")
+			poll.WaitOn(t, waitFn)
+		})
+
+		_, err := c.ImageRemove(ctx, mountedImage, image.RemoveOptions{})
+		assert.ErrorContains(t, err, fmt.Sprintf("container %s is using its referenced image", cID[:12]))
+
+		// Remove that container which should free the references in the volume
+		err = c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		assert.NilError(t, err)
+
+		// Now we should be able to remove the volume
+		_, err = c.ImageRemove(ctx, mountedImage, image.RemoveOptions{})
+		assert.NilError(t, err)
+	})
+
 	// Make sure that we don't panic if the container has bind-mounts
 	// (which should not be "restored")
 	// Regression test for https://github.com/moby/moby/issues/45898
@@ -677,6 +734,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 
 func testLiveRestoreUserChainsSetup(t *testing.T) {
 	skip.If(t, testEnv.IsRootless(), "rootless daemon uses it's own network namespace")
+	skip.If(t, testEnv.FirewallBackendDriver() == "nftables", "nftables enabled, skipping iptables test")
 
 	t.Parallel()
 	ctx := testutil.StartSpan(baseContext, t)
@@ -701,33 +759,4 @@ func testLiveRestoreUserChainsSetup(t *testing.T) {
 		result := icmd.RunCommand("iptables", "-S", "FORWARD", "1")
 		assert.Check(t, is.Equal(strings.TrimSpace(result.Stdout()), "-A FORWARD -j DOCKER-USER"), "the jump to DOCKER-USER should be the first rule in the FORWARD chain")
 	})
-}
-
-func TestDaemonDefaultBridgeWithFixedCidrButNoBip(t *testing.T) {
-	skip.If(t, runtime.GOOS == "windows")
-
-	ctx := testutil.StartSpan(baseContext, t)
-
-	bridgeName := "ext-bridge1"
-	d := daemon.New(t, daemon.WithEnvVars("DOCKER_TEST_CREATE_DEFAULT_BRIDGE="+bridgeName))
-	defer func() {
-		d.Stop(t)
-		d.Cleanup(t)
-	}()
-
-	defer func() {
-		// No need to clean up when running this test in rootless mode, as the
-		// interface is deleted when the daemon is stopped and the netns
-		// reclaimed by the kernel.
-		if !testEnv.IsRootless() {
-			deleteInterface(t, bridgeName)
-		}
-	}()
-	d.StartWithBusybox(ctx, t, "--bridge", bridgeName, "--fixed-cidr", "192.168.130.0/24")
-}
-
-func deleteInterface(t *testing.T, ifName string) {
-	icmd.RunCommand("ip", "link", "delete", ifName).Assert(t, icmd.Success)
-	icmd.RunCommand("iptables", "-t", "nat", "--flush").Assert(t, icmd.Success)
-	icmd.RunCommand("iptables", "--flush").Assert(t, icmd.Success)
 }

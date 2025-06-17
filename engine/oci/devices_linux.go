@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	coci "github.com/containerd/containerd/oci"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	coci "github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func deviceCgroup(d *specs.LinuxDevice, permissions string) specs.LinuxDeviceCgroup {
@@ -21,7 +21,7 @@ func deviceCgroup(d *specs.LinuxDevice, permissions string) specs.LinuxDeviceCgr
 }
 
 // DevicesFromPath computes a list of devices and device permissions from paths (pathOnHost and pathInContainer) and cgroup permissions.
-func DevicesFromPath(pathOnHost, pathInContainer, cgroupPermissions string) (devs []specs.LinuxDevice, devPermissions []specs.LinuxDeviceCgroup, err error) {
+func DevicesFromPath(pathOnHost, pathInContainer, cgroupPermissions string) (devs []specs.LinuxDevice, devPermissions []specs.LinuxDeviceCgroup, _ error) {
 	resolvedPathOnHost := pathOnHost
 
 	// check if it is a symbolic link

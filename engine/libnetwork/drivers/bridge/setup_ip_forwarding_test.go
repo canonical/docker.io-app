@@ -3,51 +3,93 @@
 package bridge
 
 import (
-	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"testing"
+
+	"github.com/docker/docker/internal/testutils/netnsutils"
+	"github.com/docker/docker/libnetwork/drivers/bridge/internal/firewaller"
+	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
+type ffdTestFirewaller struct {
+	ffd firewaller.IPVersion
+}
+
+// NewNetwork is part of interface [firewaller.Firewaller].
+func (f *ffdTestFirewaller) NewNetwork(_ context.Context, _ firewaller.NetworkConfig) (firewaller.Network, error) {
+	return nil, nil
+}
+
+// FilterForwardDrop is part of interface [firewaller.Firewaller]. Just enough to check
+// it was called with the expected IPVersion.
+func (f *ffdTestFirewaller) FilterForwardDrop(_ context.Context, ipv firewaller.IPVersion) error {
+	f.ffd = ipv
+	return nil
+}
+
 func TestSetupIPForwarding(t *testing.T) {
-	// Read current setting and ensure the original value gets restored
-	procSetting := readCurrentIPForwardingSetting(t)
-	defer reconcileIPForwardingSetting(t, procSetting)
+	defer netnsutils.SetupTestOSContext(t)()
 
-	// Disable IP Forwarding if enabled
-	if bytes.Equal(procSetting, []byte("1\n")) {
-		writeIPForwardingSetting(t, []byte{'0', '\n'})
-	}
+	for _, wantFFD := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wantFFD=%v", wantFFD), func(t *testing.T) {
+			// Disable IP Forwarding if enabled
+			_, err := configureIPForwarding(ipv4ForwardConf, '0')
+			assert.NilError(t, err)
 
-	// Set IP Forwarding
-	if err := setupIPForwarding(true, true); err != nil {
-		t.Fatalf("Failed to setup IP forwarding: %v", err)
-	}
+			// Set IP Forwarding
+			fw := &ffdTestFirewaller{}
+			err = setupIPv4Forwarding(fw, wantFFD)
+			assert.NilError(t, err)
 
-	// Read new setting
-	procSetting = readCurrentIPForwardingSetting(t)
-	if !bytes.Equal(procSetting, []byte("1\n")) {
-		t.Fatal("Failed to effectively setup IP forwarding")
-	}
-}
+			// Check what the firewaller was told.
+			if wantFFD {
+				assert.Check(t, is.Equal(fw.ffd, firewaller.IPv4))
+			} else {
+				var noVer firewaller.IPVersion
+				assert.Check(t, is.Equal(fw.ffd, noVer))
+			}
 
-func readCurrentIPForwardingSetting(t *testing.T) []byte {
-	procSetting, err := os.ReadFile(ipv4ForwardConf)
-	if err != nil {
-		t.Fatalf("Can't execute test: Failed to read current IP forwarding setting: %v", err)
-	}
-	return procSetting
-}
-
-func writeIPForwardingSetting(t *testing.T, chars []byte) {
-	err := os.WriteFile(ipv4ForwardConf, chars, ipv4ForwardConfPerm)
-	if err != nil {
-		t.Fatalf("Can't execute or cleanup after test: Failed to reset IP forwarding: %v", err)
+			// Read new setting
+			procSetting, err := os.ReadFile(ipv4ForwardConf)
+			assert.NilError(t, err)
+			assert.Check(t, is.DeepEqual(procSetting, []byte{'1', '\n'}))
+		})
 	}
 }
 
-func reconcileIPForwardingSetting(t *testing.T, original []byte) {
-	current := readCurrentIPForwardingSetting(t)
-	if !bytes.Equal(original, current) {
-		writeIPForwardingSetting(t, original)
+func TestSetupIP6Forwarding(t *testing.T) {
+	defer netnsutils.SetupTestOSContext(t)()
+
+	for _, wantFFD := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wantFFD=%v", wantFFD), func(t *testing.T) {
+			_, err := configureIPForwarding(ipv6ForwardConfDefault, '0')
+			assert.NilError(t, err)
+			_, err = configureIPForwarding(ipv6ForwardConfAll, '0')
+			assert.NilError(t, err)
+
+			// Set IP Forwarding
+			fw := &ffdTestFirewaller{}
+			err = setupIPv6Forwarding(fw, wantFFD)
+			assert.NilError(t, err)
+
+			// Check what the firewaller was told.
+			if wantFFD {
+				assert.Check(t, is.Equal(fw.ffd, firewaller.IPv6))
+			} else {
+				var noVer firewaller.IPVersion
+				assert.Check(t, is.Equal(fw.ffd, noVer))
+			}
+
+			// Read new setting
+			procSetting, err := os.ReadFile(ipv6ForwardConfDefault)
+			assert.NilError(t, err)
+			assert.Check(t, is.DeepEqual(procSetting, []byte{'1', '\n'}))
+			procSetting, err = os.ReadFile(ipv6ForwardConfAll)
+			assert.NilError(t, err)
+			assert.Check(t, is.DeepEqual(procSetting, []byte{'1', '\n'}))
+		})
 	}
 }

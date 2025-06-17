@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -21,7 +21,7 @@ func TestImageTagError(t *testing.T) {
 	}
 
 	err := client.ImageTag(context.Background(), "image_id", "repo:tag")
-	assert.Check(t, is.ErrorType(err, errdefs.IsSystem))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 // Note: this is not testing all the InvalidReference as it's the responsibility
@@ -32,9 +32,7 @@ func TestImageTagInvalidReference(t *testing.T) {
 	}
 
 	err := client.ImageTag(context.Background(), "image_id", "aa/asdf$$^/aa")
-	if err == nil || err.Error() != `Error parsing reference: "aa/asdf$$^/aa" is not a valid repository/tag: invalid reference format` {
-		t.Fatalf("expected ErrReferenceInvalidFormat, got %v", err)
-	}
+	assert.Check(t, is.Error(err, `Error parsing reference: "aa/asdf$$^/aa" is not a valid repository/tag: invalid reference format`))
 }
 
 // Ensure we don't allow the use of invalid repository names or tags; these tag operations should fail.
@@ -47,7 +45,6 @@ func TestImageTagInvalidSourceImageName(t *testing.T) {
 
 	invalidRepos := []string{"fo$z$", "Foo@3cc", "Foo$3", "Foo*3", "Fo^3", "Foo!3", "F)xcz(", "fo%asd", "aa/asdf$$^/aa"}
 	for _, repo := range invalidRepos {
-		repo := repo
 		t.Run("invalidRepo/"+repo, func(t *testing.T) {
 			t.Parallel()
 			err := client.ImageTag(ctx, "busybox", repo)
@@ -58,7 +55,6 @@ func TestImageTagInvalidSourceImageName(t *testing.T) {
 	longTag := testutil.GenerateRandomAlphaOnlyString(121)
 	invalidTags := []string{"repo:fo$z$", "repo:Foo@3cc", "repo:Foo$3", "repo:Foo*3", "repo:Fo^3", "repo:Foo!3", "repo:%goodbye", "repo:#hashtagit", "repo:F)xcz(", "repo:-foo", "repo:..", longTag}
 	for _, repotag := range invalidTags {
-		repotag := repotag
 		t.Run("invalidTag/"+repotag, func(t *testing.T) {
 			t.Parallel()
 			err := client.ImageTag(ctx, "busybox", repotag)
@@ -91,13 +87,11 @@ func TestImageTagHexSource(t *testing.T) {
 	}
 
 	err := client.ImageTag(context.Background(), "0d409d33b27e47423b049f7f863faa08655a8c901749c2b25b93ca67d01a470d", "repo:tag")
-	if err != nil {
-		t.Fatalf("got error: %v", err)
-	}
+	assert.NilError(t, err)
 }
 
 func TestImageTag(t *testing.T) {
-	expectedURL := "/images/image_id/tag"
+	const expectedURL = "/images/image_id/tag"
 	tagCases := []struct {
 		reference           string
 		expectedQueryParams map[string]string
@@ -105,37 +99,37 @@ func TestImageTag(t *testing.T) {
 		{
 			reference: "repository:tag1",
 			expectedQueryParams: map[string]string{
-				"repo": "repository",
+				"repo": "docker.io/library/repository",
 				"tag":  "tag1",
 			},
 		}, {
 			reference: "another_repository:latest",
 			expectedQueryParams: map[string]string{
-				"repo": "another_repository",
+				"repo": "docker.io/library/another_repository",
 				"tag":  "latest",
 			},
 		}, {
 			reference: "another_repository",
 			expectedQueryParams: map[string]string{
-				"repo": "another_repository",
+				"repo": "docker.io/library/another_repository",
 				"tag":  "latest",
 			},
 		}, {
 			reference: "test/another_repository",
 			expectedQueryParams: map[string]string{
-				"repo": "test/another_repository",
+				"repo": "docker.io/test/another_repository",
 				"tag":  "latest",
 			},
 		}, {
 			reference: "test/another_repository:tag1",
 			expectedQueryParams: map[string]string{
-				"repo": "test/another_repository",
+				"repo": "docker.io/test/another_repository",
 				"tag":  "tag1",
 			},
 		}, {
 			reference: "test/test/another_repository:tag1",
 			expectedQueryParams: map[string]string{
-				"repo": "test/test/another_repository",
+				"repo": "docker.io/test/test/another_repository",
 				"tag":  "tag1",
 			},
 		}, {
@@ -175,8 +169,6 @@ func TestImageTag(t *testing.T) {
 			}),
 		}
 		err := client.ImageTag(context.Background(), "image_id", tagCase.reference)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NilError(t, err)
 	}
 }

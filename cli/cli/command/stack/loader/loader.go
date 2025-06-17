@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package loader
 
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/stack/options"
 	"github.com/docker/cli/cli/compose/loader"
@@ -40,15 +41,26 @@ func LoadComposefile(dockerCli command.Cli, opts options.Deploy) (*composetypes.
 
 	unsupportedProperties := loader.GetUnsupportedProperties(dicts...)
 	if len(unsupportedProperties) > 0 {
-		fmt.Fprintf(dockerCli.Err(), "Ignoring unsupported options: %s\n\n",
+		_, _ = fmt.Fprintf(dockerCli.Err(), "Ignoring unsupported options: %s\n\n",
 			strings.Join(unsupportedProperties, ", "))
 	}
 
 	deprecatedProperties := loader.GetDeprecatedProperties(dicts...)
 	if len(deprecatedProperties) > 0 {
-		fmt.Fprintf(dockerCli.Err(), "Ignoring deprecated options:\n\n%s\n\n",
+		_, _ = fmt.Fprintf(dockerCli.Err(), "Ignoring deprecated options:\n\n%s\n\n",
 			propertyWarnings(deprecatedProperties))
 	}
+
+	// Validate if each service has a valid image-reference.
+	for _, svc := range config.Services {
+		if svc.Image == "" {
+			return nil, errors.Errorf("invalid image reference for service %s: no image specified", svc.Name)
+		}
+		if _, err := reference.ParseAnyReference(svc.Image); err != nil {
+			return nil, errors.Wrapf(err, "invalid image reference for service %s", svc.Name)
+		}
+	}
+
 	return config, nil
 }
 

@@ -239,14 +239,14 @@ func testLogger(t *testing.T) *logrus.Entry {
 
 type tlogWriter struct{ t *testing.T }
 
-func (w tlogWriter) Write(p []byte) (n int, err error) {
+func (w tlogWriter) Write(p []byte) (int, error) {
 	w.t.Logf("%s", p)
 	return len(p), nil
 }
 
 type noopDNSBackend struct{ DNSBackend }
 
-func (noopDNSBackend) ResolveName(_ context.Context, name string, iplen int) ([]net.IP, bool) {
+func (noopDNSBackend) ResolveName(_ context.Context, name string, ipType int) ([]net.IP, bool) {
 	return nil, false
 }
 

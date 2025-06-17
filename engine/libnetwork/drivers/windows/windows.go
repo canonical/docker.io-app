@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,20 +129,26 @@ func IsBuiltinLocalDriver(networkType string) bool {
 	return ok
 }
 
-// New constructs a new bridge driver
-func newDriver(networkType string) *driver {
-	return &driver{name: networkType, networks: map[string]*hnsNetwork{}}
+func newDriver(networkType string, store *datastore.Store) (*driver, error) {
+	d := &driver{
+		name:     networkType,
+		store:    store,
+		networks: map[string]*hnsNetwork{},
+	}
+	err := d.initStore()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize %q driver: %w", networkType, err)
+	}
+	return d, nil
 }
 
-// GetInit returns an initializer for the given network type
-func RegisterBuiltinLocalDrivers(r driverapi.Registerer, driverConfig func(string) map[string]interface{}) error {
+// RegisterBuiltinLocalDrivers registers the builtin local drivers.
+func RegisterBuiltinLocalDrivers(r driverapi.Registerer, store *datastore.Store) error {
 	for networkType := range builtinLocalDrivers {
-		d := newDriver(networkType)
-		err := d.initStore(driverConfig(networkType))
+		d, err := newDriver(networkType, store)
 		if err != nil {
-			return fmt.Errorf("failed to initialize %q driver: %w", networkType, err)
+			return err
 		}
-
 		err = r.RegisterDriver(networkType, d, driverapi.Capability{
 			DataScope:         scope.Local,
 			ConnectivityScope: scope.Local,
@@ -239,7 +246,7 @@ func (d *driver) parseNetworkOptions(id string, genericOptions map[string]string
 	return config, nil
 }
 
-func (c *networkConfiguration) processIPAM(id string, ipamV4Data, ipamV6Data []driverapi.IPAMData) error {
+func (ncfg *networkConfiguration) processIPAM(id string, ipamV4Data, ipamV6Data []driverapi.IPAMData) error {
 	if len(ipamV6Data) > 0 {
 		return types.ForbiddenErrorf("windowsshim driver doesn't support v6 subnets")
 	}
@@ -275,7 +282,7 @@ func (d *driver) createNetwork(config *networkConfiguration) *hnsNetwork {
 }
 
 // Create a new network
-func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo driverapi.NetworkInfo, ipV4Data, ipV6Data []driverapi.IPAMData) error {
+func (d *driver) CreateNetwork(ctx context.Context, id string, option map[string]interface{}, nInfo driverapi.NetworkInfo, ipV4Data, ipV6Data []driverapi.IPAMData) error {
 	if _, err := d.getNetwork(id); err == nil {
 		return types.ForbiddenErrorf("network %s exists", id)
 	}
@@ -283,6 +290,12 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 	genData, ok := option[netlabel.GenericData].(map[string]string)
 	if !ok {
 		return fmt.Errorf("Unknown generic data option")
+	}
+
+	if v, ok := option[netlabel.EnableIPv4]; ok {
+		if enable_IPv4, ok := v.(bool); ok && !enable_IPv4 {
+			return types.InvalidParameterErrorf("IPv4 cannot be disabled on Windows")
+		}
 	}
 
 	// Parse and validate the config. It should not conflict with existing networks' config
@@ -359,9 +372,9 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 		}
 
 		configuration := string(configurationb)
-		log.G(context.TODO()).Debugf("HNSNetwork Request =%v Address Space=%v", configuration, subnets)
+		log.G(ctx).Debugf("HNSNetwork Request =%v Address Space=%v", configuration, subnets)
 
-		hnsresponse, err := hcsshim.HNSNetworkRequest("POST", "", configuration)
+		hnsresponse, err := hcsshim.HNSNetworkRequest(http.MethodPost, "", configuration)
 		if err != nil {
 			return err
 		}
@@ -404,15 +417,15 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}, nInfo d
 		if endpoints, err := hcsshim.HNSListEndpointRequest(); err == nil {
 			for _, ep := range endpoints {
 				if ep.VirtualNetwork == config.HnsID {
-					log.G(context.TODO()).Infof("Removing stale HNS endpoint %s", ep.Id)
-					_, err = hcsshim.HNSEndpointRequest("DELETE", ep.Id, "")
+					log.G(ctx).Infof("Removing stale HNS endpoint %s", ep.Id)
+					_, err = hcsshim.HNSEndpointRequest(http.MethodDelete, ep.Id, "")
 					if err != nil {
-						log.G(context.TODO()).Warnf("Error removing HNS endpoint %s", ep.Id)
+						log.G(ctx).Warnf("Error removing HNS endpoint %s", ep.Id)
 					}
 				}
 			}
 		} else {
-			log.G(context.TODO()).Warnf("Error listing HNS endpoints for network %s", config.HnsID)
+			log.G(ctx).Warnf("Error listing HNS endpoints for network %s", config.HnsID)
 		}
 
 		n.created = true
@@ -432,7 +445,7 @@ func (d *driver) DeleteNetwork(nid string) error {
 	n.Unlock()
 
 	if n.created {
-		_, err = hcsshim.HNSNetworkRequest("DELETE", config.HnsID, "")
+		_, err = hcsshim.HNSNetworkRequest(http.MethodDelete, config.HnsID, "")
 		if err != nil && !strings.EqualFold(err.Error(), errNotFound) {
 			return types.ForbiddenErrorf("%v", err)
 		}
@@ -711,7 +724,7 @@ func (d *driver) CreateEndpoint(ctx context.Context, nid, eid string, ifInfo dri
 		return err
 	}
 
-	hnsresponse, err := hcsshim.HNSEndpointRequest("POST", "", string(configurationb))
+	hnsresponse, err := hcsshim.HNSEndpointRequest(http.MethodPost, "", string(configurationb))
 	if err != nil {
 		return err
 	}
@@ -739,7 +752,7 @@ func (d *driver) CreateEndpoint(ctx context.Context, nid, eid string, ifInfo dri
 	endpoint.epOption = epOption
 	endpoint.portMapping, err = ParsePortBindingPolicies(hnsresponse.Policies)
 	if err != nil {
-		hcsshim.HNSEndpointRequest("DELETE", hnsresponse.Id, "")
+		hcsshim.HNSEndpointRequest(http.MethodDelete, hnsresponse.Id, "")
 		return err
 	}
 
@@ -781,7 +794,7 @@ func (d *driver) DeleteEndpoint(nid, eid string) error {
 	delete(n.endpoints, eid)
 	n.Unlock()
 
-	_, err = hcsshim.HNSEndpointRequest("DELETE", ep.profileID, "")
+	_, err = hcsshim.HNSEndpointRequest(http.MethodDelete, ep.profileID, "")
 	if err != nil && !strings.EqualFold(err.Error(), errNotFound) {
 		return err
 	}
@@ -834,7 +847,7 @@ func (d *driver) EndpointOperInfo(nid, eid string) (map[string]interface{}, erro
 }
 
 // Join method is invoked when a Sandbox is attached to an endpoint.
-func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, options map[string]interface{}) error {
+func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, _, options map[string]interface{}) error {
 	ctx, span := otel.Tracer("").Start(ctx, fmt.Sprintf("libnetwork.drivers.windows_%s.Join", d.name), trace.WithAttributes(
 		attribute.String("nid", nid),
 		attribute.String("eid", eid),

@@ -6,7 +6,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -31,17 +30,17 @@ func (c fakeCLI) Client() client.APIClient {
 
 type fakeClient struct {
 	client.Client
-	containerListFunc func(options container.ListOptions) ([]types.Container, error)
+	containerListFunc func(options container.ListOptions) ([]container.Summary, error)
 	imageListFunc     func(options image.ListOptions) ([]image.Summary, error)
 	networkListFunc   func(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	volumeListFunc    func(filter filters.Args) (volume.ListResponse, error)
 }
 
-func (c *fakeClient) ContainerList(_ context.Context, options container.ListOptions) ([]types.Container, error) {
+func (c *fakeClient) ContainerList(_ context.Context, options container.ListOptions) ([]container.Summary, error) {
 	if c.containerListFunc != nil {
 		return c.containerListFunc(options)
 	}
-	return []types.Container{}, nil
+	return []container.Summary{}, nil
 }
 
 func (c *fakeClient) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
@@ -69,8 +68,8 @@ func TestCompleteContainerNames(t *testing.T) {
 	tests := []struct {
 		doc              string
 		showAll, showIDs bool
-		filters          []func(types.Container) bool
-		containers       []types.Container
+		filters          []func(container.Summary) bool
+		containers       []container.Summary
 		expOut           []string
 		expOpts          container.ListOptions
 		expDirective     cobra.ShellCompDirective
@@ -82,10 +81,10 @@ func TestCompleteContainerNames(t *testing.T) {
 		{
 			doc:     "all containers",
 			showAll: true,
-			containers: []types.Container{
-				{ID: "id-c", State: "running", Names: []string{"/container-c", "/container-c/link-b"}},
-				{ID: "id-b", State: "created", Names: []string{"/container-b"}},
-				{ID: "id-a", State: "exited", Names: []string{"/container-a"}},
+			containers: []container.Summary{
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
+				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-c", "container-c/link-b", "container-b", "container-a"},
 			expOpts:      container.ListOptions{All: true},
@@ -95,10 +94,10 @@ func TestCompleteContainerNames(t *testing.T) {
 			doc:     "all containers with ids",
 			showAll: true,
 			showIDs: true,
-			containers: []types.Container{
-				{ID: "id-c", State: "running", Names: []string{"/container-c", "/container-c/link-b"}},
-				{ID: "id-b", State: "created", Names: []string{"/container-b"}},
-				{ID: "id-a", State: "exited", Names: []string{"/container-a"}},
+			containers: []container.Summary{
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
+				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"id-c", "container-c", "container-c/link-b", "id-b", "container-b", "id-a", "container-a"},
 			expOpts:      container.ListOptions{All: true},
@@ -107,8 +106,8 @@ func TestCompleteContainerNames(t *testing.T) {
 		{
 			doc:     "only running containers",
 			showAll: false,
-			containers: []types.Container{
-				{ID: "id-c", State: "running", Names: []string{"/container-c", "/container-c/link-b"}},
+			containers: []container.Summary{
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
 			},
 			expOut:       []string{"container-c", "container-c/link-b"},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
@@ -116,13 +115,13 @@ func TestCompleteContainerNames(t *testing.T) {
 		{
 			doc:     "with filter",
 			showAll: true,
-			filters: []func(types.Container) bool{
-				func(container types.Container) bool { return container.State == "created" },
+			filters: []func(container.Summary) bool{
+				func(ctr container.Summary) bool { return ctr.State == container.StateCreated },
 			},
-			containers: []types.Container{
-				{ID: "id-c", State: "running", Names: []string{"/container-c", "/container-c/link-b"}},
-				{ID: "id-b", State: "created", Names: []string{"/container-b"}},
-				{ID: "id-a", State: "exited", Names: []string{"/container-a"}},
+			containers: []container.Summary{
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
+				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-b"},
 			expOpts:      container.ListOptions{All: true},
@@ -131,14 +130,14 @@ func TestCompleteContainerNames(t *testing.T) {
 		{
 			doc:     "multiple filters",
 			showAll: true,
-			filters: []func(types.Container) bool{
-				func(container types.Container) bool { return container.ID == "id-a" },
-				func(container types.Container) bool { return container.State == "created" },
+			filters: []func(container.Summary) bool{
+				func(ctr container.Summary) bool { return ctr.ID == "id-a" },
+				func(ctr container.Summary) bool { return ctr.State == container.StateCreated },
 			},
-			containers: []types.Container{
-				{ID: "id-c", State: "running", Names: []string{"/container-c", "/container-c/link-b"}},
-				{ID: "id-b", State: "created", Names: []string{"/container-b"}},
-				{ID: "id-a", State: "created", Names: []string{"/container-a"}},
+			containers: []container.Summary{
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
+				{ID: "id-a", State: container.StateCreated, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-a"},
 			expOpts:      container.ListOptions{All: true},
@@ -151,13 +150,12 @@ func TestCompleteContainerNames(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			if tc.showIDs {
 				t.Setenv("DOCKER_COMPLETION_SHOW_CONTAINER_IDS", "yes")
 			}
 			comp := ContainerNames(fakeCLI{&fakeClient{
-				containerListFunc: func(opts container.ListOptions) ([]types.Container, error) {
+				containerListFunc: func(opts container.ListOptions) ([]container.Summary, error) {
 					assert.Check(t, is.DeepEqual(opts, tc.expOpts, cmpopts.IgnoreUnexported(container.ListOptions{}, filters.Args{})))
 					if tc.expDirective == cobra.ShellCompDirectiveError {
 						return nil, errors.New("some error occurred")
@@ -228,7 +226,6 @@ func TestCompleteImageNames(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := ImageNames(fakeCLI{&fakeClient{
 				imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
@@ -237,7 +234,7 @@ func TestCompleteImageNames(t *testing.T) {
 					}
 					return tc.images, nil
 				},
-			}})
+			}}, -1)
 
 			volumes, directives := comp(&cobra.Command{}, nil, "")
 			assert.Check(t, is.Equal(directives&tc.expDirective, tc.expDirective))
@@ -274,7 +271,6 @@ func TestCompleteNetworkNames(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := NetworkNames(fakeCLI{&fakeClient{
 				networkListFunc: func(ctx context.Context, options network.ListOptions) ([]network.Summary, error) {
@@ -332,7 +328,6 @@ func TestCompleteVolumeNames(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := VolumeNames(fakeCLI{&fakeClient{
 				volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {

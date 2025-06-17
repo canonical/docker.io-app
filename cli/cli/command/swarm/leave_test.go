@@ -1,12 +1,12 @@
 package swarm
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -25,14 +25,14 @@ func TestSwarmLeaveErrors(t *testing.T) {
 		},
 		{
 			name: "leave-failed",
+			args: []string{},
 			swarmLeaveFunc: func() error {
-				return errors.Errorf("error leaving the swarm")
+				return errors.New("error leaving the swarm")
 			},
 			expectedError: "error leaving the swarm",
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := newLeaveCommand(
 				test.NewFakeCli(&fakeClient{
@@ -49,6 +49,9 @@ func TestSwarmLeaveErrors(t *testing.T) {
 func TestSwarmLeave(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{})
 	cmd := newLeaveCommand(cli)
+	cmd.SetArgs([]string{})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
 	assert.NilError(t, cmd.Execute())
 	assert.Check(t, is.Equal("Node left the swarm.", strings.TrimSpace(cli.OutBuffer().String())))
 }

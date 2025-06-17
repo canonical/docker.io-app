@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package system
 
@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -19,9 +18,11 @@ import (
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/debug"
 	flagsHelper "github.com/docker/cli/cli/flags"
+	"github.com/docker/cli/internal/lazyregexp"
 	"github.com/docker/cli/templates"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/registry"
 	"github.com/docker/go-units"
 	"github.com/spf13/cobra"
@@ -97,46 +98,67 @@ func runInfo(ctx context.Context, cmd *cobra.Command, dockerCli command.Cli, opt
 		info.ClientErrors = append(info.ClientErrors, err.Error())
 	}
 
+	var serverConnErr error
 	if needsServerInfo(opts.format, info) {
-		if dinfo, err := dockerCli.Client().Info(ctx); err == nil {
-			info.Info = &dinfo
-		} else {
-			info.ServerErrors = append(info.ServerErrors, err.Error())
-			if opts.format == "" {
-				// reset the server info to prevent printing "empty" Server info
-				// and warnings, but don't reset it if a custom format was specified
-				// to prevent errors from Go's template parsing during format.
-				info.Info = nil
-			} else {
-				// if a format is provided, print the error, as it may be hidden
-				// otherwise if the template doesn't include the ServerErrors field.
-				fprintln(dockerCli.Err(), err)
-			}
-		}
+		serverConnErr = addServerInfo(ctx, dockerCli, opts.format, &info)
 	}
 
 	if opts.format == "" {
 		info.UserName = dockerCli.ConfigFile().AuthConfigs[registry.IndexServer].Username
 		info.ClientInfo.APIVersion = dockerCli.CurrentVersion()
-		return prettyPrintInfo(dockerCli, info)
+		return errors.Join(prettyPrintInfo(dockerCli, info), serverConnErr)
 	}
-	return formatInfo(dockerCli.Out(), info, opts.format)
+
+	return errors.Join(serverConnErr, formatInfo(dockerCli.Out(), info, opts.format))
+}
+
+// addServerInfo retrieves the server information and adds it to the dockerInfo struct.
+// if a connection error occurs, it will be returned as an error.
+// other errors are appended to the info.ServerErrors field.
+func addServerInfo(ctx context.Context, dockerCli command.Cli, format string, info *dockerInfo) error {
+	dinfo, err := dockerCli.Client().Info(ctx)
+	if err != nil {
+		// if no format is provided and we have an error, don't print the server info
+		if format == "" {
+			info.Info = nil
+		}
+		if !client.IsErrConnectionFailed(err) {
+			info.ServerErrors = append(info.ServerErrors, err.Error())
+			if format != "" {
+				// if a format is provided, print the error, as it may be hidden
+				// if the format template doesn't include the ServerErrors field.
+				fprintln(dockerCli.Err(), err)
+			}
+			return nil
+		}
+		// on a server connection error, we want to return an error
+		return err
+	}
+
+	// only assign the server info if we have no error
+	info.Info = &dinfo
+	return nil
 }
 
 // placeHolders does a rudimentary match for possible placeholders in a
 // template, matching a '.', followed by an letter (a-z/A-Z).
-var placeHolders = regexp.MustCompile(`\.[a-zA-Z]`)
+var placeHolders = lazyregexp.New(`\.[a-zA-Z]`)
 
 // needsServerInfo detects if the given template uses any server information.
 // If only client-side information is used in the template, we can skip
 // connecting to the daemon. This allows (e.g.) to only get cli-plugin
 // information, without also making a (potentially expensive) API call.
 func needsServerInfo(template string, info dockerInfo) bool {
-	if len(template) == 0 || placeHolders.FindString(template) == "" {
-		// The template is empty, or does not contain formatting fields
-		// (e.g. `table` or `raw` or `{{ json .}}`). Assume we need server-side
-		// information to render it.
+	switch template {
+	case "", formatter.JSONFormat, formatter.JSONFormatKey:
+		// No format (default) and full JSON output need server-side info.
 		return true
+	default:
+		if placeHolders.FindString(template) == "" {
+			// The template does not contain formatting fields; assume we
+			// need server-side information to render it, and return early.
+			return true
+		}
 	}
 
 	// A template is provided and has at least one field set.
@@ -256,6 +278,13 @@ func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) []error {
 		fprintln(output, " CDI spec directories:")
 		for _, dir := range info.CDISpecDirs {
 			fprintf(output, "  %s\n", dir)
+		}
+	}
+
+	if len(info.DiscoveredDevices) > 0 {
+		fprintln(output, " Discovered Devices:")
+		for _, device := range info.DiscoveredDevices {
+			fprintf(output, "  %s: %s\n", device.Source, device.ID)
 		}
 	}
 

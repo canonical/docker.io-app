@@ -10,15 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/containerd"
+	containerd "github.com/containerd/containerd/v2/client"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
-	ctr "github.com/docker/docker/integration/internal/container"
+	testContainer "github.com/docker/docker/integration/internal/container"
 	net "github.com/docker/docker/integration/internal/network"
 	"github.com/docker/docker/oci"
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/testutil"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
@@ -29,7 +30,7 @@ import (
 
 func TestCreateFailsWhenIdentifierDoesNotExist(t *testing.T) {
 	ctx := setupTest(t)
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	testCases := []struct {
 		doc           string
@@ -54,11 +55,10 @@ func TestCreateFailsWhenIdentifierDoesNotExist(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			t.Parallel()
 			ctx := testutil.StartSpan(ctx, t)
-			_, err := client.ContainerCreate(ctx,
+			_, err := apiClient.ContainerCreate(ctx,
 				&container.Config{Image: tc.image},
 				&container.HostConfig{},
 				&network.NetworkingConfig{},
@@ -66,7 +66,76 @@ func TestCreateFailsWhenIdentifierDoesNotExist(t *testing.T) {
 				"",
 			)
 			assert.Check(t, is.ErrorContains(err, tc.expectedError))
-			assert.Check(t, errdefs.IsNotFound(err))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
+		})
+	}
+}
+
+func TestCreateByImageID(t *testing.T) {
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	img, err := apiClient.ImageInspect(ctx, "busybox")
+	assert.NilError(t, err)
+
+	imgIDWithAlgorithm := img.ID
+	imgID, _ := strings.CutPrefix(imgIDWithAlgorithm, "sha256:")
+	imgShortID := stringid.TruncateID(imgID)
+
+	testCases := []struct {
+		doc             string
+		image           string
+		expectedErrType func(error) bool
+		expectedErr     string
+	}{
+		{
+			doc:   "image ID with algorithm",
+			image: imgIDWithAlgorithm,
+		},
+		{
+			// test case for https://github.com/moby/moby/issues/20972
+			doc:   "image ID without algorithm",
+			image: imgID,
+		},
+		{
+			doc:   "image short-ID",
+			image: imgShortID,
+		},
+		{
+			doc:             "image with ID and algorithm as tag",
+			image:           "busybox:" + imgIDWithAlgorithm,
+			expectedErrType: cerrdefs.IsInvalidArgument,
+			expectedErr:     "Error response from daemon: invalid reference format",
+		},
+		{
+			doc:             "image with ID as tag",
+			image:           "busybox:" + imgID,
+			expectedErrType: cerrdefs.IsNotFound,
+			expectedErr:     "Error response from daemon: No such image: busybox:" + imgID,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.doc, func(t *testing.T) {
+			t.Parallel()
+			ctx := testutil.StartSpan(ctx, t)
+			resp, err := apiClient.ContainerCreate(ctx,
+				&container.Config{Image: tc.image},
+				&container.HostConfig{},
+				&network.NetworkingConfig{},
+				nil,
+				"",
+			)
+			if tc.expectedErr != "" {
+				assert.Check(t, is.DeepEqual(resp, container.CreateResponse{}))
+				assert.Check(t, is.Error(err, tc.expectedErr))
+				assert.Check(t, is.ErrorType(err, tc.expectedErrType))
+			} else {
+				assert.Check(t, resp.ID != "")
+				assert.NilError(t, err)
+			}
+			// cleanup the container if one was created.
+			_ = apiClient.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 		})
 	}
 }
@@ -77,9 +146,9 @@ func TestCreateFailsWhenIdentifierDoesNotExist(t *testing.T) {
 func TestCreateLinkToNonExistingContainer(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "legacy links are not supported on windows")
 	ctx := setupTest(t)
-	c := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	_, err := c.ContainerCreate(ctx,
+	_, err := apiClient.ContainerCreate(ctx,
 		&container.Config{
 			Image: "busybox",
 		},
@@ -91,12 +160,12 @@ func TestCreateLinkToNonExistingContainer(t *testing.T) {
 		"",
 	)
 	assert.Check(t, is.ErrorContains(err, "could not get container for no-such-container"))
-	assert.Check(t, errdefs.IsInvalidParameter(err))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 }
 
 func TestCreateWithInvalidEnv(t *testing.T) {
 	ctx := setupTest(t)
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	testCases := []struct {
 		env           string
@@ -117,11 +186,10 @@ func TestCreateWithInvalidEnv(t *testing.T) {
 	}
 
 	for index, tc := range testCases {
-		tc := tc
 		t.Run(strconv.Itoa(index), func(t *testing.T) {
 			t.Parallel()
 			ctx := testutil.StartSpan(ctx, t)
-			_, err := client.ContainerCreate(ctx,
+			_, err := apiClient.ContainerCreate(ctx,
 				&container.Config{
 					Image: "busybox",
 					Env:   []string{tc.env},
@@ -132,7 +200,7 @@ func TestCreateWithInvalidEnv(t *testing.T) {
 				"",
 			)
 			assert.Check(t, is.ErrorContains(err, tc.expectedError))
-			assert.Check(t, errdefs.IsInvalidParameter(err))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 		})
 	}
 }
@@ -142,7 +210,7 @@ func TestCreateTmpfsMountsTarget(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
 	ctx := setupTest(t)
 
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	testCases := []struct {
 		target        string
@@ -167,7 +235,7 @@ func TestCreateTmpfsMountsTarget(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := client.ContainerCreate(ctx,
+		_, err := apiClient.ContainerCreate(ctx,
 			&container.Config{
 				Image: "busybox",
 			},
@@ -179,7 +247,7 @@ func TestCreateTmpfsMountsTarget(t *testing.T) {
 			"",
 		)
 		assert.Check(t, is.ErrorContains(err, tc.expectedError))
-		assert.Check(t, errdefs.IsInvalidParameter(err))
+		assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	}
 }
 
@@ -190,6 +258,7 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 	apiClient := testEnv.APIClient()
 
 	testCases := []struct {
+		privileged  bool
 		maskedPaths []string
 		expected    []string
 	}{
@@ -205,6 +274,11 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 			maskedPaths: []string{"/proc/kcore", "/proc/keys"},
 			expected:    []string{"/proc/kcore", "/proc/keys"},
 		},
+		{
+			privileged:  true,
+			maskedPaths: nil,
+			expected:    nil,
+		},
 	}
 
 	checkInspect := func(t *testing.T, ctx context.Context, name string, expected []string) {
@@ -218,15 +292,20 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 		cfg, ok := inspectJSON["HostConfig"].(map[string]interface{})
 		assert.Check(t, is.Equal(true, ok), name)
 
-		maskedPaths, ok := cfg["MaskedPaths"].([]interface{})
-		assert.Check(t, is.Equal(true, ok), name)
+		if expected != nil {
+			maskedPaths, ok := cfg["MaskedPaths"].([]interface{})
+			assert.Check(t, is.Equal(true, ok), name)
 
-		mps := []string{}
-		for _, mp := range maskedPaths {
-			mps = append(mps, mp.(string))
+			mps := make([]string, 0, len(maskedPaths))
+			for _, mp := range maskedPaths {
+				mps = append(mps, mp.(string))
+			}
+
+			assert.DeepEqual(t, expected, mps)
+		} else {
+			_, ok := cfg["MaskedPaths"].([]interface{})
+			assert.Check(t, is.Equal(false, ok), name)
 		}
-
-		assert.DeepEqual(t, expected, mps)
 	}
 
 	// TODO: This should be using subtests
@@ -237,7 +316,9 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 			Image: "busybox",
 			Cmd:   []string{"true"},
 		}
-		hc := container.HostConfig{}
+		hc := container.HostConfig{
+			Privileged: tc.privileged,
+		}
 		if tc.maskedPaths != nil {
 			hc.MaskedPaths = tc.maskedPaths
 		}
@@ -258,7 +339,7 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 		err = apiClient.ContainerStart(ctx, c.ID, container.StartOptions{})
 		assert.NilError(t, err)
 
-		poll.WaitOn(t, ctr.IsInState(ctx, apiClient, c.ID, "exited"), poll.WithDelay(100*time.Millisecond))
+		poll.WaitOn(t, testContainer.IsInState(ctx, apiClient, c.ID, container.StateExited))
 
 		checkInspect(t, ctx, name, tc.expected)
 	}
@@ -302,7 +383,7 @@ func TestCreateWithCustomReadonlyPaths(t *testing.T) {
 		readonlyPaths, ok := cfg["ReadonlyPaths"].([]interface{})
 		assert.Check(t, is.Equal(true, ok), name)
 
-		rops := []string{}
+		rops := make([]string, 0, len(readonlyPaths))
 		for _, rop := range readonlyPaths {
 			rops = append(rops, rop.(string))
 		}
@@ -336,7 +417,7 @@ func TestCreateWithCustomReadonlyPaths(t *testing.T) {
 		err = apiClient.ContainerStart(ctx, c.ID, container.StartOptions{})
 		assert.NilError(t, err)
 
-		poll.WaitOn(t, ctr.IsInState(ctx, apiClient, c.ID, "exited"), poll.WithDelay(100*time.Millisecond))
+		poll.WaitOn(t, testContainer.IsInState(ctx, apiClient, c.ID, container.StateExited))
 
 		checkInspect(t, ctx, name, tc.expected)
 	}
@@ -403,7 +484,6 @@ func TestCreateWithInvalidHealthcheckParams(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			t.Parallel()
 			ctx := testutil.StartSpan(ctx, t)
@@ -422,25 +502,25 @@ func TestCreateWithInvalidHealthcheckParams(t *testing.T) {
 
 			resp, err := apiClient.ContainerCreate(ctx, &cfg, &container.HostConfig{}, nil, nil, "")
 			assert.Check(t, is.Equal(len(resp.Warnings), 0))
-			assert.Check(t, errdefs.IsInvalidParameter(err))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 			assert.ErrorContains(t, err, tc.expectedErr)
 		})
 	}
 }
 
-// Make sure that anonymous volumes can be overritten by tmpfs
+// Make sure that anonymous volumes can be overwritten by tmpfs
 // https://github.com/moby/moby/issues/40446
 func TestCreateTmpfsOverrideAnonymousVolume(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "windows does not support tmpfs")
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
-	id := ctr.Create(ctx, t, apiClient,
-		ctr.WithVolume("/foo"),
-		ctr.WithTmpfs("/foo"),
-		ctr.WithVolume("/bar"),
-		ctr.WithTmpfs("/bar:size=999"),
-		ctr.WithCmd("/bin/sh", "-c", "mount | grep '/foo' | grep tmpfs && mount | grep '/bar' | grep tmpfs"),
+	id := testContainer.Create(ctx, t, apiClient,
+		testContainer.WithVolume("/foo"),
+		testContainer.WithTmpfs("/foo"),
+		testContainer.WithVolume("/bar"),
+		testContainer.WithTmpfs("/bar:size=999"),
+		testContainer.WithCmd("/bin/sh", "-c", "mount | grep '/foo' | grep tmpfs && mount | grep '/bar' | grep tmpfs"),
 	)
 
 	defer func() {
@@ -480,7 +560,7 @@ func TestCreateDifferentPlatform(t *testing.T) {
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
-	img, _, err := apiClient.ImageInspectWithRaw(ctx, "busybox:latest")
+	img, err := apiClient.ImageInspect(ctx, "busybox:latest")
 	assert.NilError(t, err)
 	assert.Assert(t, img.Architecture != "")
 
@@ -492,7 +572,7 @@ func TestCreateDifferentPlatform(t *testing.T) {
 			Variant:      img.Variant,
 		}
 		_, err := apiClient.ContainerCreate(ctx, &container.Config{Image: "busybox:latest"}, &container.HostConfig{}, nil, &p, "")
-		assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+		assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	})
 	t.Run("different cpu arch", func(t *testing.T) {
 		ctx := testutil.StartSpan(ctx, t)
@@ -502,15 +582,15 @@ func TestCreateDifferentPlatform(t *testing.T) {
 			Variant:      img.Variant,
 		}
 		_, err := apiClient.ContainerCreate(ctx, &container.Config{Image: "busybox:latest"}, &container.HostConfig{}, nil, &p, "")
-		assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+		assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	})
 }
 
 func TestCreateVolumesFromNonExistingContainer(t *testing.T) {
 	ctx := setupTest(t)
-	cli := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	_, err := cli.ContainerCreate(
+	_, err := apiClient.ContainerCreate(
 		ctx,
 		&container.Config{Image: "busybox"},
 		&container.HostConfig{VolumesFrom: []string{"nosuchcontainer"}},
@@ -518,7 +598,7 @@ func TestCreateVolumesFromNonExistingContainer(t *testing.T) {
 		nil,
 		"",
 	)
-	assert.Check(t, errdefs.IsInvalidParameter(err))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 }
 
 // Test that we can create a container from an image that is for a different platform even if a platform was not specified
@@ -528,9 +608,9 @@ func TestCreatePlatformSpecificImageNoPlatform(t *testing.T) {
 
 	skip.If(t, testEnv.DaemonInfo.Architecture == "arm", "test only makes sense to run on non-arm systems")
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux", "test image is only available on linux")
-	cli := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	_, err := cli.ContainerCreate(
+	_, err := apiClient.ContainerCreate(
 		ctx,
 		&container.Config{Image: "arm32v7/hello-world"},
 		&container.HostConfig{},
@@ -577,10 +657,14 @@ func TestCreateInvalidHostConfig(t *testing.T) {
 			hc:          container.HostConfig{Annotations: map[string]string{"": "a"}},
 			expectedErr: "Error response from daemon: invalid Annotations: the empty string is not permitted as an annotation key",
 		},
+		{
+			doc:         "invalid CPUShares",
+			hc:          container.HostConfig{Resources: container.Resources{CPUShares: -1}},
+			expectedErr: "Error response from daemon: invalid CPU shares (-1): value must be a positive integer",
+		},
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			t.Parallel()
 			ctx := testutil.StartSpan(ctx, t)
@@ -589,7 +673,7 @@ func TestCreateInvalidHostConfig(t *testing.T) {
 			}
 			resp, err := apiClient.ContainerCreate(ctx, &cfg, &tc.hc, nil, nil, "")
 			assert.Check(t, is.Equal(len(resp.Warnings), 0))
-			assert.Check(t, errdefs.IsInvalidParameter(err), "got: %T", err)
+			assert.Check(t, cerrdefs.IsInvalidArgument(err), "got: %T", err)
 			assert.Error(t, err, tc.expectedErr)
 		})
 	}
@@ -642,10 +726,10 @@ func TestCreateWithCustomMACs(t *testing.T) {
 
 	attachCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
-	res := ctr.RunAttach(attachCtx, t, apiClient,
-		ctr.WithCmd("ip", "-o", "link", "show"),
-		ctr.WithNetworkMode("bridge"),
-		ctr.WithMacAddress("bridge", "02:32:1c:23:00:04"))
+	res := testContainer.RunAttach(attachCtx, t, apiClient,
+		testContainer.WithCmd("ip", "-o", "link", "show"),
+		testContainer.WithNetworkMode("bridge"),
+		testContainer.WithMacAddress("bridge", "02:32:1c:23:00:04"))
 
 	assert.Equal(t, res.ExitCode, 0)
 	assert.Equal(t, res.Stderr.String(), "")
@@ -686,17 +770,17 @@ func TestContainerdContainerImageInfo(t *testing.T) {
 
 	// Currently a containerd container is only created when the container is started.
 	// So start the container and then inspect the containerd container to verify the image info.
-	id := ctr.Run(ctx, t, apiClient, func(cfg *ctr.TestContainerConfig) {
+	id := testContainer.Run(ctx, t, apiClient, func(cfg *testContainer.TestContainerConfig) {
 		// busybox is the default (as of this writing) used by the test client, but lets be explicit here.
 		cfg.Config.Image = "busybox"
 	})
 	defer apiClient.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
 
-	client, err := containerd.New(info.Containerd.Address, containerd.WithDefaultNamespace(info.Containerd.Namespaces.Containers))
+	c8dClient, err := containerd.New(info.Containerd.Address, containerd.WithDefaultNamespace(info.Containerd.Namespaces.Containers))
 	assert.NilError(t, err)
-	defer client.Close()
+	defer c8dClient.Close()
 
-	ctr, err := client.ContainerService().Get(ctx, id)
+	ctr, err := c8dClient.ContainerService().Get(ctx, id)
 	assert.NilError(t, err)
 
 	if testEnv.UsingSnapshotter() {

@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/remotes"
-	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
@@ -31,11 +31,11 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/internal/containerfs"
 	"github.com/docker/docker/pkg/authorization"
-	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/pools"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
 	v2 "github.com/docker/docker/plugin/v2"
+	"github.com/moby/go-archive/chrootarchive"
 	"github.com/moby/sys/mount"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -92,7 +92,7 @@ func (pm *Manager) Enable(refOrID string, config *backend.PluginEnableConfig) er
 }
 
 // Inspect examines a plugin config
-func (pm *Manager) Inspect(refOrID string) (tp *types.Plugin, err error) {
+func (pm *Manager) Inspect(refOrID string) (*types.Plugin, error) {
 	p, err := pm.config.Store.GetV2Plugin(refOrID)
 	if err != nil {
 		return nil, err
@@ -195,7 +195,7 @@ func (pm *Manager) Privileges(ctx context.Context, ref reference.Named, metaHead
 		return nil, nil
 	}
 
-	if err := pm.fetch(ctx, ref, authConfig, progress.DiscardOutput(), metaHeader, images.HandlerFunc(h)); err != nil {
+	if err := pm.fetch(ctx, ref, authConfig, progress.DiscardOutput(), metaHeader, c8dimages.HandlerFunc(h)); err != nil {
 		return types.PluginPrivileges{}, nil
 	}
 
@@ -209,7 +209,7 @@ func (pm *Manager) Privileges(ctx context.Context, ref reference.Named, metaHead
 // Upgrade upgrades a plugin
 //
 // TODO: replace reference package usage with simpler url.Parse semantics
-func (pm *Manager) Upgrade(ctx context.Context, ref reference.Named, name string, metaHeader http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer) (err error) {
+func (pm *Manager) Upgrade(ctx context.Context, ref reference.Named, name string, metaHeader http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer) error {
 	p, err := pm.config.Store.GetV2Plugin(name)
 	if err != nil {
 		return err
@@ -257,7 +257,7 @@ func (pm *Manager) Upgrade(ctx context.Context, ref reference.Named, name string
 // Pull pulls a plugin, check if the correct privileges are provided and install the plugin.
 //
 // TODO: replace reference package usage with simpler url.Parse semantics
-func (pm *Manager) Pull(ctx context.Context, ref reference.Named, name string, metaHeader http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer, opts ...CreateOpt) (err error) {
+func (pm *Manager) Pull(ctx context.Context, ref reference.Named, name string, metaHeader http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer, opts ...CreateOpt) error {
 	pm.muGC.RLock()
 	defer pm.muGC.RUnlock()
 
@@ -385,7 +385,7 @@ func (pm *Manager) Push(ctx context.Context, name string, metaHeader http.Header
 	out, waitProgress := setupProgressOutput(outStream, cancel)
 	defer waitProgress()
 
-	progressHandler := images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+	progressHandler := c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 		log.G(ctx).WithField("mediaType", desc.MediaType).WithField("digest", desc.Digest.String()).Debug("Preparing to push plugin layer")
 		id := stringid.TruncateID(desc.Digest.String())
 		pj.add(remotes.MakeRefKey(ctx, desc), id)
@@ -425,8 +425,8 @@ func (pm *Manager) Push(ctx context.Context, name string, metaHeader http.Header
 
 	// Make sure we can authenticate the request since the auth scope for plugin repos is different than a normal repo.
 	ctx = docker.WithScope(ctx, scope(ref, true))
-	if err := remotes.PushContent(ctx, pusher, desc, pm.blobStore, nil, nil, func(h images.Handler) images.Handler {
-		return images.Handlers(progressHandler, h)
+	if err := remotes.PushContent(ctx, pusher, desc, pm.blobStore, nil, nil, func(h c8dimages.Handler) c8dimages.Handler {
+		return c8dimages.Handlers(progressHandler, h)
 	}); err != nil {
 		// Try fallback to http.
 		// This is needed because the containerd pusher will only attempt the first registry config we pass, which would
@@ -437,8 +437,8 @@ func (pm *Manager) Push(ctx context.Context, name string, metaHeader http.Header
 			pusher, _ := resolver.Pusher(ctx, ref.String())
 			if pusher != nil {
 				log.G(ctx).WithField("ref", ref).Debug("Re-attmpting push with http-fallback")
-				err2 := remotes.PushContent(ctx, pusher, desc, pm.blobStore, nil, nil, func(h images.Handler) images.Handler {
-					return images.Handlers(progressHandler, h)
+				err2 := remotes.PushContent(ctx, pusher, desc, pm.blobStore, nil, nil, func(h c8dimages.Handler) c8dimages.Handler {
+					return c8dimages.Handlers(progressHandler, h)
 				})
 				if err2 == nil {
 					err = nil
@@ -477,7 +477,7 @@ type manifest struct {
 
 func buildManifest(ctx context.Context, s content.Manager, config digest.Digest, layers []digest.Digest) (manifest, error) {
 	var m manifest
-	m.MediaType = images.MediaTypeDockerSchema2Manifest
+	m.MediaType = c8dimages.MediaTypeDockerSchema2Manifest
 	m.SchemaVersion = 2
 
 	configInfo, err := s.Info(ctx, config)
@@ -496,7 +496,7 @@ func buildManifest(ctx context.Context, s content.Manager, config digest.Digest,
 			return m, errors.Wrapf(err, "error fetching info for content digest %s", l)
 		}
 		m.Layers = append(m.Layers, ocispec.Descriptor{
-			MediaType: images.MediaTypeDockerSchema2LayerGzip, // TODO: This is assuming everything is a gzip compressed layer, but that may not be true.
+			MediaType: c8dimages.MediaTypeDockerSchema2LayerGzip, // TODO: This is assuming everything is a gzip compressed layer, but that may not be true.
 			Digest:    l,
 			Size:      info.Size,
 		})
@@ -514,7 +514,7 @@ func (pm *Manager) getManifestDescriptor(ctx context.Context, p *v2.Plugin) (oci
 			desc := ocispec.Descriptor{
 				Size:      info.Size,
 				Digest:    info.Digest,
-				MediaType: images.MediaTypeDockerSchema2Manifest,
+				MediaType: c8dimages.MediaTypeDockerSchema2Manifest,
 			}
 			return desc, nil
 		}
@@ -524,12 +524,12 @@ func (pm *Manager) getManifestDescriptor(ctx context.Context, p *v2.Plugin) (oci
 	}
 	logger.Info("Building a new plugin manifest")
 
-	manifest, err := buildManifest(ctx, pm.blobStore, p.Config, p.Blobsums)
+	mfst, err := buildManifest(ctx, pm.blobStore, p.Config, p.Blobsums)
 	if err != nil {
 		return ocispec.Descriptor{}, err
 	}
 
-	desc, err := writeManifest(ctx, pm.blobStore, &manifest)
+	desc, err := writeManifest(ctx, pm.blobStore, &mfst)
 	if err != nil {
 		return desc, err
 	}
@@ -543,7 +543,7 @@ func (pm *Manager) getManifestDescriptor(ctx context.Context, p *v2.Plugin) (oci
 func writeManifest(ctx context.Context, cs content.Store, m *manifest) (ocispec.Descriptor, error) {
 	platform := platforms.DefaultSpec()
 	desc := ocispec.Descriptor{
-		MediaType: images.MediaTypeDockerSchema2Manifest,
+		MediaType: c8dimages.MediaTypeDockerSchema2Manifest,
 		Platform:  &platform,
 	}
 	data, err := json.Marshal(m)
@@ -620,7 +620,7 @@ func (pm *Manager) Set(name string, args []string) error {
 
 // CreateFromContext creates a plugin from the given pluginDir which contains
 // both the rootfs and the config.json and a repoName with optional tag.
-func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, options *types.PluginCreateOptions) (err error) {
+func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, options *types.PluginCreateOptions) (retErr error) {
 	pm.muGC.RLock()
 	defer pm.muGC.RUnlock()
 
@@ -641,7 +641,11 @@ func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, 
 	if err != nil {
 		return errors.Wrap(err, "failed to create temp directory")
 	}
-	defer os.RemoveAll(tmpRootFSDir)
+	defer func() {
+		if err := os.RemoveAll(tmpRootFSDir); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to remove temp rootfs directory")
+		}
+	}()
 
 	var configJSON []byte
 	rootFS := splitConfigRootFSFromTar(tarCtx, &configJSON)
@@ -686,7 +690,7 @@ func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, 
 		return err
 	}
 	defer func() {
-		if err != nil {
+		if retErr != nil {
 			go pm.GC()
 		}
 	}()
@@ -713,13 +717,13 @@ func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, 
 	configDigest := configBlob.Digest()
 	layers := []digest.Digest{rootFSBlob.Digest()}
 
-	manifest, err := buildManifest(ctx, pm.blobStore, configDigest, layers)
+	mfst, err := buildManifest(ctx, pm.blobStore, configDigest, layers)
 	if err != nil {
 		return err
 	}
-	desc, err := writeManifest(ctx, pm.blobStore, &manifest)
+	desc, err := writeManifest(ctx, pm.blobStore, &mfst)
 	if err != nil {
-		return
+		return err
 	}
 
 	p, err := pm.createPlugin(name, configDigest, desc.Digest, layers, tmpRootFSDir, nil)

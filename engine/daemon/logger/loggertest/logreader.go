@@ -169,7 +169,7 @@ func (tr Reader) testTailEmptyLogs(t *testing.T, live bool) {
 	}
 	defer func() { assert.NilError(t, l.Close()) }()
 
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name string
 		cfg  logger.ReadConfig
 	}{
@@ -180,8 +180,7 @@ func (tr Reader) testTailEmptyLogs(t *testing.T, live bool) {
 		{name: "Until", cfg: logger.ReadConfig{Until: time.Date(2100, time.January, 1, 1, 1, 1, 0, time.UTC)}},
 		{name: "SinceAndUntil", cfg: logger.ReadConfig{Since: time.Unix(1, 0), Until: time.Date(2100, time.January, 1, 1, 1, 1, 0, time.UTC)}},
 	} {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			lw := l.(logger.LogReader).ReadLogs(context.TODO(), logger.ReadConfig{})
 			defer lw.ConsumerGone()
@@ -198,7 +197,6 @@ func (tr Reader) TestFollow(t *testing.T) {
 	// Reader sends all logs and closes after logger is closed
 	// - Starting from empty log (like run)
 	for i, tail := range []int{-1, 0, 1, 42} {
-		i, tail := i, tail
 		t.Run(fmt.Sprintf("FromEmptyLog/Tail=%d", tail), func(t *testing.T) {
 			t.Parallel()
 			l := tr.Factory(t, logger.Info{
@@ -423,9 +421,10 @@ func (tr Reader) TestConcurrent(t *testing.T) {
 	stderrMessages := []*logger.Message{}
 	stdoutMessages := []*logger.Message{}
 	for _, m := range makeTestMessages() {
-		if m.Source == "stdout" {
+		switch m.Source {
+		case "stdout":
 			stdoutMessages = append(stdoutMessages, m)
-		} else if m.Source == "stderr" {
+		case "stderr":
 			stderrMessages = append(stderrMessages, m)
 		}
 	}
@@ -470,11 +469,12 @@ func (tr Reader) TestConcurrent(t *testing.T) {
 		}
 
 		var messages *[]*logger.Message
-		if l.Source == "stdout" {
+		switch l.Source {
+		case "stdout":
 			messages = &stdoutMessages
-		} else if l.Source == "stderr" {
+		case "stderr":
 			messages = &stderrMessages
-		} else {
+		default:
 			t.Fatalf("Corrupted message.Source = %q", l.Source)
 		}
 
@@ -547,8 +547,8 @@ func readMessage(t *testing.T, lw *logger.LogWatcher) *logger.Message {
 	case msg, open := <-lw.Msg:
 		if !open {
 			select {
-			case err, open := <-lw.Err:
-				t.Errorf("unexpected receive on lw.Err with closed lw.Msg: err=%v, open=%v", err, open)
+			case err, o := <-lw.Err:
+				t.Errorf("unexpected receive on lw.Err with closed lw.Msg: err=%v, open=%v", err, o)
 			default:
 			}
 			return nil

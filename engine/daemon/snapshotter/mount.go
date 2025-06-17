@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/containerd/mount"
+	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/pkg/idtools"
+	"github.com/docker/docker/daemon/internal/mountref"
 	"github.com/moby/locker"
 	"github.com/moby/sys/mountinfo"
+	"github.com/moby/sys/user"
 )
 
 // Mounter handles mounting/unmounting things coming in from a snapshotter
@@ -25,20 +25,20 @@ type Mounter interface {
 }
 
 // NewMounter creates a new mounter for the provided snapshotter
-func NewMounter(home string, snapshotter string, idMap idtools.IdentityMapping) *refCountMounter {
+func NewMounter(home string, snapshotter string, idMap user.IdentityMapping) *refCountMounter {
 	return &refCountMounter{
 		base: mounter{
 			home:        home,
 			snapshotter: snapshotter,
 			idMap:       idMap,
 		},
-		rc:     graphdriver.NewRefCounter(checker()),
+		rc:     mountref.NewCounter(isMounted),
 		locker: locker.New(),
 	}
 }
 
 type refCountMounter struct {
-	rc     *graphdriver.RefCounter
+	rc     *mountref.Counter
 	locker *locker.Locker
 	base   mounter
 }
@@ -113,20 +113,17 @@ func (m *refCountMounter) Mounted(containerID string) (string, error) {
 type mounter struct {
 	home        string
 	snapshotter string
-	idMap       idtools.IdentityMapping
+	idMap       user.IdentityMapping
 }
 
 func (m mounter) Mount(mounts []mount.Mount, containerID string) (string, error) {
 	target := m.target(containerID)
 
-	root := m.idMap.RootPair()
-	if err := idtools.MkdirAllAndChown(filepath.Dir(target), 0o710, idtools.Identity{
-		UID: idtools.CurrentIdentity().UID,
-		GID: root.GID,
-	}); err != nil {
+	uid, gid := m.idMap.RootPair()
+	if err := user.MkdirAllAndChown(filepath.Dir(target), 0o710, os.Getuid(), gid); err != nil {
 		return "", err
 	}
-	if err := idtools.MkdirAllAndChown(target, 0o710, root); err != nil {
+	if err := user.MkdirAllAndChown(target, 0o710, uid, gid); err != nil {
 		return "", err
 	}
 

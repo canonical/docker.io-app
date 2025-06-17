@@ -2,6 +2,7 @@ package volume
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	"github.com/docker/docker/api/types/volume"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -52,7 +52,7 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
 				if options.name != "" {
-					return errors.Errorf("conflicting options: either specify --name or provide positional arg, not both")
+					return errors.New("conflicting options: cannot specify a volume-name through both --name and as a positional arg")
 				}
 				options.name = args[0]
 			}
@@ -117,7 +117,7 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 		Driver:     options.driver,
 		DriverOpts: options.driverOpts.GetAll(),
 		Name:       options.name,
-		Labels:     opts.ConvertKVStringsToMap(options.labels.GetAll()),
+		Labels:     opts.ConvertKVStringsToMap(options.labels.GetSlice()),
 	}
 	if options.cluster {
 		volOpts.ClusterVolumeSpec = &volume.ClusterVolumeSpec{
@@ -129,9 +129,10 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 			Availability: volume.Availability(options.availability),
 		}
 
-		if options.accessType == "mount" {
+		switch options.accessType {
+		case "mount":
 			volOpts.ClusterVolumeSpec.AccessMode.MountVolume = &volume.TypeMount{}
-		} else if options.accessType == "block" {
+		case "block":
 			volOpts.ClusterVolumeSpec.AccessMode.BlockVolume = &volume.TypeBlock{}
 		}
 
@@ -160,7 +161,7 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 
 		// TODO(dperny): ignore if no topology specified
 		topology := &volume.TopologyRequirement{}
-		for _, top := range options.requisiteTopology.GetAll() {
+		for _, top := range options.requisiteTopology.GetSlice() {
 			// each topology takes the form segment=value,segment=value
 			// comma-separated list of equal separated maps
 			segments := map[string]string{}
@@ -175,7 +176,7 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 			)
 		}
 
-		for _, top := range options.preferredTopology.GetAll() {
+		for _, top := range options.preferredTopology.GetSlice() {
 			// each topology takes the form segment=value,segment=value
 			// comma-separated list of equal separated maps
 			segments := map[string]string{}

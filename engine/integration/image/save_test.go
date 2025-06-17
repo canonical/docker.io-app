@@ -13,19 +13,20 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/cpuguy83/tar2go"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/versions"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration/internal/build"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/internal/testutils"
 	"github.com/docker/docker/internal/testutils/specialimage"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/testutil/fakecontext"
+	"github.com/moby/go-archive/compression"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/assert/cmp"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
@@ -60,7 +61,7 @@ func TestSaveCheckTimes(t *testing.T) {
 	client := testEnv.APIClient()
 
 	const repoName = "busybox:latest"
-	img, _, err := client.ImageInspectWithRaw(ctx, repoName)
+	img, err := client.ImageInspect(ctx, repoName)
 	assert.NilError(t, err)
 
 	rdr, err := client.ImageSave(ctx, []string{repoName})
@@ -73,7 +74,7 @@ func TestSaveCheckTimes(t *testing.T) {
 
 	var ls []imageSaveManifestEntry
 	assert.NilError(t, json.Unmarshal(dt, &ls))
-	assert.Assert(t, cmp.Len(ls, 1))
+	assert.Assert(t, is.Len(ls, 1))
 
 	info, err := fs.Stat(tarfs, ls[0].Config)
 	assert.NilError(t, err)
@@ -97,7 +98,7 @@ func TestSaveOCI(t *testing.T) {
 	client := testEnv.APIClient()
 
 	const busybox = "busybox:latest"
-	inspectBusybox, _, err := client.ImageInspectWithRaw(ctx, busybox)
+	inspectBusybox, err := client.ImageInspect(ctx, busybox)
 	assert.NilError(t, err)
 
 	type testCase struct {
@@ -132,10 +133,9 @@ func TestSaveOCI(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.image, func(t *testing.T) {
 			// Get information about the original image.
-			inspect, _, err := client.ImageInspectWithRaw(ctx, tc.image)
+			inspect, err := client.ImageInspect(ctx, tc.image)
 			assert.NilError(t, err)
 
 			rdr, err := client.ImageSave(ctx, []string{tc.image})
@@ -212,6 +212,25 @@ func TestSaveOCI(t *testing.T) {
 	}
 }
 
+// TODO(thaJeztah): this test currently only checks invalid cases; update this test to use a table-test and test both valid and invalid platform options.
+func TestSavePlatform(t *testing.T) {
+	ctx := setupTest(t)
+
+	t.Parallel()
+	apiClient := testEnv.APIClient()
+
+	const repoName = "busybox:latest"
+	_, err := apiClient.ImageInspect(ctx, repoName)
+	assert.NilError(t, err)
+
+	_, err = apiClient.ImageSave(ctx, []string{repoName}, client.ImageSaveWithPlatforms(
+		ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		ocispec.Platform{Architecture: "arm64", OS: "linux", Variant: "v8"},
+	))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
+	assert.Check(t, is.Error(err, "Error response from daemon: multiple platform parameters not supported"))
+}
+
 func TestSaveRepoWithMultipleImages(t *testing.T) {
 	ctx := setupTest(t)
 	client := testEnv.APIClient()
@@ -231,7 +250,7 @@ func TestSaveRepoWithMultipleImages(t *testing.T) {
 		return res.ID
 	}
 
-	busyboxImg, _, err := client.ImageInspectWithRaw(ctx, "busybox:latest")
+	busyboxImg, err := client.ImageInspect(ctx, "busybox:latest")
 	assert.NilError(t, err)
 
 	const repoName = "foobar-save-multi-images-test"
@@ -280,7 +299,7 @@ func TestSaveRepoWithMultipleImages(t *testing.T) {
 	} else {
 		sort.Strings(actual)
 		sort.Strings(expected)
-		assert.Assert(t, cmp.DeepEqual(actual, expected), "archive does not contains the right layers: got %v, expected %v", actual, expected)
+		assert.Assert(t, is.DeepEqual(actual, expected), "archive does not contains the right layers: got %v, expected %v", actual, expected)
 	}
 }
 
@@ -341,7 +360,7 @@ RUN touch /opt/a/b/c && chown user:user /opt/a/b/c`
 
 func listTar(f io.Reader) ([]string, error) {
 	// If using the containerd snapshotter, the tar file may be compressed
-	dec, err := archive.DecompressStream(f)
+	dec, err := compression.DecompressStream(f)
 	if err != nil {
 		return nil, err
 	}

@@ -6,10 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/errdefs"
 	"gotest.tools/v3/assert"
 )
 
@@ -68,7 +67,7 @@ func (d *Daemon) CheckPluginRunning(ctx context.Context, plugin string) func(c *
 	return func(c *testing.T) (interface{}, string) {
 		apiclient := d.NewClientT(c)
 		resp, _, err := apiclient.PluginInspectWithRaw(ctx, plugin)
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return false, fmt.Sprintf("%v", err)
 		}
 		assert.NilError(c, err)
@@ -81,7 +80,7 @@ func (d *Daemon) CheckPluginImage(ctx context.Context, plugin string) func(c *te
 	return func(c *testing.T) (interface{}, string) {
 		apiclient := d.NewClientT(c)
 		resp, _, err := apiclient.PluginInspectWithRaw(ctx, plugin)
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return false, fmt.Sprintf("%v", err)
 		}
 		assert.NilError(c, err)
@@ -103,7 +102,7 @@ func (d *Daemon) CheckRunningTaskNetworks(ctx context.Context) func(t *testing.T
 		cli := d.NewClientT(t)
 		defer cli.Close()
 
-		tasks, err := cli.TaskList(ctx, types.TaskListOptions{
+		tasks, err := cli.TaskList(ctx, swarm.TaskListOptions{
 			Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
 		})
 		assert.NilError(t, err)
@@ -124,7 +123,7 @@ func (d *Daemon) CheckRunningTaskImages(ctx context.Context) func(t *testing.T) 
 		cli := d.NewClientT(t)
 		defer cli.Close()
 
-		tasks, err := cli.TaskList(ctx, types.TaskListOptions{
+		tasks, err := cli.TaskList(ctx, swarm.TaskListOptions{
 			Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
 		})
 		assert.NilError(t, err)
@@ -178,7 +177,7 @@ func (d *Daemon) CheckLeader(ctx context.Context) func(t *testing.T) (interface{
 
 		errList := "could not get node list"
 
-		ls, err := cli.NodeList(ctx, types.NodeListOptions{})
+		ls, err := cli.NodeList(ctx, swarm.NodeListOptions{})
 		if err != nil {
 			return err, errList
 		}

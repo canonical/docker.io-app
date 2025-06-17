@@ -1,6 +1,7 @@
 package swarm
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -9,7 +10,6 @@ import (
 	"github.com/docker/cli/internal/test/builders"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -27,12 +27,13 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 	}{
 		{
 			name:          "not-enough-args",
-			expectedError: "requires exactly 1 argument",
+			args:          []string{},
+			expectedError: "requires 1 argument",
 		},
 		{
 			name:          "too-many-args",
 			args:          []string{"worker", "manager"},
-			expectedError: "requires exactly 1 argument",
+			expectedError: "requires 1 argument",
 		},
 		{
 			name:          "invalid-args",
@@ -43,7 +44,7 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 			name: "swarm-inspect-failed",
 			args: []string{"worker"},
 			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return swarm.Swarm{}, errors.Errorf("error inspecting the swarm")
+				return swarm.Swarm{}, errors.New("error inspecting the swarm")
 			},
 			expectedError: "error inspecting the swarm",
 		},
@@ -54,7 +55,7 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 				flagRotate: "true",
 			},
 			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return swarm.Swarm{}, errors.Errorf("error inspecting the swarm")
+				return swarm.Swarm{}, errors.New("error inspecting the swarm")
 			},
 			expectedError: "error inspecting the swarm",
 		},
@@ -65,7 +66,7 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 				flagRotate: "true",
 			},
 			swarmUpdateFunc: func(swarm swarm.Spec, flags swarm.UpdateFlags) error {
-				return errors.Errorf("error updating the swarm")
+				return errors.New("error updating the swarm")
 			},
 			expectedError: "error updating the swarm",
 		},
@@ -73,7 +74,7 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 			name: "node-inspect-failed",
 			args: []string{"worker"},
 			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return swarm.Node{}, []byte{}, errors.Errorf("error inspecting node")
+				return swarm.Node{}, []byte{}, errors.New("error inspecting node")
 			},
 			expectedError: "error inspecting node",
 		},
@@ -81,13 +82,12 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 			name: "info-failed",
 			args: []string{"worker"},
 			infoFunc: func() (system.Info, error) {
-				return system.Info{}, errors.Errorf("error asking for node info")
+				return system.Info{}, errors.New("error asking for node info")
 			},
 			expectedError: "error asking for node info",
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				swarmInspectFunc: tc.swarmInspectFunc,
@@ -198,7 +198,6 @@ func TestSwarmJoinToken(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				swarmInspectFunc: tc.swarmInspectFunc,

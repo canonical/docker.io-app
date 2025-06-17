@@ -2,6 +2,7 @@ package mounts // import "github.com/docker/docker/volume/mounts"
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/docker/docker/api/types/mount"
@@ -11,7 +12,7 @@ import (
 
 type mockFiProvider struct{}
 
-func (mockFiProvider) fileInfo(path string) (exists, isDir bool, err error) {
+func (mockFiProvider) fileInfo(path string) (exists, isDir bool, _ error) {
 	dirs := map[string]struct{}{
 		`c:\`:                    {},
 		`c:\windows\`:            {},
@@ -42,13 +43,9 @@ func (m mockFiProviderWithError) fileInfo(path string) (bool, bool, error) {
 }
 
 func TestParseMountSpec(t *testing.T) {
-	testDir, err := os.MkdirTemp("", "test-mount-config")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(testDir)
+	testDir := t.TempDir()
 	parser := NewParser()
-	cases := []struct {
+	tests := []struct {
 		input    mount.Mount
 		expected MountPoint
 	}{
@@ -78,8 +75,17 @@ func TestParseMountSpec(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
-		tc := tc
+	if runtime.GOOS != "windows" {
+		tests = append(tests, struct {
+			input    mount.Mount
+			expected MountPoint
+		}{
+			input:    mount.Mount{Type: mount.TypeImage, Source: "alpine", Target: testDestinationPath},
+			expected: MountPoint{Type: mount.TypeImage, Source: "alpine", Destination: testDestinationPath, RW: true, Propagation: parser.DefaultPropagationMode()},
+		})
+	}
+
+	for _, tc := range tests {
 		t.Run("", func(t *testing.T) {
 			mp, err := parser.ParseMountSpec(tc.input)
 			assert.NilError(t, err)

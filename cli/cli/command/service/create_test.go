@@ -4,36 +4,34 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/cli/opts/swarmopts"
 	"github.com/docker/docker/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
-
-	cliopts "github.com/docker/cli/opts"
 )
 
 // fakeConfigAPIClientList is used to let us pass a closure as a
 // ConfigAPIClient, to use as ConfigList. for all the other methods in the
 // interface, it does nothing, not even return an error, so don't use them
-type fakeConfigAPIClientList func(context.Context, types.ConfigListOptions) ([]swarm.Config, error)
+type fakeConfigAPIClientList func(context.Context, swarm.ConfigListOptions) ([]swarm.Config, error)
 
-func (f fakeConfigAPIClientList) ConfigList(ctx context.Context, opts types.ConfigListOptions) ([]swarm.Config, error) {
+func (f fakeConfigAPIClientList) ConfigList(ctx context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 	return f(ctx, opts)
 }
 
-func (f fakeConfigAPIClientList) ConfigCreate(_ context.Context, _ swarm.ConfigSpec) (types.ConfigCreateResponse, error) {
-	return types.ConfigCreateResponse{}, nil
+func (fakeConfigAPIClientList) ConfigCreate(_ context.Context, _ swarm.ConfigSpec) (swarm.ConfigCreateResponse, error) {
+	return swarm.ConfigCreateResponse{}, nil
 }
 
-func (f fakeConfigAPIClientList) ConfigRemove(_ context.Context, _ string) error {
+func (fakeConfigAPIClientList) ConfigRemove(_ context.Context, _ string) error {
 	return nil
 }
 
-func (f fakeConfigAPIClientList) ConfigInspectWithRaw(_ context.Context, _ string) (swarm.Config, []byte, error) {
+func (fakeConfigAPIClientList) ConfigInspectWithRaw(_ context.Context, _ string) (swarm.Config, []byte, error) {
 	return swarm.Config{}, nil, nil
 }
 
-func (f fakeConfigAPIClientList) ConfigUpdate(_ context.Context, _ string, _ swarm.Version, _ swarm.ConfigSpec) error {
+func (fakeConfigAPIClientList) ConfigUpdate(_ context.Context, _ string, _ swarm.Version, _ swarm.ConfigSpec) error {
 	return nil
 }
 
@@ -43,8 +41,8 @@ func (f fakeConfigAPIClientList) ConfigUpdate(_ context.Context, _ string, _ swa
 func TestSetConfigsWithCredSpecAndConfigs(t *testing.T) {
 	// we can't directly access the internal fields of the ConfigOpt struct, so
 	// we need to let it do the parsing
-	configOpt := &cliopts.ConfigOpt{}
-	configOpt.Set("bar")
+	configOpt := &swarmopts.ConfigOpt{}
+	assert.Check(t, configOpt.Set("bar"))
 	opts := &serviceOptions{
 		credentialSpec: credentialSpecOpt{
 			value: &swarm.CredentialSpec{
@@ -68,7 +66,7 @@ func TestSetConfigsWithCredSpecAndConfigs(t *testing.T) {
 	}
 
 	// set up a function to use as the list function
-	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts types.ConfigListOptions) ([]swarm.Config, error) {
+	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 		f := opts.Filters
 
 		// we're expecting the filter to have names "foo" and "bar"
@@ -148,7 +146,7 @@ func TestSetConfigsOnlyCredSpec(t *testing.T) {
 	}
 
 	// set up a function to use as the list function
-	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts types.ConfigListOptions) ([]swarm.Config, error) {
+	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 		f := opts.Filters
 
 		names := f.Get("name")
@@ -187,8 +185,8 @@ func TestSetConfigsOnlyCredSpec(t *testing.T) {
 // TestSetConfigsOnlyConfigs verifies setConfigs when only configs (and not a
 // CredentialSpec) is needed.
 func TestSetConfigsOnlyConfigs(t *testing.T) {
-	configOpt := &cliopts.ConfigOpt{}
-	configOpt.Set("bar")
+	configOpt := &swarmopts.ConfigOpt{}
+	assert.Check(t, configOpt.Set("bar"))
 	opts := &serviceOptions{
 		configs: *configOpt,
 	}
@@ -199,7 +197,7 @@ func TestSetConfigsOnlyConfigs(t *testing.T) {
 		},
 	}
 
-	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts types.ConfigListOptions) ([]swarm.Config, error) {
+	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 		f := opts.Filters
 
 		names := f.Get("name")
@@ -260,7 +258,7 @@ func TestSetConfigsNoConfigs(t *testing.T) {
 		},
 	}
 
-	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts types.ConfigListOptions) ([]swarm.Config, error) {
+	var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 		// assert false -- we should never call this function
 		assert.Assert(t, false, "we should not be listing configs")
 		return nil, nil

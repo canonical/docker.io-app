@@ -11,12 +11,12 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/content"
-	containerdimages "github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/leases"
-	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/rootfs"
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/leases"
+	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/containerd/v2/pkg/rootfs"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -28,14 +28,12 @@ import (
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
-	dimage "github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
-	registrypkg "github.com/docker/docker/registry"
 	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/go-archive"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -72,7 +70,7 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 			return nil, nil, fmt.Errorf(`"FROM scratch" is not supported on Windows`)
 		}
 		if opts.Platform != nil {
-			if err := dimage.CheckOS(opts.Platform.OS); err != nil {
+			if err := image.CheckOS(opts.Platform.OS); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -89,11 +87,11 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 			return nil, nil, err
 		}
 		imgDesc, err := i.resolveDescriptor(ctx, refOrID)
-		if err != nil && !errdefs.IsNotFound(err) {
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			return nil, nil, err
 		}
 		if img != nil {
-			if err := dimage.CheckOS(img.OperatingSystem()); err != nil {
+			if err := image.CheckOS(img.OperatingSystem()); err != nil {
 				return nil, nil, err
 			}
 
@@ -144,12 +142,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 	pullRegistryAuth := &registry.AuthConfig{}
 	if len(authConfigs) > 0 {
 		// The request came with a full auth config, use it
-		repoInfo, err := i.registryService.ResolveRepository(ref)
-		if err != nil {
-			return nil, err
-		}
-
-		resolvedConfig := registrypkg.ResolveAuthConfig(authConfigs, repoInfo.Index)
+		resolvedConfig := i.registryService.ResolveAuthConfig(authConfigs, ref)
 		pullRegistryAuth = &resolvedConfig
 	}
 
@@ -159,7 +152,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 
 	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
 	if err != nil {
-		if errdefs.IsNotFound(err) && img != nil && platform != nil {
+		if cerrdefs.IsNotFound(err) && img != nil && platform != nil {
 			imgPlat := ocispec.Platform{
 				OS:           img.OS,
 				Architecture: img.BaseImgArch(),
@@ -173,7 +166,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 WARNING: Pulled image with specified platform (%s), but the resulting image's configured platform (%s) does not match.
 This is most likely caused by a bug in the build system that created the fetched image (%s).
 Please notify the image author to correct the configuration.`,
-					platforms.Format(p), platforms.Format(imgPlat), name,
+					platforms.FormatAll(p), platforms.FormatAll(imgPlat), name,
 				)
 				log.G(ctx).WithError(err).WithField("image", name).Warn("Ignoring error about platform mismatch where the manifest list points to an image whose configuration does not match the platform in the manifest.")
 			}
@@ -182,7 +175,7 @@ Please notify the image author to correct the configuration.`,
 		}
 	}
 
-	if err := dimage.CheckOS(img.OperatingSystem()); err != nil {
+	if err := image.CheckOS(img.OperatingSystem()); err != nil {
 		return nil, err
 	}
 
@@ -204,12 +197,12 @@ func newROLayerForImage(ctx context.Context, imgDesc *ocispec.Descriptor, i *Ima
 		platMatcher = platforms.Only(*platform)
 	}
 
-	confDesc, err := containerdimages.Config(ctx, i.content, *imgDesc, platMatcher)
+	confDesc, err := c8dimages.Config(ctx, i.content, *imgDesc, platMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	diffIDs, err := containerdimages.RootFS(ctx, i.content, confDesc)
+	diffIDs, err := c8dimages.RootFS(ctx, i.content, confDesc)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +425,7 @@ func (rw *rwlayer) Release() (outErr error) {
 // This is similar to LoadImage() except that it receives JSON encoded bytes of
 // an image instead of a tar archive.
 func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent string, layerDigest digest.Digest) (builder.Image, error) {
-	imgToCreate, err := dimage.NewFromJSON(config)
+	imgToCreate, err := image.NewFromJSON(config)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +441,7 @@ func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent st
 		if err != nil {
 			return nil, err
 		}
-		parentImageManifest, err := containerdimages.Manifest(ctx, i.content, parentDesc, platforms.Default())
+		parentImageManifest, err := c8dimages.Manifest(ctx, i.content, parentDesc, platforms.Default())
 		if err != nil {
 			return nil, err
 		}
@@ -476,7 +469,7 @@ func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent st
 		}
 
 		layers = append(layers, ocispec.Descriptor{
-			MediaType: containerdimages.MediaTypeDockerSchema2LayerGzip,
+			MediaType: c8dimages.MediaTypeDockerSchema2LayerGzip,
 			Digest:    layerDigest,
 			Size:      info.Size,
 		})
@@ -487,13 +480,13 @@ func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent st
 		return nil, err
 	}
 
-	return dimage.Clone(imgToCreate, createdImageId), nil
+	return image.Clone(imgToCreate, createdImageId), nil
 }
 
 func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec.DockerOCIImage,
 	parentDigest digest.Digest, layers []ocispec.Descriptor,
 	containerConfig container.Config,
-) (dimage.ID, error) {
+) (image.ID, error) {
 	ctx, release, err := i.withLease(ctx, false)
 	if err != nil {
 		return "", err
@@ -505,7 +498,7 @@ func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec
 		return "", err
 	}
 
-	img := containerdimages.Image{
+	img := c8dimages.Image{
 		Name:      danglingImageName(manifestDesc.Digest),
 		Target:    manifestDesc,
 		CreatedAt: time.Now(),
@@ -519,19 +512,12 @@ func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec
 		img.Labels[imageLabelClassicBuilderFromScratch] = "1"
 	}
 
-	createdImage, err := i.images.Update(ctx, img)
-	if err != nil {
-		if !cerrdefs.IsNotFound(err) {
-			return "", err
-		}
-
-		if createdImage, err = i.images.Create(ctx, img); err != nil {
-			return "", fmt.Errorf("failed to create new image: %w", err)
-		}
+	if err := i.createOrReplaceImage(ctx, img); err != nil {
+		return "", err
 	}
 
-	id := image.ID(createdImage.Target.Digest)
-	i.LogImageEvent(id.String(), id.String(), events.ActionCreate)
+	id := image.ID(img.Target.Digest)
+	i.LogImageEvent(ctx, id.String(), id.String(), events.ActionCreate)
 
 	if err := i.unpackImage(ctx, i.StorageDriver(), img, manifestDesc); err != nil {
 		return "", err

@@ -145,7 +145,7 @@ func (n *networkRouter) getNetwork(ctx context.Context, w http.ResponseWriter, r
 			// ex: overlay/partial_ID or name/swarm_scope
 			if nwv, ok := listByPartialID[nwk.ID]; ok {
 				nwk = nwv
-			} else if nwv, ok := listByFullName[nwk.ID]; ok {
+			} else if nwv, ok = listByFullName[nwk.ID]; ok {
 				nwk = nwv
 			}
 			return httputils.WriteJSON(w, http.StatusOK, nwk)
@@ -212,11 +212,18 @@ func (n *networkRouter) postNetworkCreate(ctx context.Context, w http.ResponseWr
 		return libnetwork.NetworkNameError(create.Name)
 	}
 
+	version := httputils.VersionFromContext(ctx)
+
+	// EnableIPv4 was introduced in API 1.48.
+	if versions.LessThan(version, "1.48") {
+		create.EnableIPv4 = nil
+	}
+
 	// For a Swarm-scoped network, this call to backend.CreateNetwork is used to
 	// validate the configuration. The network will not be created but, if the
 	// configuration is valid, ManagerRedirectError will be returned and handled
 	// below.
-	nw, err := n.backend.CreateNetwork(create)
+	nw, err := n.backend.CreateNetwork(ctx, create)
 	if err != nil {
 		if _, ok := err.(libnetwork.ManagerRedirectError); !ok {
 			return err

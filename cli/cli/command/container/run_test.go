@@ -21,15 +21,43 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/jsonmessage"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
+func TestRunValidateFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		expectedErr string
+	}{
+		{
+			name:        "with conflicting --attach, --detach",
+			args:        []string{"--attach", "stdin", "--detach", "myimage"},
+			expectedErr: "conflicting options: cannot specify both --attach and --detach",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewRunCommand(test.NewFakeCli(&fakeClient{}))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			if tc.expectedErr != "" {
+				assert.Check(t, is.ErrorContains(err, tc.expectedErr))
+			} else {
+				assert.Check(t, is.Nil(err))
+			}
+		})
+	}
+}
+
 func TestRunLabel(t *testing.T) {
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *specs.Platform, _ string) (container.CreateResponse, error) {
+		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			return container.CreateResponse{
 				ID: "id",
 			}, nil
@@ -52,7 +80,7 @@ func TestRunAttach(t *testing.T) {
 	var conn net.Conn
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *specs.Platform, _ string) (container.CreateResponse, error) {
+		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			return container.CreateResponse{
 				ID: "id",
 			}, nil
@@ -123,13 +151,15 @@ func TestRunAttachTermination(t *testing.T) {
 	killCh := make(chan struct{})
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *specs.Platform, _ string) (container.CreateResponse, error) {
+		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			return container.CreateResponse{
 				ID: "id",
 			}, nil
 		},
-		containerKillFunc: func(ctx context.Context, containerID, signal string) error {
-			killCh <- struct{}{}
+		containerKillFunc: func(ctx context.Context, containerID, sig string) error {
+			if sig == "TERM" {
+				close(killCh)
+			}
 			return nil
 		},
 		containerAttachFunc: func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
@@ -144,7 +174,7 @@ func TestRunAttachTermination(t *testing.T) {
 		waitFunc: func(_ string) (<-chan container.WaitResponse, <-chan error) {
 			responseChan := make(chan container.WaitResponse, 1)
 			errChan := make(chan error)
-
+			<-killCh
 			responseChan <- container.WaitResponse{
 				StatusCode: 130,
 			}
@@ -173,8 +203,7 @@ func TestRunAttachTermination(t *testing.T) {
 	case <-attachCh:
 	}
 
-	assert.NilError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
-	// end stream from "container" so that we'll detach
+	assert.NilError(t, syscall.Kill(syscall.Getpid(), syscall.SIGTERM))
 	conn.Close()
 
 	select {
@@ -200,14 +229,9 @@ func TestRunPullTermination(t *testing.T) {
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
 		createContainerFunc: func(config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig,
-			platform *specs.Platform, containerName string,
+			platform *ocispec.Platform, containerName string,
 		) (container.CreateResponse, error) {
-			select {
-			case <-ctx.Done():
-				return container.CreateResponse{}, ctx.Err()
-			default:
-			}
-			return container.CreateResponse{}, fakeNotFound{}
+			return container.CreateResponse{}, errors.New("shouldn't try to create a container")
 		},
 		containerAttachFunc: func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
 			return types.HijackedResponse{}, errors.New("shouldn't try to attach to a container")
@@ -225,19 +249,19 @@ func TestRunPullTermination(t *testing.T) {
 						assert.NilError(t, server.Close(), "failed to close imageCreateFunc server")
 						return
 					default:
+						assert.NilError(t, enc.Encode(jsonmessage.JSONMessage{
+							Status:   "Downloading",
+							ID:       fmt.Sprintf("id-%d", i),
+							TimeNano: time.Now().UnixNano(),
+							Time:     time.Now().Unix(),
+							Progress: &jsonmessage.JSONProgress{
+								Current: int64(i),
+								Total:   100,
+								Start:   0,
+							},
+						}))
+						time.Sleep(100 * time.Millisecond)
 					}
-					assert.NilError(t, enc.Encode(jsonmessage.JSONMessage{
-						Status:   "Downloading",
-						ID:       fmt.Sprintf("id-%d", i),
-						TimeNano: time.Now().UnixNano(),
-						Time:     time.Now().Unix(),
-						Progress: &jsonmessage.JSONProgress{
-							Current: int64(i),
-							Total:   100,
-							Start:   0,
-						},
-					}))
-					time.Sleep(100 * time.Millisecond)
 				}
 			}()
 			attachCh <- struct{}{}
@@ -249,7 +273,7 @@ func TestRunPullTermination(t *testing.T) {
 	cmd := NewRunCommand(fakeCLI)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"foobar:latest"})
+	cmd.SetArgs([]string{"--pull", "always", "foobar:latest"})
 
 	cmdErrC := make(chan error, 1)
 	go func() {
@@ -267,7 +291,9 @@ func TestRunPullTermination(t *testing.T) {
 	select {
 	case cmdErr := <-cmdErrC:
 		assert.Equal(t, cmdErr, cli.StatusError{
+			Cause:      context.Canceled,
 			StatusCode: 125,
+			Status:     "docker: context canceled\n\nRun 'docker run --help' for more information",
 		})
 	case <-time.After(10 * time.Second):
 		t.Fatal("cmd did not return before the timeout")
@@ -301,13 +327,12 @@ func TestRunCommandWithContentTrustErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			fakeCLI := test.NewFakeCli(&fakeClient{
 				createContainerFunc: func(config *container.Config,
 					hostConfig *container.HostConfig,
 					networkingConfig *network.NetworkingConfig,
-					platform *specs.Platform,
+					platform *ocispec.Platform,
 					containerName string,
 				) (container.CreateResponse, error) {
 					return container.CreateResponse{}, errors.New("shouldn't try to pull image")
@@ -319,8 +344,10 @@ func TestRunCommandWithContentTrustErrors(t *testing.T) {
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			err := cmd.Execute()
-			assert.Assert(t, err != nil)
-			assert.Assert(t, is.Contains(fakeCLI.ErrBuffer().String(), tc.expectedError))
+			statusErr := cli.StatusError{}
+			assert.Check(t, errors.As(err, &statusErr))
+			assert.Check(t, is.Equal(statusErr.StatusCode, 125))
+			assert.Check(t, is.ErrorContains(err, tc.expectedError))
 		})
 	}
 }
@@ -340,7 +367,6 @@ func TestRunContainerImagePullPolicyInvalid(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.PullPolicy, func(t *testing.T) {
 			dockerCli := test.NewFakeCli(&fakeClient{})
 			err := runRun(
@@ -353,8 +379,8 @@ func TestRunContainerImagePullPolicyInvalid(t *testing.T) {
 
 			statusErr := cli.StatusError{}
 			assert.Check(t, errors.As(err, &statusErr))
-			assert.Equal(t, statusErr.StatusCode, 125)
-			assert.Check(t, is.Contains(dockerCli.ErrBuffer().String(), tc.ExpectedErrMsg))
+			assert.Check(t, is.Equal(statusErr.StatusCode, 125))
+			assert.Check(t, is.ErrorContains(err, tc.ExpectedErrMsg))
 		})
 	}
 }

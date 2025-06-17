@@ -3333,8 +3333,11 @@ definitions:
           com.example.some-other-label: "some-other-value"
       Data:
         description: |
-          Base64-url-safe-encoded ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-3.2))
-          data to store as secret.
+          Data is the data to store as a secret, formatted as a Base64-url-safe-encoded
+          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-5)) string.
+          It must be empty if the Driver field is set, in which case the data is
+          loaded from an external secret store. The maximum allowed size is 500KB,
+          as defined in [MaxSecretSize](https://pkg.go.dev/github.com/moby/swarmkit/v2@v2.0.0-20250103191802-8c1959736554/api/validation#MaxSecretSize).
 
           This field is only used to _create_ a secret, and is not returned by
           other endpoints.
@@ -3376,8 +3379,9 @@ definitions:
           type: "string"
       Data:
         description: |
-          Base64-url-safe-encoded ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-3.2))
-          config data.
+          Data is the data to store as a config, formatted as a Base64-url-safe-encoded
+          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-5)) string.
+          The maximum allowed size is 1000KB, as defined in [MaxConfigSize](https://pkg.go.dev/github.com/moby/swarmkit/v2@v2.0.0-20250103191802-8c1959736554/manager/controlapi#MaxConfigSize).
         type: "string"
 
   Config:
@@ -3881,55 +3885,27 @@ definitions:
           List of IP ranges to which nondistributable artifacts can be pushed,
           using the CIDR syntax [RFC 4632](https://tools.ietf.org/html/4632).
 
-          Some images (for example, Windows base images) contain artifacts
-          whose distribution is restricted by license. When these images are
-          pushed to a registry, restricted artifacts are not included.
+          <p><br /></p>
 
-          This configuration override this behavior, and enables the daemon to
-          push nondistributable artifacts to all registries whose resolved IP
-          address is within the subnet described by the CIDR syntax.
-
-          This option is useful when pushing images containing
-          nondistributable artifacts to a registry on an air-gapped network so
-          hosts on that network can pull the images without connecting to
-          another server.
-
-          > **Warning**: Nondistributable artifacts typically have restrictions
-          > on how and where they can be distributed and shared. Only use this
-          > feature to push artifacts to private registries and ensure that you
-          > are in compliance with any terms that cover redistributing
-          > nondistributable artifacts.
-
+          > **Deprecated**: Pushing nondistributable artifacts is now always enabled
+          > and this field is always `null`.
         type: "array"
         items:
           type: "string"
-        example: ["::1/128", "127.0.0.0/8"]
+        example: []
       AllowNondistributableArtifactsHostnames:
         description: |
           List of registry hostnames to which nondistributable artifacts can be
           pushed, using the format `<hostname>[:<port>]` or `<IP address>[:<port>]`.
 
-          Some images (for example, Windows base images) contain artifacts
-          whose distribution is restricted by license. When these images are
-          pushed to a registry, restricted artifacts are not included.
+          <p><br /></p>
 
-          This configuration override this behavior for the specified
-          registries.
-
-          This option is useful when pushing images containing
-          nondistributable artifacts to a registry on an air-gapped network so
-          hosts on that network can pull the images without connecting to
-          another server.
-
-          > **Warning**: Nondistributable artifacts typically have restrictions
-          > on how and where they can be distributed and shared. Only use this
-          > feature to push artifacts to private registries and ensure that you
-          > are in compliance with any terms that cover redistributing
-          > nondistributable artifacts.
+          > **Deprecated**: Pushing nondistributable artifacts is now always enabled
+          > and this field is always `null`.
         type: "array"
         items:
           type: "string"
-        example: ["registry.internal.corp.example.com:3000", "[2001:db8:a0b:12f0::1]:443"]
+        example: []
       InsecureRegistryCIDRs:
         description: |
           List of IP ranges of insecure registries, using the CIDR syntax

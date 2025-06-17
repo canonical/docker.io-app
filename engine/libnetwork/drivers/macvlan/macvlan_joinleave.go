@@ -9,6 +9,7 @@ import (
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/ns"
 	"go.opentelemetry.io/otel"
@@ -17,7 +18,7 @@ import (
 )
 
 // Join method is invoked when a Sandbox is attached to an endpoint.
-func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, options map[string]interface{}) error {
+func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, epOpts, _ map[string]interface{}) error {
 	ctx, span := otel.Tracer("").Start(ctx, "libnetwork.drivers.macvlan.Join", trace.WithAttributes(
 		attribute.String("nid", nid),
 		attribute.String("eid", eid),
@@ -67,7 +68,7 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 				ep.addr.IP.String(), v4gw.String(), n.config.MacvlanMode, n.config.Parent)
 		}
 		// parse and match the endpoint address with the available v6 subnets
-		if len(n.config.Ipv6Subnets) > 0 {
+		if ep.addrv6 != nil && len(n.config.Ipv6Subnets) > 0 {
 			s := n.getSubnetforIPv6(ep.addrv6)
 			if s == nil {
 				return fmt.Errorf("could not find a valid ipv6 subnet for endpoint %s", eid)
@@ -82,6 +83,10 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 			}
 			log.G(ctx).Debugf("Macvlan Endpoint Joined with IPv6_Addr: %s Gateway: %s MacVlan_Mode: %s, Parent: %s",
 				ep.addrv6.IP.String(), v6gw.String(), n.config.MacvlanMode, n.config.Parent)
+		}
+		if len(n.config.Ipv4Subnets) == 0 && len(n.config.Ipv6Subnets) == 0 {
+			// With no addresses, don't need a gateway.
+			jinfo.DisableGatewayService()
 		}
 	} else {
 		if len(n.config.Ipv4Subnets) > 0 {
@@ -98,7 +103,7 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 		jinfo.DisableGatewayService()
 	}
 	iNames := jinfo.InterfaceName()
-	err = iNames.SetNames(vethName, containerVethPrefix)
+	err = iNames.SetNames(vethName, containerVethPrefix, netlabel.GetIfname(epOpts))
 	if err != nil {
 		return err
 	}

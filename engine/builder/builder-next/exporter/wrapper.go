@@ -52,6 +52,7 @@ func (e *imageExporterMobyWrapper) Resolve(ctx context.Context, id int, exporter
 	if _, has := exporterAttrs[string(exptypes.OptKeyDanglingPrefix)]; !has {
 		exporterAttrs[string(exptypes.OptKeyDanglingPrefix)] = "moby-dangling"
 	}
+	exporterAttrs[string(exptypes.OptKeyDanglingEmptyOnly)] = "true"
 
 	inst, err := e.exp.Resolve(ctx, id, exporterAttrs)
 	if err != nil {
@@ -82,21 +83,33 @@ func (i *imageExporterInstanceWrapper) Export(ctx context.Context, src *exporter
 	}
 
 	if i.callbacks.Named != nil {
-		for _, name := range strings.Split(out[string(exptypes.OptKeyName)], ",") {
-			ref, err := reference.ParseNormalizedNamed(name)
-			if err != nil {
-				// Shouldn't happen, but log if it does and continue.
-				log.G(ctx).WithFields(log.Fields{
-					"name":  name,
-					"error": err,
-				}).Warn("image named with invalid reference produced by buildkit")
-				continue
-			}
-
-			namedTagged := reference.TagNameOnly(ref).(reference.NamedTagged)
-			i.callbacks.Named(ctx, namedTagged, desc)
-		}
+		i.processNamedCallback(ctx, out, desc)
 	}
 
 	return out, ref, nil
+}
+
+func (i *imageExporterInstanceWrapper) processNamedCallback(ctx context.Context, out map[string]string, desc ocispec.Descriptor) {
+	// TODO(vvoland): Change to exptypes.ExporterImageNameKey when BuildKit v0.21 is vendored.
+	imageName := out["image.name"]
+	if imageName == "" {
+		log.G(ctx).Warn("image named with empty image.name produced by buildkit")
+		return
+	}
+
+	for _, name := range strings.Split(imageName, ",") {
+		ref, err := reference.ParseNormalizedNamed(name)
+		if err != nil {
+			// Shouldn't happen, but log if it does and continue.
+			log.G(ctx).WithFields(log.Fields{
+				"name":  name,
+				"error": err,
+			}).Warn("image named with invalid reference produced by buildkit")
+			continue
+		}
+
+		if namedTagged, ok := reference.TagNameOnly(ref).(reference.NamedTagged); ok {
+			i.callbacks.Named(ctx, namedTagged, desc)
+		}
+	}
 }

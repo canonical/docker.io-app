@@ -1,11 +1,11 @@
 // This file is intended for use with "go run"; it isn't really part of the package.
 
 //go:build docsgen
-// +build docsgen
 
 package main
 
 import (
+	"errors"
 	"log"
 	"os"
 
@@ -13,7 +13,6 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/commands"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -65,7 +64,7 @@ func gen(opts *options) error {
 				return err
 			}
 		default:
-			return errors.Errorf("unknown format %q", format)
+			return errors.New("unknown format: " + format)
 		}
 	}
 

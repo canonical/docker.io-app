@@ -1,10 +1,13 @@
 package libnetwork
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/libnetwork/drivers/bridge"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 const libnGWNetwork = "docker_gwbridge"
@@ -14,12 +17,17 @@ func getPlatformOption() EndpointOption {
 }
 
 func (c *Controller) createGWNetwork() (*Network, error) {
-	n, err := c.NewNetwork("bridge", libnGWNetwork, "",
+	ctx := baggage.ContextWithBaggage(context.TODO(), otelutil.MustNewBaggage(
+		otelutil.MustNewMemberRaw(otelutil.TriggerKey, "libnetwork.Controller.createGWNetwork"),
+	))
+
+	n, err := c.NewNetwork(ctx, "bridge", libnGWNetwork, "",
 		NetworkOptionDriverOpts(map[string]string{
 			bridge.BridgeName:         libnGWNetwork,
 			bridge.EnableICC:          strconv.FormatBool(false),
 			bridge.EnableIPMasquerade: strconv.FormatBool(true),
 		}),
+		NetworkOptionEnableIPv4(true),
 		NetworkOptionEnableIPv6(false),
 	)
 	if err != nil {
