@@ -1,3 +1,13 @@
+docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
+
+  * New upstream version 28.2.2
+  * d/h/build-manpages.sh: adjust manpage build script to upstream changes
+  * d/manpages/*: update manpages for version 28.2.2
+  * d/docker.io.docs: update NOTICE files
+  * d/copyright: update copyright data
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 17 Jun 2025 14:51:15 -0300
+
 docker.io-app (27.5.1-0ubuntu4) questing; urgency=medium
 
   * d/control: conflicts/replaces podman-docker (LP: #2037905)
