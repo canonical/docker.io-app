@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package network
 
@@ -42,6 +42,9 @@ func TestNetworkContext(t *testing.T) {
 		{networkContext{
 			n: network.Summary{Driver: "driver_name"},
 		}, "driver_name", ctx.Driver},
+		{networkContext{
+			n: network.Summary{EnableIPv4: true},
+		}, "true", ctx.IPv4},
 		{networkContext{
 			n: network.Summary{EnableIPv6: true},
 		}, "true", ctx.IPv6},
@@ -161,7 +164,6 @@ foobar_bar 2017-01-01 00:00:00 +0000 UTC
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(string(tc.context.Format), func(t *testing.T) {
 			var out bytes.Buffer
 			tc.context.Output = &out
@@ -181,8 +183,8 @@ func TestNetworkContextWriteJSON(t *testing.T) {
 		{ID: "networkID2", Name: "foobar_bar"},
 	}
 	expectedJSONs := []map[string]any{
-		{"Driver": "", "ID": "networkID1", "IPv6": "false", "Internal": "false", "Labels": "", "Name": "foobar_baz", "Scope": "", "CreatedAt": "0001-01-01 00:00:00 +0000 UTC"},
-		{"Driver": "", "ID": "networkID2", "IPv6": "false", "Internal": "false", "Labels": "", "Name": "foobar_bar", "Scope": "", "CreatedAt": "0001-01-01 00:00:00 +0000 UTC"},
+		{"Driver": "", "ID": "networkID1", "IPv4": "false", "IPv6": "false", "Internal": "false", "Labels": "", "Name": "foobar_baz", "Scope": "", "CreatedAt": "0001-01-01 00:00:00 +0000 UTC"},
+		{"Driver": "", "ID": "networkID2", "IPv4": "false", "IPv6": "false", "Internal": "false", "Labels": "", "Name": "foobar_bar", "Scope": "", "CreatedAt": "0001-01-01 00:00:00 +0000 UTC"},
 	}
 
 	out := bytes.NewBufferString("")

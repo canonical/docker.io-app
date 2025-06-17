@@ -12,12 +12,11 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/image"
 	_ "github.com/docker/docker/daemon/graphdriver/register" // register graph drivers
 	"github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/daemon"
 	"github.com/docker/docker/testutil/fakecontext"
@@ -47,13 +46,8 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	client := d.NewClientT(t)
 
 	layerStore, _ := layer.NewStoreFromOptions(layer.StoreOptions{
-		Root:                      d.Root,
-		MetadataStorePathTemplate: filepath.Join(d.RootDir(), "image", "%s", "layerdb"),
-		GraphDriver:               d.StorageDriver(),
-		GraphDriverOptions:        nil,
-		IDMapping:                 idtools.IdentityMapping{},
-		PluginGetter:              nil,
-		ExperimentalEnabled:       false,
+		Root:        d.Root,
+		GraphDriver: d.StorageDriver(),
 	})
 	i := images.NewImageService(images.ImageServiceConfig{
 		LayerStore: layerStore,
@@ -68,7 +62,7 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	defer source.Close()
 	resp, err := client.ImageBuild(ctx,
 		source.AsTarReader(t),
-		types.ImageBuildOptions{
+		build.ImageBuildOptions{
 			Remove:      true,
 			ForceRemove: true,
 			Tags:        []string{imgName},
@@ -77,7 +71,7 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	_, err = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	assert.NilError(t, err)
-	img, _, err := client.ImageInspectWithRaw(ctx, imgName)
+	img, err := client.ImageInspect(ctx, imgName)
 	assert.NilError(t, err)
 
 	// Mark latest image layer to immutable
@@ -85,7 +79,7 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	file, _ := os.Open(data["UpperDir"])
 	attr := 0x00000010
 	fsflags := uintptr(0x40086602)
-	argp := uintptr(unsafe.Pointer(&attr))
+	argp := uintptr(unsafe.Pointer(&attr)) // #nosec G103 -- Ignore "G103: Use of unsafe calls should be audited"
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), fsflags, argp)
 	assert.Equal(t, "errno 0", errno.Error())
 
@@ -93,12 +87,12 @@ func TestRemoveImageGarbageCollector(t *testing.T) {
 	// but marking layer back to mutable before checking errors (so we don't break CI server)
 	_, err = client.ImageRemove(ctx, imgName, image.RemoveOptions{})
 	attr = 0x00000000
-	argp = uintptr(unsafe.Pointer(&attr))
+	argp = uintptr(unsafe.Pointer(&attr)) // #nosec G103 -- Ignore "G103: Use of unsafe calls should be audited"
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), fsflags, argp)
 	assert.Equal(t, "errno 0", errno.Error())
 	assert.Assert(t, err != nil)
 	errStr := err.Error()
-	if !(strings.Contains(errStr, "permission denied") || strings.Contains(errStr, "operation not permitted")) {
+	if !strings.Contains(errStr, "permission denied") && !strings.Contains(errStr, "operation not permitted") {
 		t.Errorf("ImageRemove error not an permission error %s", errStr)
 	}
 

@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package service
 
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/opts"
+	"github.com/docker/cli/opts/swarmopts"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
@@ -42,7 +42,7 @@ func (i *Uint64Opt) Set(s string) error {
 }
 
 // Type returns the type of this option, which will be displayed in `--help` output
-func (i *Uint64Opt) Type() string {
+func (*Uint64Opt) Type() string {
 	return "uint"
 }
 
@@ -67,7 +67,7 @@ func (f *floatValue) Set(s string) error {
 	return err
 }
 
-func (f *floatValue) Type() string {
+func (*floatValue) Type() string {
 	return "float"
 }
 
@@ -114,7 +114,7 @@ func (o *placementPrefOpts) Set(value string) error {
 }
 
 // Type returns a string name for this Option type
-func (o *placementPrefOpts) Type() string {
+func (*placementPrefOpts) Type() string {
 	return "pref"
 }
 
@@ -132,7 +132,7 @@ func (s *ShlexOpt) Set(value string) error {
 }
 
 // Type returns the type of the value
-func (s *ShlexOpt) Type() string {
+func (*ShlexOpt) Type() string {
 	return "command"
 }
 
@@ -363,7 +363,7 @@ func (c *credentialSpecOpt) Set(value string) error {
 	return nil
 }
 
-func (c *credentialSpecOpt) Type() string {
+func (*credentialSpecOpt) Type() string {
 	return "credential-spec"
 }
 
@@ -395,7 +395,7 @@ func convertNetworks(networks opts.NetworkOpt) []swarm.NetworkAttachmentConfig {
 
 type endpointOptions struct {
 	mode         string
-	publishPorts opts.PortOpt
+	publishPorts swarmopts.PortOpt
 }
 
 func (e *endpointOptions) ToEndpointSpec() *swarm.EndpointSpec {
@@ -422,7 +422,7 @@ func (ldo *logDriverOptions) toLogDriver() *swarm.Driver {
 	// set the log driver only if specified.
 	return &swarm.Driver{
 		Name:    ldo.name,
-		Options: opts.ConvertKVStringsToMap(ldo.opts.GetAll()),
+		Options: opts.ConvertKVStringsToMap(ldo.opts.GetSlice()),
 	}
 }
 
@@ -553,8 +553,8 @@ type serviceOptions struct {
 	logDriver logDriverOptions
 
 	healthcheck healthCheckOptions
-	secrets     opts.SecretOpt
-	configs     opts.ConfigOpt
+	secrets     swarmopts.SecretOpt
+	configs     swarmopts.ConfigOpt
 
 	isolation string
 }
@@ -639,7 +639,7 @@ func (options *serviceOptions) ToStopGracePeriod(flags *pflag.FlagSet) *time.Dur
 // makeEnv gets the environment variables from the command line options and
 // returns a slice of strings to use in the service spec when doing ToService
 func (options *serviceOptions) makeEnv() ([]string, error) {
-	envVariables, err := opts.ReadKVEnvStrings(options.envFile.GetAll(), options.env.GetAll())
+	envVariables, err := opts.ReadKVEnvStrings(options.envFile.GetSlice(), options.env.GetSlice())
 	if err != nil {
 		return nil, err
 	}
@@ -712,12 +712,12 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 		return service, err
 	}
 
-	capAdd, capDrop := opts.EffectiveCapAddCapDrop(options.capAdd.GetAll(), options.capDrop.GetAll())
+	capAdd, capDrop := opts.EffectiveCapAddCapDrop(options.capAdd.GetSlice(), options.capDrop.GetSlice())
 
 	service = swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
 			Name:   options.name,
-			Labels: opts.ConvertKVStringsToMap(options.labels.GetAll()),
+			Labels: opts.ConvertKVStringsToMap(options.labels.GetSlice()),
 		},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: &swarm.ContainerSpec{
@@ -726,25 +726,25 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 				Command:    options.entrypoint.Value(),
 				Env:        currentEnv,
 				Hostname:   options.hostname,
-				Labels:     opts.ConvertKVStringsToMap(options.containerLabels.GetAll()),
+				Labels:     opts.ConvertKVStringsToMap(options.containerLabels.GetSlice()),
 				Dir:        options.workdir,
 				User:       options.user,
-				Groups:     options.groups.GetAll(),
+				Groups:     options.groups.GetSlice(),
 				StopSignal: options.stopSignal,
 				TTY:        options.tty,
 				ReadOnly:   options.readOnly,
 				Mounts:     options.mounts.Value(),
 				Init:       &options.init,
 				DNSConfig: &swarm.DNSConfig{
-					Nameservers: options.dns.GetAll(),
-					Search:      options.dnsSearch.GetAll(),
-					Options:     options.dnsOption.GetAll(),
+					Nameservers: options.dns.GetSlice(),
+					Search:      options.dnsSearch.GetSlice(),
+					Options:     options.dnsOption.GetSlice(),
 				},
-				Hosts:           convertExtraHostsToSwarmHosts(options.hosts.GetAll()),
+				Hosts:           convertExtraHostsToSwarmHosts(options.hosts.GetSlice()),
 				StopGracePeriod: options.ToStopGracePeriod(flags),
 				Healthcheck:     healthConfig,
 				Isolation:       container.Isolation(options.isolation),
-				Sysctls:         opts.ConvertKVStringsToMap(options.sysctls.GetAll()),
+				Sysctls:         opts.ConvertKVStringsToMap(options.sysctls.GetSlice()),
 				CapabilityAdd:   capAdd,
 				CapabilityDrop:  capDrop,
 				Ulimits:         options.ulimits.GetList(),
@@ -754,7 +754,7 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 			Resources:     resources,
 			RestartPolicy: options.restartPolicy.ToRestartPolicy(flags),
 			Placement: &swarm.Placement{
-				Constraints: options.constraints.GetAll(),
+				Constraints: options.constraints.GetSlice(),
 				Preferences: options.placementPrefs.prefs,
 				MaxReplicas: options.maxReplicas,
 			},
@@ -1047,12 +1047,3 @@ const (
 	flagUlimitRemove            = "ulimit-rm"
 	flagOomScoreAdj             = "oom-score-adj"
 )
-
-func validateAPIVersion(c swarm.ServiceSpec, serverAPIVersion string) error {
-	for _, m := range c.TaskTemplate.ContainerSpec.Mounts {
-		if err := command.ValidateMountWithAPIVersion(m, serverAPIVersion); err != nil {
-			return err
-		}
-	}
-	return nil
-}

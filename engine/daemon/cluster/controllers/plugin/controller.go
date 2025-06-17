@@ -5,13 +5,13 @@ import (
 	"io"
 	"net/http"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm/runtime"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/plugin"
 	v2 "github.com/docker/docker/plugin/v2"
 	"github.com/gogo/protobuf/proto"
@@ -87,7 +87,7 @@ func (p *Controller) Update(ctx context.Context, t *api.Task) error {
 }
 
 // Prepare is the prepare phase from swarmkit
-func (p *Controller) Prepare(ctx context.Context) (err error) {
+func (p *Controller) Prepare(ctx context.Context) (retErr error) {
 	p.logger.Debug("Prepare")
 
 	remote, err := reference.ParseNormalizedNamed(p.spec.Remote)
@@ -105,7 +105,7 @@ func (p *Controller) Prepare(ctx context.Context) (err error) {
 	pl, err := p.backend.Get(p.spec.Name)
 
 	defer func() {
-		if pl != nil && err == nil {
+		if pl != nil && retErr == nil {
 			pl.Acquire()
 		}
 	}()
@@ -200,7 +200,7 @@ func (p *Controller) Wait(ctx context.Context) error {
 }
 
 func isNotFound(err error) bool {
-	return errdefs.IsNotFound(err)
+	return cerrdefs.IsNotFound(err)
 }
 
 // Shutdown is the shutdown phase from swarmkit

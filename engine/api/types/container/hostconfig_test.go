@@ -3,7 +3,6 @@ package container
 import (
 	"testing"
 
-	"github.com/docker/docker/errdefs"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -91,15 +90,24 @@ func TestValidateRestartPolicy(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateRestartPolicy(tc.input)
 			if tc.expectedErr == "" {
 				assert.Check(t, err)
 			} else {
-				assert.Check(t, is.ErrorType(err, errdefs.IsInvalidParameter))
+				assert.Check(t, is.ErrorType(err, isInvalidParameter))
 				assert.Check(t, is.Error(err, tc.expectedErr))
 			}
 		})
 	}
+}
+
+// isInvalidParameter is a minimal implementation of [github.com/containerd/errdefs.IsInvalidArgument],
+// because this was the only import of that package in api/types, which is the
+// package imported by external users.
+func isInvalidParameter(err error) bool {
+	_, ok := err.(interface {
+		InvalidParameter()
+	})
+	return ok
 }

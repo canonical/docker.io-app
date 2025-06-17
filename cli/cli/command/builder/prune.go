@@ -9,10 +9,10 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
+	"github.com/docker/cli/internal/prompt"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/errdefs"
-	units "github.com/docker/go-units"
+	"github.com/docker/docker/api/types/build"
+	"github.com/docker/go-units"
 	"github.com/spf13/cobra"
 )
 
@@ -69,18 +69,18 @@ func runPrune(ctx context.Context, dockerCli command.Cli, options pruneOptions) 
 		warning = allCacheWarning
 	}
 	if !options.force {
-		r, err := command.PromptForConfirmation(ctx, dockerCli.In(), dockerCli.Out(), warning)
+		r, err := prompt.Confirm(ctx, dockerCli.In(), dockerCli.Out(), warning)
 		if err != nil {
 			return 0, "", err
 		}
 		if !r {
-			return 0, "", errdefs.Cancelled(errors.New("builder prune has been cancelled"))
+			return 0, "", cancelledErr{errors.New("builder prune has been cancelled")}
 		}
 	}
 
-	report, err := dockerCli.Client().BuildCachePrune(ctx, types.BuildCachePruneOptions{
+	report, err := dockerCli.Client().BuildCachePrune(ctx, build.CachePruneOptions{
 		All:         options.all,
-		KeepStorage: options.keepStorage.Value(),
+		KeepStorage: options.keepStorage.Value(), // FIXME(thaJeztah): rewrite to use new options; see https://github.com/moby/moby/pull/48720
 		Filters:     pruneFilters,
 	})
 	if err != nil {
@@ -99,6 +99,10 @@ func runPrune(ctx context.Context, dockerCli command.Cli, options pruneOptions) 
 
 	return report.SpaceReclaimed, output, nil
 }
+
+type cancelledErr struct{ error }
+
+func (cancelledErr) Cancelled() {}
 
 // CachePrune executes a prune command for build cache
 func CachePrune(ctx context.Context, dockerCli command.Cli, all bool, filter opts.FilterOpt) (uint64, string, error) {

@@ -7,10 +7,10 @@ import (
 	nethttp "net/http"
 	"time"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/gc"
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/rootfs"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/pkg/gc"
+	"github.com/containerd/containerd/v2/pkg/rootfs"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -35,6 +35,7 @@ import (
 	"github.com/moby/buildkit/snapshot"
 	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
 	"github.com/moby/buildkit/solver"
+	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
 	"github.com/moby/buildkit/solver/llbsolver/mounts"
 	"github.com/moby/buildkit/solver/llbsolver/ops"
 	"github.com/moby/buildkit/solver/pb"
@@ -86,6 +87,7 @@ type Opt struct {
 	Exporter          exporter.Exporter
 	Layers            LayerAccess
 	Platforms         []ocispec.Platform
+	CDIManager        *cdidevices.Manager
 }
 
 // Worker is a local worker instance with dedicated snapshotter, cache, and so on.
@@ -156,20 +158,36 @@ func (w *Worker) Labels() map[string]string {
 // Platforms returns one or more platforms supported by the image.
 func (w *Worker) Platforms(noCache bool) []ocispec.Platform {
 	if noCache {
-		pm := make(map[string]struct{}, len(w.Opt.Platforms))
-		for _, p := range w.Opt.Platforms {
-			pm[platforms.Format(p)] = struct{}{}
-		}
-		for _, p := range archutil.SupportedPlatforms(noCache) {
-			if _, ok := pm[platforms.Format(p)]; !ok {
-				w.Opt.Platforms = append(w.Opt.Platforms, p)
-			}
-		}
+		w.Opt.Platforms = mergePlatforms(w.Opt.Platforms, archutil.SupportedPlatforms(noCache))
 	}
 	if len(w.Opt.Platforms) == 0 {
 		return []ocispec.Platform{platforms.DefaultSpec()}
 	}
 	return w.Opt.Platforms
+}
+
+// mergePlatforms merges the defined platforms with the supported platforms
+// and returns a new slice of platforms. It ensures no duplicates.
+func mergePlatforms(defined, supported []ocispec.Platform) []ocispec.Platform {
+	result := []ocispec.Platform{}
+	matchers := make([]platforms.MatchComparer, len(defined))
+	for i, p := range defined {
+		result = append(result, p)
+		matchers[i] = platforms.Only(p)
+	}
+	for _, p := range supported {
+		exists := false
+		for _, m := range matchers {
+			if m.Match(p) {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 // GCPolicy returns automatic GC Policy
@@ -351,7 +369,7 @@ func (w *Worker) GetRemotes(ctx context.Context, ref cache.ImmutableRef, createI
 	descriptors := make([]ocispec.Descriptor, len(diffIDs))
 	for i, dgst := range diffIDs {
 		descriptors[i] = ocispec.Descriptor{
-			MediaType: images.MediaTypeDockerSchema2Layer,
+			MediaType: c8dimages.MediaTypeDockerSchema2Layer,
 			Digest:    digest.Digest(dgst),
 			Size:      -1,
 		}
@@ -480,6 +498,10 @@ func (w *Worker) CacheManager() cache.Manager {
 	return w.Opt.CacheManager
 }
 
+func (w *Worker) CDIManager() *cdidevices.Manager {
+	return w.Opt.CDIManager
+}
+
 type discardProgress struct{}
 
 func (*discardProgress) WriteProgress(_ pkgprogress.Progress) error {
@@ -561,15 +583,15 @@ func getLayers(ctx context.Context, descs []ocispec.Descriptor) ([]rootfs.Layer,
 
 func oneOffProgress(ctx context.Context, id string) func(err error) error {
 	pw, _, _ := progress.NewFromContext(ctx)
-	now := time.Now()
+	s := time.Now()
 	st := progress.Status{
-		Started: &now,
+		Started: &s,
 	}
 	_ = pw.Write(id, st)
 	return func(err error) error {
 		// TODO: set error on status
-		now := time.Now()
-		st.Completed = &now
+		c := time.Now()
+		st.Completed = &c
 		_ = pw.Write(id, st)
 		_ = pw.Close()
 		return err

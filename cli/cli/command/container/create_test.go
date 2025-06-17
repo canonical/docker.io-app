@@ -19,7 +19,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/google/go-cmp/cmp"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -113,7 +113,6 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.PullPolicy, func(t *testing.T) {
 			pullCounter := 0
 
@@ -122,7 +121,7 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 					config *container.Config,
 					hostConfig *container.HostConfig,
 					networkingConfig *network.NetworkingConfig,
-					platform *specs.Platform,
+					platform *ocispec.Platform,
 					containerName string,
 				) (container.CreateResponse, error) {
 					defer func() { tc.ResponseCounter++ }()
@@ -176,7 +175,6 @@ func TestCreateContainerImagePullPolicyInvalid(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.PullPolicy, func(t *testing.T) {
 			dockerCli := test.NewFakeCli(&fakeClient{})
 			err := runCreate(
@@ -189,8 +187,36 @@ func TestCreateContainerImagePullPolicyInvalid(t *testing.T) {
 
 			statusErr := cli.StatusError{}
 			assert.Check(t, errors.As(err, &statusErr))
-			assert.Equal(t, statusErr.StatusCode, 125)
-			assert.Check(t, is.Contains(dockerCli.ErrBuffer().String(), tc.ExpectedErrMsg))
+			assert.Check(t, is.Equal(statusErr.StatusCode, 125))
+			assert.Check(t, is.ErrorContains(err, tc.ExpectedErrMsg))
+		})
+	}
+}
+
+func TestCreateContainerValidateFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		expectedErr string
+	}{
+		{
+			name:        "with invalid --attach value",
+			args:        []string{"--attach", "STDINFO", "myimage"},
+			expectedErr: `invalid argument "STDINFO" for "-a, --attach" flag: valid streams are STDIN, STDOUT and STDERR`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewCreateCommand(test.NewFakeCli(&fakeClient{}))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			if tc.expectedErr != "" {
+				assert.Check(t, is.ErrorContains(err, tc.expectedErr))
+			} else {
+				assert.Check(t, is.Nil(err))
+			}
 		})
 	}
 }
@@ -222,54 +248,48 @@ func TestNewCreateCommandWithContentTrustErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
-		fakeCLI := test.NewFakeCli(&fakeClient{
-			createContainerFunc: func(config *container.Config,
-				hostConfig *container.HostConfig,
-				networkingConfig *network.NetworkingConfig,
-				platform *specs.Platform,
-				containerName string,
-			) (container.CreateResponse, error) {
-				return container.CreateResponse{}, errors.New("shouldn't try to pull image")
-			},
-		}, test.EnableContentTrust)
-		fakeCLI.SetNotaryClient(tc.notaryFunc)
-		cmd := NewCreateCommand(fakeCLI)
-		cmd.SetOut(io.Discard)
-		cmd.SetErr(io.Discard)
-		cmd.SetArgs(tc.args)
-		err := cmd.Execute()
-		assert.ErrorContains(t, err, tc.expectedError)
+		t.Run(tc.name, func(t *testing.T) {
+			fakeCLI := test.NewFakeCli(&fakeClient{
+				createContainerFunc: func(config *container.Config,
+					hostConfig *container.HostConfig,
+					networkingConfig *network.NetworkingConfig,
+					platform *ocispec.Platform,
+					containerName string,
+				) (container.CreateResponse, error) {
+					return container.CreateResponse{}, errors.New("shouldn't try to pull image")
+				},
+			}, test.EnableContentTrust)
+			fakeCLI.SetNotaryClient(tc.notaryFunc)
+			cmd := NewCreateCommand(fakeCLI)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+			err := cmd.Execute()
+			assert.ErrorContains(t, err, tc.expectedError)
+		})
 	}
 }
 
 func TestNewCreateCommandWithWarnings(t *testing.T) {
 	testCases := []struct {
-		name    string
-		args    []string
-		warning bool
+		name     string
+		args     []string
+		warnings []string
+		warning  bool
 	}{
 		{
-			name: "container-create-without-oom-kill-disable",
+			name: "container-create-no-warnings",
 			args: []string{"image:tag"},
 		},
 		{
-			name: "container-create-oom-kill-disable-false",
-			args: []string{"--oom-kill-disable=false", "image:tag"},
+			name:     "container-create-daemon-single-warning",
+			args:     []string{"image:tag"},
+			warnings: []string{"warning from daemon"},
 		},
 		{
-			name:    "container-create-oom-kill-without-memory-limit",
-			args:    []string{"--oom-kill-disable", "image:tag"},
-			warning: true,
-		},
-		{
-			name:    "container-create-oom-kill-true-without-memory-limit",
-			args:    []string{"--oom-kill-disable=true", "image:tag"},
-			warning: true,
-		},
-		{
-			name: "container-create-oom-kill-true-with-memory-limit",
-			args: []string{"--oom-kill-disable=true", "--memory=100M", "image:tag"},
+			name:     "container-create-daemon-multiple-warnings",
+			args:     []string{"image:tag"},
+			warnings: []string{"warning from daemon", "another warning from daemon"},
 		},
 		{
 			name:    "container-create-localhost-dns",
@@ -283,27 +303,26 @@ func TestNewCreateCommandWithWarnings(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			cli := test.NewFakeCli(&fakeClient{
+			fakeCLI := test.NewFakeCli(&fakeClient{
 				createContainerFunc: func(config *container.Config,
 					hostConfig *container.HostConfig,
 					networkingConfig *network.NetworkingConfig,
-					platform *specs.Platform,
+					platform *ocispec.Platform,
 					containerName string,
 				) (container.CreateResponse, error) {
-					return container.CreateResponse{}, nil
+					return container.CreateResponse{Warnings: tc.warnings}, nil
 				},
 			})
-			cmd := NewCreateCommand(cli)
+			cmd := NewCreateCommand(fakeCLI)
 			cmd.SetOut(io.Discard)
 			cmd.SetArgs(tc.args)
 			err := cmd.Execute()
 			assert.NilError(t, err)
-			if tc.warning {
-				golden.Assert(t, cli.ErrBuffer().String(), tc.name+".golden")
+			if tc.warning || len(tc.warnings) > 0 {
+				golden.Assert(t, fakeCLI.ErrBuffer().String(), tc.name+".golden")
 			} else {
-				assert.Equal(t, cli.ErrBuffer().String(), "")
+				assert.Equal(t, fakeCLI.ErrBuffer().String(), "")
 			}
 		})
 	}
@@ -328,7 +347,7 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 		createContainerFunc: func(config *container.Config,
 			hostConfig *container.HostConfig,
 			networkingConfig *network.NetworkingConfig,
-			platform *specs.Platform,
+			platform *ocispec.Platform,
 			containerName string,
 		) (container.CreateResponse, error) {
 			sort.Strings(config.Env)
@@ -356,5 +375,5 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 
 type fakeNotFound struct{}
 
-func (f fakeNotFound) NotFound()     {}
-func (f fakeNotFound) Error() string { return "error fake not found" }
+func (fakeNotFound) NotFound()     {}
+func (fakeNotFound) Error() string { return "error fake not found" }

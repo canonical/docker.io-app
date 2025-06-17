@@ -19,14 +19,14 @@ type fakeClient struct {
 	client.Client
 
 	version            string
-	containerListFunc  func(context.Context, container.ListOptions) ([]types.Container, error)
+	containerListFunc  func(context.Context, container.ListOptions) ([]container.Summary, error)
 	containerPruneFunc func(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error)
 	eventsFn           func(context.Context, events.ListOptions) (<-chan events.Message, <-chan error)
 	imageListFunc      func(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 	infoFunc           func(ctx context.Context) (system.Info, error)
 	networkListFunc    func(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	networkPruneFunc   func(ctx context.Context, pruneFilter filters.Args) (network.PruneReport, error)
-	nodeListFunc       func(ctx context.Context, options types.NodeListOptions) ([]swarm.Node, error)
+	nodeListFunc       func(ctx context.Context, options swarm.NodeListOptions) ([]swarm.Node, error)
 	serverVersion      func(ctx context.Context) (types.Version, error)
 	volumeListFunc     func(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error)
 }
@@ -35,11 +35,11 @@ func (cli *fakeClient) ClientVersion() string {
 	return cli.version
 }
 
-func (cli *fakeClient) ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error) {
+func (cli *fakeClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
 	if cli.containerListFunc != nil {
 		return cli.containerListFunc(ctx, options)
 	}
-	return []types.Container{}, nil
+	return []container.Summary{}, nil
 }
 
 func (cli *fakeClient) ContainersPrune(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error) {
@@ -81,7 +81,7 @@ func (cli *fakeClient) NetworksPrune(ctx context.Context, pruneFilter filters.Ar
 	return network.PruneReport{}, nil
 }
 
-func (cli *fakeClient) NodeList(ctx context.Context, options types.NodeListOptions) ([]swarm.Node, error) {
+func (cli *fakeClient) NodeList(ctx context.Context, options swarm.NodeListOptions) ([]swarm.Node, error) {
 	if cli.nodeListFunc != nil {
 		return cli.nodeListFunc(ctx, options)
 	}

@@ -8,12 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images"
-	containerdimages "github.com/containerd/containerd/images"
-	containerdlabels "github.com/containerd/containerd/labels"
-	"github.com/containerd/containerd/remotes"
-	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
+	containerdlabels "github.com/containerd/containerd/v2/pkg/labels"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -21,8 +20,8 @@ import (
 	"github.com/docker/docker/api/types/auxprogress"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/registry"
-	dimages "github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/metrics"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/opencontainers/go-digest"
@@ -45,7 +44,7 @@ func (i *ImageService) PushImage(ctx context.Context, sourceRef reference.Named,
 	start := time.Now()
 	defer func() {
 		if retErr == nil {
-			dimages.ImageActions.WithValues("push").UpdateSince(start)
+			metrics.ImageActions.WithValues("push").UpdateSince(start)
 		}
 	}()
 	out := streamformatter.NewJSONProgressOutput(outStream, false)
@@ -121,7 +120,7 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 	jobsQueue := newJobs()
 	finishProgress := jobsQueue.showProgress(ctx, out, combinedProgress([]progressUpdater{
 		&pp,
-		pullProgress{showExists: false, store: store},
+		&pullProgress{showExists: false, store: store},
 	}))
 	defer func() {
 		finishProgress()
@@ -145,34 +144,37 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 	wrapped := wrapWithFakeMountableBlobs(store, mountableBlobs)
 	store = wrapped
 
-	pusher, err := resolver.Pusher(ctx, targetRef.String())
+	// Annotate ref with digest to push only push tag for single digest
+	ref := targetRef
+	if _, digested := ref.(reference.Digested); !digested {
+		ref, err = reference.WithDigest(ref, target.Digest)
+		if err != nil {
+			return err
+		}
+	}
+
+	pusher, err := resolver.Pusher(ctx, ref.String())
 	if err != nil {
 		return err
 	}
 
-	addLayerJobs := containerdimages.HandlerFunc(
-		func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
-			switch {
-			case containerdimages.IsIndexType(desc.MediaType),
-				containerdimages.IsManifestType(desc.MediaType),
-				containerdimages.IsConfigType(desc.MediaType):
-			default:
-				jobsQueue.Add(desc)
-			}
+	addLayerJobs := c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+		if showBlobProgress(desc) {
+			jobsQueue.Add(desc)
+		}
 
-			return nil, nil
-		},
-	)
+		return nil, nil
+	})
 
-	handlerWrapper := func(h images.Handler) images.Handler {
-		return containerdimages.Handlers(addLayerJobs, h)
+	handlerWrapper := func(h c8dimages.Handler) c8dimages.Handler {
+		return c8dimages.Handlers(addLayerJobs, h)
 	}
 
 	err = remotes.PushContent(ctx, pusher, target, store, limiter, platforms.All, handlerWrapper)
 	if err != nil {
 		// If push failed because of a missing content, no specific platform was requested
 		// and the target is an index, select a platform-specific manifest to push instead.
-		if cerrdefs.IsNotFound(err) && containerdimages.IsIndexType(target.MediaType) && platform == nil {
+		if cerrdefs.IsNotFound(err) && c8dimages.IsIndexType(target.MediaType) && platform == nil {
 			var newTarget ocispec.Descriptor
 			newTarget, err = i.getPushDescriptor(ctx, img, nil)
 			if err != nil {
@@ -198,7 +200,7 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 
 		if err != nil {
 			if !cerrdefs.IsNotFound(err) {
-				return errdefs.System(err)
+				return translateRegistryError(ctx, err)
 			}
 			progress.Aux(out, auxprogress.ContentMissing{
 				ContentMissing: true,
@@ -210,22 +212,13 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 
 	appendDistributionSourceLabel(ctx, realStore, targetRef, target)
 
-	i.LogImageEvent(reference.FamiliarString(targetRef), reference.FamiliarName(targetRef), events.ActionPush)
+	i.LogImageEvent(ctx, reference.FamiliarString(targetRef), reference.FamiliarName(targetRef), events.ActionPush)
 
 	return nil
 }
 
-func (i *ImageService) getPushDescriptor(ctx context.Context, img containerdimages.Image, platform *ocispec.Platform) (ocispec.Descriptor, error) {
-	// Allow to override the host platform for testing purposes.
-	hostPlatform := i.defaultPlatformOverride
-	if hostPlatform == nil {
-		hostPlatform = platforms.Default()
-	}
-
-	pm := matchAllWithPreference(hostPlatform)
-	if platform != nil {
-		pm = platforms.OnlyStrict(*platform)
-	}
+func (i *ImageService) getPushDescriptor(ctx context.Context, img c8dimages.Image, platform *ocispec.Platform) (ocispec.Descriptor, error) {
+	pm := i.matchRequestedOrDefault(platforms.OnlyStrict, platform)
 
 	anyMissing := false
 
@@ -265,12 +258,16 @@ func (i *ImageService) getPushDescriptor(ctx context.Context, img containerdimag
 		return nil
 	})
 	if err != nil {
-		return ocispec.Descriptor{}, err
+		return ocispec.Descriptor{}, errdefs.System(err)
 	}
 
 	switch len(presentMatchingManifests) {
 	case 0:
-		return ocispec.Descriptor{}, errdefs.NotFound(fmt.Errorf("no suitable image manifest found for platform %s", platforms.FormatAll(*platform)))
+		err := &errPlatformNotFound{imageRef: imageFamiliarName(img)}
+		if pm.Requested != nil {
+			err.wanted = *pm.Requested
+		}
+		return ocispec.Descriptor{}, err
 	case 1:
 		// Only one manifest is available AND matching the requested platform.
 
@@ -295,7 +292,7 @@ func (i *ImageService) getPushDescriptor(ctx context.Context, img containerdimag
 
 			// No specific platform requested and not all manifests are available.
 			// Select the manifest that matches the host platform the best.
-			if bestMatch != nil && hostPlatform.Match(bestMatchPlatform) {
+			if bestMatch != nil && i.hostPlatformMatcher().Match(bestMatchPlatform) {
 				return bestMatch.Target(), nil
 			}
 
@@ -316,7 +313,7 @@ func appendDistributionSourceLabel(ctx context.Context, realStore content.Store,
 	}
 
 	handler := presentChildrenHandler(realStore, appendSource)
-	if err := containerdimages.Dispatch(ctx, handler, nil, target); err != nil {
+	if err := c8dimages.Dispatch(ctx, handler, nil, target); err != nil {
 		// Shouldn't happen, but even if it would fail, then make it only a warning
 		// because it doesn't affect the pushed data.
 		log.G(ctx).WithError(err).Warn("failed to append distribution source labels to pushed content")
@@ -334,7 +331,7 @@ func findMissingMountable(ctx context.Context, store content.Store, queue *jobs,
 
 	sources, err := getDigestSources(ctx, store, target.Digest)
 	if err != nil {
-		if !errdefs.IsNotFound(err) {
+		if !cerrdefs.IsNotFound(err) {
 			return nil, err
 		}
 		log.G(ctx).WithField("target", target).Debug("distribution source label not found")
@@ -360,10 +357,10 @@ func findMissingMountable(ctx context.Context, store content.Store, queue *jobs,
 			return nil, nil
 		}
 
-		return containerdimages.Children(ctx, store, desc)
+		return c8dimages.Children(ctx, store, desc)
 	}
 
-	err = containerdimages.Dispatch(ctx, containerdimages.HandlerFunc(handler), limiter, target)
+	err = c8dimages.Dispatch(ctx, c8dimages.HandlerFunc(handler), limiter, target)
 	if err != nil {
 		return nil, err
 	}
@@ -429,10 +426,10 @@ func (source distributionSource) GetReference(dgst digest.Digest) (reference.Nam
 // canBeMounted returns if the content with given media type can be cross-repo
 // mounted when pushing it to a remote reference ref.
 func canBeMounted(mediaType string, targetRef reference.Named, source distributionSource) bool {
-	if containerdimages.IsManifestType(mediaType) {
+	if c8dimages.IsManifestType(mediaType) {
 		return false
 	}
-	if containerdimages.IsIndexType(mediaType) {
+	if c8dimages.IsIndexType(mediaType) {
 		return false
 	}
 

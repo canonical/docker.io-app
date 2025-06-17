@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/internal/nlwrap"
@@ -39,13 +38,8 @@ func init() {
 }
 
 var (
-	once             sync.Once
-	garbagePathMap   = make(map[string]bool)
-	gpmLock          sync.Mutex
-	gpmWg            sync.WaitGroup
-	gpmCleanupPeriod = 60 * time.Second
-	gpmChan          = make(chan chan struct{})
-	netnsBasePath    = filepath.Join(defaultPrefix, "netns")
+	once          sync.Once
+	netnsBasePath = filepath.Join(defaultPrefix, "netns")
 )
 
 // SetBasePath sets the base url prefix for the ns path
@@ -62,78 +56,6 @@ func createBasePath() {
 	if err != nil {
 		panic("Could not create net namespace path directory")
 	}
-
-	// Start the garbage collection go routine
-	go removeUnusedPaths()
-}
-
-func removeUnusedPaths() {
-	gpmLock.Lock()
-	period := gpmCleanupPeriod
-	gpmLock.Unlock()
-
-	ticker := time.NewTicker(period)
-	for {
-		var (
-			gc   chan struct{}
-			gcOk bool
-		)
-
-		select {
-		case <-ticker.C:
-		case gc, gcOk = <-gpmChan:
-		}
-
-		gpmLock.Lock()
-		pathList := make([]string, 0, len(garbagePathMap))
-		for path := range garbagePathMap {
-			pathList = append(pathList, path)
-		}
-		garbagePathMap = make(map[string]bool)
-		gpmWg.Add(1)
-		gpmLock.Unlock()
-
-		for _, path := range pathList {
-			os.Remove(path)
-		}
-
-		gpmWg.Done()
-		if gcOk {
-			close(gc)
-		}
-	}
-}
-
-func addToGarbagePaths(path string) {
-	gpmLock.Lock()
-	garbagePathMap[path] = true
-	gpmLock.Unlock()
-}
-
-func removeFromGarbagePaths(path string) {
-	gpmLock.Lock()
-	delete(garbagePathMap, path)
-	gpmLock.Unlock()
-}
-
-// GC triggers garbage collection of namespace path right away
-// and waits for it.
-func GC() {
-	gpmLock.Lock()
-	if len(garbagePathMap) == 0 {
-		// No need for GC if map is empty
-		gpmLock.Unlock()
-		return
-	}
-	gpmLock.Unlock()
-
-	// if content exists in the garbage paths
-	// we can trigger GC to run, providing a
-	// channel to be notified on completion
-	waitGC := make(chan struct{})
-	gpmChan <- waitGC
-	// wait for GC completion
-	<-waitGC
 }
 
 // GenerateKey generates a sandbox key based on the passed
@@ -191,7 +113,7 @@ func NewSandbox(key string, osCreate, isRestore bool) (*Namespace, error) {
 		once.Do(createBasePath)
 	}
 
-	n := &Namespace{path: key, isDefault: !osCreate, nextIfIndex: make(map[string]int)}
+	n := &Namespace{path: key, isDefault: !osCreate}
 
 	sboxNs, err := netns.GetFromPath(n.path)
 	if err != nil {
@@ -234,7 +156,7 @@ func GetSandboxForExternalKey(basePath string, key string) (*Namespace, error) {
 	if err := mountNetworkNamespace(basePath, key); err != nil {
 		return nil, err
 	}
-	n := &Namespace{path: key, nextIfIndex: make(map[string]int)}
+	n := &Namespace{path: key}
 
 	sboxNs, err := netns.GetFromPath(n.path)
 	if err != nil {
@@ -286,17 +208,9 @@ func unmountNamespaceFile(path string) {
 
 func createNamespaceFile(path string) error {
 	once.Do(createBasePath)
-	// Remove it from garbage collection list if present
-	removeFromGarbagePaths(path)
 
 	// If the path is there unmount it first
 	unmountNamespaceFile(path)
-
-	// wait for garbage collection to complete if it is in progress
-	// before trying to create the file.
-	//
-	// TODO(aker): This garbage-collection was for a kernel bug in kernels 3.18-4.0.1: is this still needed on current kernels (and on kernel 3.10)? see https://github.com/moby/moby/pull/46315/commits/c0a6beba8e61d4019e1806d5241ba22007072ca2#r1331327103
-	gpmWg.Wait()
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -311,17 +225,17 @@ func createNamespaceFile(path string) error {
 // or sets the gateway etc. It holds a list of Interfaces, routes etc., and more
 // can be added dynamically.
 type Namespace struct {
-	path                string
+	path                string // path is the absolute path to the network namespace. It is safe to access it concurrently.
 	iFaces              []*Interface
 	gw                  net.IP
 	gwv6                net.IP
+	defRoute4SrcName    string
+	defRoute6SrcName    string
 	staticRoutes        []*types.StaticRoute
-	neighbors           []*neigh
-	nextIfIndex         map[string]int
-	isDefault           bool
+	isDefault           bool // isDefault is true when Namespace represents the host network namespace. It is safe to access it concurrently.
 	ipv6LoEnabledOnce   sync.Once
 	ipv6LoEnabledCached bool
-	nlHandle            nlwrap.Handle
+	nlHandle            nlwrap.Handle // nlHandle is the netlink handle for the network namespace. It is safe to access it concurrently.
 	mu                  sync.Mutex
 }
 
@@ -333,6 +247,17 @@ func (n *Namespace) Interfaces() []*Interface {
 	ifaces := make([]*Interface, len(n.iFaces))
 	copy(ifaces, n.iFaces)
 	return ifaces
+}
+
+func (n *Namespace) ifaceBySrcName(srcName string) *Interface {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, iface := range n.iFaces {
+		if iface.srcName == srcName {
+			return iface
+		}
+	}
+	return nil
 }
 
 func (n *Namespace) loopbackUp() error {
@@ -368,7 +293,7 @@ func (n *Namespace) RemoveAliasIP(ifName string, ip *net.IPNet) error {
 
 // DisableARPForVIP disables ARP replies and requests for VIP addresses
 // on a particular interface.
-func (n *Namespace) DisableARPForVIP(srcName string) (Err error) {
+func (n *Namespace) DisableARPForVIP(srcName string) (retErr error) {
 	dstName := ""
 	for _, i := range n.Interfaces() {
 		if i.SrcName() == srcName {
@@ -383,19 +308,19 @@ func (n *Namespace) DisableARPForVIP(srcName string) (Err error) {
 	err := n.InvokeFunc(func() {
 		path := filepath.Join("/proc/sys/net/ipv4/conf", dstName, "arp_ignore")
 		if err := os.WriteFile(path, []byte{'1', '\n'}, 0o644); err != nil {
-			Err = fmt.Errorf("Failed to set %s to 1: %v", path, err)
+			retErr = fmt.Errorf("Failed to set %s to 1: %v", path, err)
 			return
 		}
 		path = filepath.Join("/proc/sys/net/ipv4/conf", dstName, "arp_announce")
 		if err := os.WriteFile(path, []byte{'2', '\n'}, 0o644); err != nil {
-			Err = fmt.Errorf("Failed to set %s to 2: %v", path, err)
+			retErr = fmt.Errorf("Failed to set %s to 2: %v", path, err)
 			return
 		}
 	})
 	if err != nil {
 		return err
 	}
-	return
+	return retErr
 }
 
 // InvokeFunc invoke a function in the network namespace.
@@ -464,16 +389,18 @@ func (n *Namespace) Destroy() error {
 		return err
 	}
 
-	// Stash it into the garbage collection list
-	addToGarbagePaths(n.path)
+	// Remove the path where the netns was mounted
+	if err := os.Remove(n.path); err != nil {
+		log.G(context.TODO()).WithError(err).Error("error removing namespace file")
+	}
 	return nil
 }
 
-// Restore restores the network namespace.
-func (n *Namespace) Restore(interfaces map[Iface][]IfaceOption, routes []*types.StaticRoute, gw net.IP, gw6 net.IP) error {
+// RestoreInterfaces restores the network namespace's interfaces.
+func (n *Namespace) RestoreInterfaces(interfaces map[Iface][]IfaceOption) error {
 	// restore interfaces
 	for iface, opts := range interfaces {
-		i, err := newInterface(n, iface.SrcName, iface.DstPrefix, opts...)
+		i, err := newInterface(n, iface.SrcName, iface.DstPrefix, iface.DstName, opts...)
 		if err != nil {
 			return err
 		}
@@ -488,60 +415,78 @@ func (n *Namespace) Restore(interfaces map[Iface][]IfaceOption, routes []*types.
 			// restore from the namespace
 			for _, link := range links {
 				ifaceName := link.Attrs().Name
-				if i.dstName == "vxlan" && strings.HasPrefix(ifaceName, "vxlan") {
+				if i.dstPrefix == "vxlan" && strings.HasPrefix(ifaceName, "vxlan") {
 					i.dstName = ifaceName
 					break
 				}
 				// find the interface name by ip
+				findIfname := func(needle *net.IPNet, haystack []netlink.Addr) (string, bool) {
+					for _, addr := range haystack {
+						if addr.IPNet.String() == needle.String() {
+							return ifaceName, true
+						}
+					}
+					return "", false
+				}
 				if i.address != nil {
 					addresses, err := n.nlHandle.AddrList(link, netlink.FAMILY_V4)
 					if err != nil {
 						return err
 					}
-					for _, addr := range addresses {
-						if addr.IPNet.String() == i.address.String() {
-							i.dstName = ifaceName
-							break
-						}
+					if name, found := findIfname(i.address, addresses); found {
+						i.dstName = name
+						break
 					}
-					if i.dstName == ifaceName {
+				}
+				if i.addressIPv6 != nil {
+					addresses, err := n.nlHandle.AddrList(link, netlink.FAMILY_V6)
+					if err != nil {
+						return err
+					}
+					if name, found := findIfname(i.address, addresses); found {
+						i.dstName = name
 						break
 					}
 				}
 				// This is to find the interface name of the pair in overlay sandbox
-				if i.master != "" && i.dstName == "veth" && strings.HasPrefix(ifaceName, "veth") {
+				if i.master != "" && i.dstPrefix == "veth" && strings.HasPrefix(ifaceName, "veth") {
 					i.dstName = ifaceName
 				}
 			}
 
-			var index int
-			if idx := strings.TrimPrefix(i.dstName, iface.DstPrefix); idx != "" {
-				index, err = strconv.Atoi(idx)
-				if err != nil {
-					return fmt.Errorf("failed to restore interface in network namespace %q: invalid dstName for interface: %s: %v", n.path, i.dstName, err)
-				}
-			}
-			index++
 			n.mu.Lock()
-			if index > n.nextIfIndex[iface.DstPrefix] {
-				n.nextIfIndex[iface.DstPrefix] = index
-			}
 			n.iFaces = append(n.iFaces, i)
 			n.mu.Unlock()
 		}
 	}
-
-	// restore routes and gateways
-	n.mu.Lock()
-	n.staticRoutes = append(n.staticRoutes, routes...)
-	if len(gw) > 0 {
-		n.gw = gw
-	}
-	if len(gw6) > 0 {
-		n.gwv6 = gw6
-	}
-	n.mu.Unlock()
 	return nil
+}
+
+func (n *Namespace) RestoreRoutes(routes []*types.StaticRoute) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.staticRoutes = append(n.staticRoutes, routes...)
+}
+
+func (n *Namespace) RestoreGateway(ipv4 bool, gw net.IP, srcName string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if gw == nil {
+		// There's no gateway address, so the default route is bound to the interface.
+		if ipv4 {
+			n.defRoute4SrcName = srcName
+		} else {
+			n.defRoute6SrcName = srcName
+		}
+		return
+	}
+
+	if ipv4 {
+		n.gw = gw
+	} else {
+		n.gwv6 = gw
+	}
 }
 
 // IPv6LoEnabled returns true if the loopback interface had an IPv6 address when

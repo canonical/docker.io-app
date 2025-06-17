@@ -8,7 +8,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/cli/cli/trust"
-	"github.com/docker/docker/errdefs"
+	"github.com/docker/cli/internal/prompt"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/theupdateframework/notary/client"
@@ -44,16 +44,16 @@ func revokeTrust(ctx context.Context, dockerCLI command.Cli, remote string, opti
 		return errors.New("cannot use a digest reference for IMAGE:TAG")
 	}
 	if imgRefAndAuth.Tag() == "" && !options.forceYes {
-		deleteRemote, err := command.PromptForConfirmation(ctx, dockerCLI.In(), dockerCLI.Out(), fmt.Sprintf("Confirm you would like to delete all signature data for %s?", remote))
+		deleteRemote, err := prompt.Confirm(ctx, dockerCLI.In(), dockerCLI.Out(), fmt.Sprintf("Confirm you would like to delete all signature data for %s?", remote))
 		if err != nil {
 			return err
 		}
 		if !deleteRemote {
-			return errdefs.Cancelled(errors.New("trust revoke has been cancelled"))
+			return cancelledErr{errors.New("trust revoke has been cancelled")}
 		}
 	}
 
-	notaryRepo, err := dockerCLI.NotaryClient(imgRefAndAuth, trust.ActionsPushAndPull)
+	notaryRepo, err := newNotaryClient(dockerCLI, imgRefAndAuth, trust.ActionsPushAndPull)
 	if err != nil {
 		return err
 	}
@@ -68,6 +68,10 @@ func revokeTrust(ctx context.Context, dockerCLI command.Cli, remote string, opti
 	_, _ = fmt.Fprintf(dockerCLI.Out(), "Successfully deleted signature for %s\n", remote)
 	return nil
 }
+
+type cancelledErr struct{ error }
+
+func (cancelledErr) Cancelled() {}
 
 func revokeSignature(notaryRepo client.Repository, tag string) error {
 	if tag != "" {

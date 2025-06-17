@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/metrics"
 	"github.com/pkg/errors"
 )
 
@@ -151,7 +152,7 @@ func (daemon *Daemon) CreateImageFromContainer(ctx context.Context, name string,
 	if c.Config == nil {
 		c.Config = container.Config
 	}
-	newConfig, err := dockerfile.BuildFromConfig(ctx, c.Config, c.Changes, container.OS)
+	newConfig, err := dockerfile.BuildFromConfig(ctx, c.Config, c.Changes, container.ImagePlatform.OS)
 	if err != nil {
 		return "", err
 	}
@@ -166,7 +167,7 @@ func (daemon *Daemon) CreateImageFromContainer(ctx context.Context, name string,
 		ContainerConfig:     container.Config,
 		ContainerID:         container.ID,
 		ContainerMountLabel: container.MountLabel,
-		ContainerOS:         container.OS,
+		ContainerOS:         container.ImagePlatform.OS,
 		ParentImageID:       string(container.ImageID),
 	})
 	if err != nil {
@@ -186,6 +187,6 @@ func (daemon *Daemon) CreateImageFromContainer(ctx context.Context, name string,
 		"imageID":  id.String(),
 		"imageRef": imageRef,
 	})
-	containerActions.WithValues("commit").UpdateSince(start)
+	metrics.ContainerActions.WithValues("commit").UpdateSince(start)
 	return id.String(), nil
 }

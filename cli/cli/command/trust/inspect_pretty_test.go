@@ -10,7 +10,6 @@ import (
 	"github.com/docker/cli/cli/trust"
 	"github.com/docker/cli/internal/test"
 	notaryfake "github.com/docker/cli/internal/test/notary"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
@@ -29,15 +28,15 @@ type fakeClient struct {
 	client.Client
 }
 
-func (c *fakeClient) Info(context.Context) (system.Info, error) {
+func (*fakeClient) Info(context.Context) (system.Info, error) {
 	return system.Info{}, nil
 }
 
-func (c *fakeClient) ImageInspectWithRaw(context.Context, string) (types.ImageInspect, []byte, error) {
-	return types.ImageInspect{}, []byte{}, nil
+func (*fakeClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error) {
+	return image.InspectResponse{}, nil
 }
 
-func (c *fakeClient) ImagePush(context.Context, string, image.PushOptions) (io.ReadCloser, error) {
+func (*fakeClient) ImagePush(context.Context, string, image.PushOptions) (io.ReadCloser, error) {
 	return &utils.NoopCloser{Reader: bytes.NewBuffer([]byte{})}, nil
 }
 
@@ -194,7 +193,7 @@ func TestNotaryRoleToSigner(t *testing.T) {
 		}
 		assert.Check(t, is.Equal(role.String(), notaryRoleToSigner(role)))
 	}
-	assert.Check(t, is.Equal("notarole", notaryRoleToSigner(data.RoleName("notarole"))))
+	assert.Check(t, is.Equal("notarole", notaryRoleToSigner("notarole")))
 }
 
 // check if a role name is "released": either targets/releases or targets TUF roles
@@ -203,9 +202,9 @@ func TestIsReleasedTarget(t *testing.T) {
 	for _, role := range data.BaseRoles {
 		assert.Check(t, is.Equal(role == data.CanonicalTargetsRole, isReleasedTarget(role)))
 	}
-	assert.Check(t, !isReleasedTarget(data.RoleName("targets/not-releases")))
-	assert.Check(t, !isReleasedTarget(data.RoleName("random")))
-	assert.Check(t, !isReleasedTarget(data.RoleName("targets/releases/subrole")))
+	assert.Check(t, !isReleasedTarget("targets/not-releases"))
+	assert.Check(t, !isReleasedTarget("random"))
+	assert.Check(t, !isReleasedTarget("targets/releases/subrole"))
 }
 
 // creates a mock delegation with a given name and no keys

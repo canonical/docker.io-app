@@ -6,19 +6,18 @@ import (
 	"io"
 	"runtime"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/builder"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
-	registrypkg "github.com/docker/docker/registry"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -158,12 +157,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 	pullRegistryAuth := &registry.AuthConfig{}
 	if len(authConfigs) > 0 {
 		// The request came with a full auth config, use it
-		repoInfo, err := i.registryService.ResolveRepository(ref)
-		if err != nil {
-			return nil, err
-		}
-
-		resolvedConfig := registrypkg.ResolveAuthConfig(authConfigs, repoInfo.Index)
+		resolvedConfig := i.registryService.ResolveAuthConfig(authConfigs, ref)
 		pullRegistryAuth = &resolvedConfig
 	}
 
@@ -172,7 +166,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 	}
 
 	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
-	if errdefs.IsNotFound(err) && img != nil && platform != nil {
+	if cerrdefs.IsNotFound(err) && img != nil && platform != nil {
 		imgPlat := ocispec.Platform{
 			OS:           img.OS,
 			Architecture: img.BaseImgArch(),
@@ -186,7 +180,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 WARNING: Pulled image with specified platform (%s), but the resulting image's configured platform (%s) does not match.
 This is most likely caused by a bug in the build system that created the fetched image (%s).
 Please notify the image author to correct the configuration.`,
-				platforms.Format(p), platforms.Format(imgPlat), name,
+				platforms.FormatAll(p), platforms.FormatAll(imgPlat), name,
 			)
 			log.G(ctx).WithError(err).WithField("image", name).Warn("Ignoring error about platform mismatch where the manifest list points to an image whose configuration does not match the platform in the manifest.")
 			err = nil
@@ -217,7 +211,7 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 		if err != nil && opts.PullOption == backend.PullOptionNoPull {
 			return nil, nil, err
 		}
-		if err != nil && !errdefs.IsNotFound(err) {
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			return nil, nil, err
 		}
 		if img != nil {

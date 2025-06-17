@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package containerimage
 
@@ -14,15 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/gc"
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/leases"
-	cdreference "github.com/containerd/containerd/reference"
-	ctdreference "github.com/containerd/containerd/reference"
-	"github.com/containerd/containerd/remotes"
-	"github.com/containerd/containerd/remotes/docker"
-	"github.com/containerd/containerd/remotes/docker/schema1" //nolint:staticcheck // Ignore SA1019: "github.com/containerd/containerd/remotes/docker/schema1" is deprecated: use images formatted in Docker Image Manifest v2, Schema 2, or OCI Image Spec v1.
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/leases"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
+	"github.com/containerd/containerd/v2/pkg/gc"
+	c8dreference "github.com/containerd/containerd/v2/pkg/reference"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -183,7 +181,7 @@ func (is *Source) resolveRemote(ctx context.Context, ref string, platform *ocisp
 		p = *platform
 	}
 	// key is used to synchronize resolutions that can happen in parallel when doing multi-stage.
-	key := "getconfig::" + ref + "::" + platforms.Format(p)
+	key := "getconfig::" + ref + "::" + platforms.FormatAll(p)
 	res, err := is.g.Do(ctx, key, func(ctx context.Context) (*resolveRemoteResult, error) {
 		res := resolver.DefaultPool.GetResolver(is.RegistryHosts, ref, "pull", sm, g)
 		dgst, dt, err := imageutil.Config(ctx, ref, res, is.ContentStore, is.LeaseManager, platform)
@@ -343,10 +341,10 @@ func (p *puller) resolveLocal() {
 }
 
 func (p *puller) resolve(ctx context.Context, g session.Group) error {
-	_, err := p.g.Do(ctx, "", func(ctx context.Context) (_ struct{}, err error) {
+	_, err := p.g.Do(ctx, "", func(ctx context.Context) (_ struct{}, retErr error) {
 		resolveProgressDone := oneOffProgress(ctx, "resolve "+p.src.Reference.String())
 		defer func() {
-			resolveProgressDone(err)
+			_ = resolveProgressDone(retErr)
 		}()
 
 		ref, err := distreference.ParseNormalizedNamed(p.src.Reference.String())
@@ -369,12 +367,12 @@ func (p *puller) resolve(ctx context.Context, g session.Group) error {
 		// has been read.
 		// It may be possible to have a mapping between schema 1 manifests
 		// and the schema 2 manifests they are converted to.
-		if p.config == nil && p.desc.MediaType != images.MediaTypeDockerSchema1Manifest {
-			ref, err := distreference.WithDigest(ref, p.desc.Digest)
+		if p.config == nil && p.desc.MediaType != c8dimages.MediaTypeDockerSchema1Manifest {
+			refWithDigest, err := distreference.WithDigest(ref, p.desc.Digest)
 			if err != nil {
 				return struct{}{}, err
 			}
-			_, dt, err := p.is.ResolveImageConfig(ctx, ref.String(), sourceresolver.Opt{
+			_, dt, err := p.is.ResolveImageConfig(ctx, refWithDigest.String(), sourceresolver.Opt{
 				Platform: &p.platform,
 				ImageOpt: &sourceresolver.ResolveImageOpt{
 					ResolveMode: p.src.ResolveMode.String(),
@@ -384,7 +382,7 @@ func (p *puller) resolve(ctx context.Context, g session.Group) error {
 				return struct{}{}, err
 			}
 
-			p.ref = ref.String()
+			p.ref = refWithDigest.String()
 			p.config = dt
 		}
 		return struct{}{}, nil
@@ -423,12 +421,12 @@ func (p *puller) CacheKey(ctx context.Context, g session.Group, index int) (stri
 		return dgst.String(), p.desc.Digest.String(), nil, false, nil
 	}
 
-	if len(p.config) == 0 && p.desc.MediaType != images.MediaTypeDockerSchema1Manifest {
+	if len(p.config) == 0 && p.desc.MediaType != c8dimages.MediaTypeDockerSchema1Manifest {
 		return "", "", nil, false, errors.Errorf("invalid empty config file resolved for %s", p.src.Reference.String())
 	}
 
 	k := cacheKeyFromConfig(p.config).String()
-	if k == "" || p.desc.MediaType == images.MediaTypeDockerSchema1Manifest {
+	if k == "" || p.desc.MediaType == c8dimages.MediaTypeDockerSchema1Manifest {
 		dgst, err := p.mainManifestKey(p.platform)
 		if err != nil {
 			return "", "", nil, false, err
@@ -519,39 +517,38 @@ func (p *puller) Snapshot(ctx context.Context, g session.Group) (cache.Immutable
 
 	var nonLayers []digest.Digest
 
-	var (
-		schema1Converter *schema1.Converter
-		handlers         []images.Handler
-	)
-	if p.desc.MediaType == images.MediaTypeDockerSchema1Manifest {
-		schema1Converter = schema1.NewConverter(p.is.ContentStore, fetcher)
-		handlers = append(handlers, schema1Converter)
-
+	var handlers []c8dimages.Handler
+	if p.desc.MediaType == c8dimages.MediaTypeDockerSchema1Manifest {
+		stopProgress()
+		// similar to [github.com/docker/docker/distribution/DeprecatedSchema1ImageError]
+		errMsg := "support for Docker Image Format v1 and Docker Image manifest version 2, schema 1 has been removed in Docker Engine v28.2. " +
+			"More information at https://docs.docker.com/go/deprecated-image-specs/"
+		return nil, cerrdefs.ErrInvalidArgument.WithMessage(errMsg)
 		// TODO: Optimize to do dispatch and integrate pulling with download manager,
 		// leverage existing blob mapping and layer storage
 	} else {
 		// TODO: need a wrapper snapshot interface that combines content
 		// and snapshots as 1) buildkit shouldn't have a dependency on contentstore
 		// or 2) cachemanager should manage the contentstore
-		handlers = append(handlers, images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+		handlers = append(handlers, c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 			switch desc.MediaType {
-			case images.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest,
-				images.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex,
-				images.MediaTypeDockerSchema2Config, ocispec.MediaTypeImageConfig:
+			case c8dimages.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest,
+				c8dimages.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex,
+				c8dimages.MediaTypeDockerSchema2Config, ocispec.MediaTypeImageConfig:
 				nonLayers = append(nonLayers, desc.Digest)
 			default:
-				return nil, images.ErrSkipDesc
+				return nil, c8dimages.ErrSkipDesc
 			}
 			ongoing.add(desc)
 			return nil, nil
 		}))
 
 		// Get all the children for a descriptor
-		childrenHandler := images.ChildrenHandler(p.is.ContentStore)
+		childrenHandler := c8dimages.ChildrenHandler(p.is.ContentStore)
 		// Filter the children by the platform
-		childrenHandler = images.FilterPlatforms(childrenHandler, platform)
+		childrenHandler = c8dimages.FilterPlatforms(childrenHandler, platform)
 		// Limit manifests pulled to the best match in an index
-		childrenHandler = images.LimitManifests(childrenHandler, platform, 1)
+		childrenHandler = c8dimages.LimitManifests(childrenHandler, platform, 1)
 
 		handlers = append(handlers,
 			remotes.FetchHandler(p.is.ContentStore, fetcher),
@@ -559,25 +556,18 @@ func (p *puller) Snapshot(ctx context.Context, g session.Group) (cache.Immutable
 		)
 	}
 
-	if err := images.Dispatch(ctx, images.Handlers(handlers...), nil, p.desc); err != nil {
+	if err := c8dimages.Dispatch(ctx, c8dimages.Handlers(handlers...), nil, p.desc); err != nil {
 		stopProgress()
 		return nil, err
 	}
 	defer stopProgress()
 
-	if schema1Converter != nil {
-		p.desc, err = schema1Converter.Convert(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	mfst, err := images.Manifest(ctx, p.is.ContentStore, p.desc, platform)
+	mfst, err := c8dimages.Manifest(ctx, p.is.ContentStore, p.desc, platform)
 	if err != nil {
 		return nil, err
 	}
 
-	config, err := images.Config(ctx, p.is.ContentStore, p.desc, platform)
+	config, err := c8dimages.Config(ctx, p.is.ContentStore, p.desc, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -693,7 +683,7 @@ type layerDescriptor struct {
 	fetcher remotes.Fetcher
 	desc    ocispec.Descriptor
 	diffID  layer.DiffID
-	ref     ctdreference.Spec
+	ref     c8dreference.Spec
 }
 
 func (ld *layerDescriptor) Key() string {
@@ -898,15 +888,15 @@ type statusInfo struct {
 
 func oneOffProgress(ctx context.Context, id string) func(err error) error {
 	pw, _, _ := progress.NewFromContext(ctx)
-	now := time.Now()
+	s := time.Now()
 	st := progress.Status{
-		Started: &now,
+		Started: &s,
 	}
 	_ = pw.Write(id, st)
 	return func(err error) error {
 		// TODO: set error on status
-		now := time.Now()
-		st.Completed = &now
+		c := time.Now()
+		st.Completed = &c
 		_ = pw.Write(id, st)
 		_ = pw.Close()
 		return err
@@ -939,7 +929,7 @@ func platformMatches(img *image.Image, p *ocispec.Platform) bool {
 }
 
 func applySourcePolicies(ctx context.Context, str string, spls []*spb.Policy) (string, error) {
-	ref, err := cdreference.Parse(str)
+	ref, err := c8dreference.Parse(str)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
@@ -953,18 +943,14 @@ func applySourcePolicies(ctx context.Context, str string, spls []*spb.Policy) (s
 	}
 
 	if mut {
-		var (
-			t  string
-			ok bool
-		)
 		t, newRef, ok := strings.Cut(op.GetIdentifier(), "://")
 		if !ok {
 			return "", errors.Errorf("could not parse ref: %s", op.GetIdentifier())
 		}
-		if ok && t != srctypes.DockerImageScheme {
+		if t != srctypes.DockerImageScheme {
 			return "", &imageutil.ResolveToNonImageError{Ref: str, Updated: newRef}
 		}
-		ref, err = cdreference.Parse(newRef)
+		ref, err = c8dreference.Parse(newRef)
 		if err != nil {
 			return "", errors.WithStack(err)
 		}

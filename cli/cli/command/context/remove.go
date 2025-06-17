@@ -1,14 +1,12 @@
 package context
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/docker/errdefs"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +15,7 @@ type RemoveOptions struct {
 	Force bool
 }
 
-func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
+func newRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts RemoveOptions
 	cmd := &cobra.Command{
 		Use:     "rm CONTEXT [CONTEXT...]",
@@ -25,36 +23,34 @@ func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "Remove one or more contexts",
 		Args:    cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunRemove(dockerCli, opts, args)
+			return RunRemove(dockerCLI, opts, args)
 		},
+		ValidArgsFunction: completeContextNames(dockerCLI, -1, false),
 	}
 	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Force the removal of a context in use")
 	return cmd
 }
 
 // RunRemove removes one or more contexts
-func RunRemove(dockerCli command.Cli, opts RemoveOptions, names []string) error {
-	var errs []string
-	currentCtx := dockerCli.CurrentContext()
+func RunRemove(dockerCLI command.Cli, opts RemoveOptions, names []string) error {
+	var errs []error
+	currentCtx := dockerCLI.CurrentContext()
 	for _, name := range names {
 		if name == "default" {
-			errs = append(errs, `default: context "default" cannot be removed`)
-		} else if err := doRemove(dockerCli, name, name == currentCtx, opts.Force); err != nil {
-			errs = append(errs, err.Error())
+			errs = append(errs, errors.New(`context "default" cannot be removed`))
+		} else if err := doRemove(dockerCLI, name, name == currentCtx, opts.Force); err != nil {
+			errs = append(errs, err)
 		} else {
-			fmt.Fprintln(dockerCli.Out(), name)
+			_, _ = fmt.Fprintln(dockerCLI.Out(), name)
 		}
 	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "\n"))
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func doRemove(dockerCli command.Cli, name string, isCurrent, force bool) error {
 	if isCurrent {
 		if !force {
-			return errors.Errorf("context %q is in use, set -f flag to force remove", name)
+			return fmt.Errorf("context %q is in use, set -f flag to force remove", name)
 		}
 		// fallback to DOCKER_HOST
 		cfg := dockerCli.ConfigFile()
@@ -65,6 +61,7 @@ func doRemove(dockerCli command.Cli, name string, isCurrent, force bool) error {
 	}
 
 	if !force {
+		// TODO(thaJeztah): instead of checking before removing, can we make ContextStore().Remove() return a proper errdef and ignore "not found" errors?
 		if err := checkContextExists(dockerCli, name); err != nil {
 			return err
 		}
@@ -77,9 +74,13 @@ func checkContextExists(dockerCli command.Cli, name string) error {
 	contextDir := dockerCli.ContextStore().GetStorageInfo(name).MetadataPath
 	_, err := os.Stat(contextDir)
 	if os.IsNotExist(err) {
-		return errdefs.NotFound(errors.Errorf("context %q does not exist", name))
+		return notFoundErr{fmt.Errorf("context %q does not exist", name)}
 	}
 	// Ignore other errors; if relevant, they will produce an error when
 	// performing the actual delete.
 	return nil
 }
+
+type notFoundErr struct{ error }
+
+func (notFoundErr) NotFound() {}

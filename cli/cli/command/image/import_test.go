@@ -1,13 +1,13 @@
 package image
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/image"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -22,14 +22,14 @@ func TestNewImportCommandErrors(t *testing.T) {
 		{
 			name:          "wrong-args",
 			args:          []string{},
-			expectedError: "requires at least 1 argument.",
+			expectedError: "requires at least 1 argument",
 		},
 		{
 			name:          "import-failed",
 			args:          []string{"testdata/import-command-success.input.txt"},
 			expectedError: "something went wrong",
 			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
-				return nil, errors.Errorf("something went wrong")
+				return nil, errors.New("something went wrong")
 			},
 		},
 	}
@@ -98,7 +98,6 @@ func TestNewImportCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewImportCommand(test.NewFakeCli(&fakeClient{imageImportFunc: tc.imageImportFunc}))
 			cmd.SetOut(io.Discard)

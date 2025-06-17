@@ -1,15 +1,13 @@
 package container
 
 import (
-	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 )
 
@@ -18,59 +16,63 @@ func TestNewAttachCommandErrors(t *testing.T) {
 		name                 string
 		args                 []string
 		expectedError        string
-		containerInspectFunc func(img string) (types.ContainerJSON, error)
+		containerInspectFunc func(img string) (container.InspectResponse, error)
 	}{
 		{
 			name:          "client-error",
 			args:          []string{"5cb5bb5e4a3b"},
 			expectedError: "something went wrong",
-			containerInspectFunc: func(containerID string) (types.ContainerJSON, error) {
-				return types.ContainerJSON{}, errors.Errorf("something went wrong")
+			containerInspectFunc: func(containerID string) (container.InspectResponse, error) {
+				return container.InspectResponse{}, errors.New("something went wrong")
 			},
 		},
 		{
 			name:          "client-stopped",
 			args:          []string{"5cb5bb5e4a3b"},
 			expectedError: "You cannot attach to a stopped container",
-			containerInspectFunc: func(containerID string) (types.ContainerJSON, error) {
-				c := types.ContainerJSON{}
-				c.ContainerJSONBase = &types.ContainerJSONBase{}
-				c.ContainerJSONBase.State = &types.ContainerState{Running: false}
-				return c, nil
+			containerInspectFunc: func(containerID string) (container.InspectResponse, error) {
+				return container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{
+						State: &container.State{
+							Running: false,
+						},
+					},
+				}, nil
 			},
 		},
 		{
 			name:          "client-paused",
 			args:          []string{"5cb5bb5e4a3b"},
 			expectedError: "You cannot attach to a paused container",
-			containerInspectFunc: func(containerID string) (types.ContainerJSON, error) {
-				c := types.ContainerJSON{}
-				c.ContainerJSONBase = &types.ContainerJSONBase{}
-				c.ContainerJSONBase.State = &types.ContainerState{
-					Running: true,
-					Paused:  true,
-				}
-				return c, nil
+			containerInspectFunc: func(containerID string) (container.InspectResponse, error) {
+				return container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{
+						State: &container.State{
+							Running: true,
+							Paused:  true,
+						},
+					},
+				}, nil
 			},
 		},
 		{
 			name:          "client-restarting",
 			args:          []string{"5cb5bb5e4a3b"},
 			expectedError: "You cannot attach to a restarting container",
-			containerInspectFunc: func(containerID string) (types.ContainerJSON, error) {
-				c := types.ContainerJSON{}
-				c.ContainerJSONBase = &types.ContainerJSONBase{}
-				c.ContainerJSONBase.State = &types.ContainerState{
-					Running:    true,
-					Paused:     false,
-					Restarting: true,
-				}
-				return c, nil
+			containerInspectFunc: func(containerID string) (container.InspectResponse, error) {
+				return container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{
+						State: &container.State{
+							Running:    true,
+							Paused:     false,
+							Restarting: true,
+						},
+					},
+				}, nil
 			},
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewAttachCommand(test.NewFakeCli(&fakeClient{inspectFunc: tc.containerInspectFunc}))
 			cmd.SetOut(io.Discard)
@@ -109,10 +111,6 @@ func TestGetExitStatus(t *testing.T) {
 				StatusCode: 15,
 			},
 			expectedError: cli.StatusError{StatusCode: 15},
-		},
-		{
-			err:           context.Canceled,
-			expectedError: nil,
 		},
 	}
 

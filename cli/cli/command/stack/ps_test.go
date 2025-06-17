@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -8,9 +9,7 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -19,28 +18,27 @@ import (
 func TestStackPsErrors(t *testing.T) {
 	testCases := []struct {
 		args          []string
-		taskListFunc  func(options types.TaskListOptions) ([]swarm.Task, error)
+		taskListFunc  func(options swarm.TaskListOptions) ([]swarm.Task, error)
 		expectedError string
 	}{
 		{
 			args:          []string{},
-			expectedError: "requires exactly 1 argument",
+			expectedError: "requires 1 argument",
 		},
 		{
 			args:          []string{"foo", "bar"},
-			expectedError: "requires exactly 1 argument",
+			expectedError: "requires 1 argument",
 		},
 		{
 			args: []string{"foo"},
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
-				return nil, errors.Errorf("error getting tasks")
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
+				return nil, errors.New("error getting tasks")
 			},
 			expectedError: "error getting tasks",
 		},
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.expectedError, func(t *testing.T) {
 			cmd := newPsCommand(test.NewFakeCli(&fakeClient{
 				taskListFunc: tc.taskListFunc,
@@ -56,7 +54,7 @@ func TestStackPsErrors(t *testing.T) {
 func TestStackPs(t *testing.T) {
 	testCases := []struct {
 		doc                string
-		taskListFunc       func(types.TaskListOptions) ([]swarm.Task, error)
+		taskListFunc       func(swarm.TaskListOptions) ([]swarm.Task, error)
 		nodeInspectWithRaw func(string) (swarm.Node, []byte, error)
 		config             configfile.ConfigFile
 		args               []string
@@ -71,7 +69,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithEmptyStack",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{}, nil
 			},
 			args:        []string{"foo"},
@@ -79,7 +77,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithQuietOption",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(builders.TaskID("id-foo"))}, nil
 			},
 			args: []string{"foo"},
@@ -90,7 +88,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithNoTruncOption",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(builders.TaskID("xn4cypcov06f2w8gsbaf2lst3"))}, nil
 			},
 			args: []string{"foo"},
@@ -102,7 +100,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithNoResolveOption",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(
 					builders.TaskNodeID("id-node-foo"),
 				)}, nil
@@ -119,7 +117,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithFormat",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(builders.TaskServiceID("service-id-foo"))}, nil
 			},
 			args: []string{"foo"},
@@ -130,7 +128,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithConfigFormat",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(builders.TaskServiceID("service-id-foo"))}, nil
 			},
 			config: configfile.ConfigFile{
@@ -141,7 +139,7 @@ func TestStackPs(t *testing.T) {
 		},
 		{
 			doc: "WithoutFormat",
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{*builders.Task(
 					builders.TaskID("id-foo"),
 					builders.TaskServiceID("service-id-foo"),
@@ -160,7 +158,6 @@ func TestStackPs(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				taskListFunc:       tc.taskListFunc,

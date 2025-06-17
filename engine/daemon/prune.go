@@ -2,9 +2,7 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
-	"regexp"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/containerd/log"
@@ -16,6 +14,7 @@ import (
 	timetypes "github.com/docker/docker/api/types/time"
 	networkSettings "github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/lazyregexp"
 	"github.com/docker/docker/libnetwork"
 	"github.com/pkg/errors"
 )
@@ -40,10 +39,10 @@ var (
 
 // ContainersPrune removes unused containers
 func (daemon *Daemon) ContainersPrune(ctx context.Context, pruneFilters filters.Args) (*container.PruneReport, error) {
-	if !atomic.CompareAndSwapInt32(&daemon.pruneRunning, 0, 1) {
+	if !daemon.pruneRunning.CompareAndSwap(false, true) {
 		return nil, errPruneRunning
 	}
-	defer atomic.StoreInt32(&daemon.pruneRunning, 0)
+	defer daemon.pruneRunning.Store(false)
 
 	rep := &container.PruneReport{}
 
@@ -137,6 +136,8 @@ func (daemon *Daemon) localNetworksPrune(ctx context.Context, pruneFilters filte
 	return rep
 }
 
+var networkIsInUse = lazyregexp.New(`network ([[:alnum:]]+) is in use`)
+
 // clusterNetworksPrune removes unused cluster networks
 func (daemon *Daemon) clusterNetworksPrune(ctx context.Context, pruneFilters filters.Args) (*network.PruneReport, error) {
 	rep := &network.PruneReport{}
@@ -153,7 +154,7 @@ func (daemon *Daemon) clusterNetworksPrune(ctx context.Context, pruneFilters fil
 	if err != nil {
 		return rep, err
 	}
-	networkIsInUse := regexp.MustCompile(`network ([[:alnum:]]+) is in use`)
+
 	for _, nw := range networks {
 		select {
 		case <-ctx.Done():
@@ -189,10 +190,10 @@ func (daemon *Daemon) clusterNetworksPrune(ctx context.Context, pruneFilters fil
 
 // NetworksPrune removes unused networks
 func (daemon *Daemon) NetworksPrune(ctx context.Context, pruneFilters filters.Args) (*network.PruneReport, error) {
-	if !atomic.CompareAndSwapInt32(&daemon.pruneRunning, 0, 1) {
+	if !daemon.pruneRunning.CompareAndSwap(false, true) {
 		return nil, errPruneRunning
 	}
-	defer atomic.StoreInt32(&daemon.pruneRunning, 0)
+	defer daemon.pruneRunning.Store(false)
 
 	// make sure that only accepted filters have been received
 	err := pruneFilters.Validate(networksAcceptedFilters)

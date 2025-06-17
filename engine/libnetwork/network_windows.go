@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"runtime"
 	"strings"
@@ -55,7 +56,7 @@ func (n *Network) startResolver() {
 			return
 		}
 
-		hnsresponse, err := hcsshim.HNSNetworkRequest("GET", hnsid, "")
+		hnsresponse, err := hcsshim.HNSNetworkRequest(http.MethodGet, hnsid, "")
 		if err != nil {
 			log.G(context.TODO()).Errorf("Resolver Setup/Start failed for container %s, %q", n.Name(), err)
 			return
@@ -103,9 +104,6 @@ func addEpToResolver(
 	epIface *EndpointInterface,
 	resolvers []*Resolver,
 ) error {
-	if config.dnsNoProxy {
-		return nil
-	}
 	hnsEndpoints, err := hcsshim.HNSListEndpointRequest()
 	if err != nil {
 		return nil
@@ -129,10 +127,7 @@ func addEpToResolverImpl(
 	// Find the resolver for that HNSEndpoint, matching on gateway address.
 	resolver := findResolver(resolvers, hnsEp.GatewayAddress, hnsEp.GatewayAddressV6)
 	if resolver == nil {
-		log.G(ctx).WithFields(log.Fields{
-			"network":  netName,
-			"endpoint": epName,
-		}).Debug("No internal DNS resolver to configure")
+		log.G(ctx).Debug("No internal DNS resolver to configure")
 		return nil
 	}
 
@@ -153,10 +148,7 @@ func addEpToResolverImpl(
 		}
 	}
 	if !foundSelf {
-		log.G(ctx).WithFields(log.Fields{
-			"network":  netName,
-			"endpoint": epName,
-		}).Debug("Endpoint is not configured to use internal DNS resolver")
+		log.G(ctx).Debug("Endpoint is not configured to use internal DNS resolver")
 		return nil
 	}
 
@@ -248,4 +240,12 @@ func defaultIpamForNetworkType(networkType string) string {
 		return windowsipam.DefaultIPAM
 	}
 	return defaultipam.DriverName
+}
+
+func (n *Network) validatedAdvertiseAddrNMsgs() (*int, error) {
+	return nil, nil
+}
+
+func (n *Network) validatedAdvertiseAddrInterval() (*time.Duration, error) {
+	return nil, nil
 }

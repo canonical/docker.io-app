@@ -2,18 +2,21 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/api/types/backend"
 	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
 	mounttypes "github.com/docker/docker/api/types/mount"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/layer"
 	"github.com/docker/docker/volume"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/docker/volume/service"
@@ -23,28 +26,38 @@ import (
 
 var _ volume.LiveRestorer = (*volumeWrapper)(nil)
 
-type mounts []container.Mount
+// mountSort implements [sort.Interface] to sort an array of mounts in
+// lexicographic order.
+type mountSort []container.Mount
 
 // Len returns the number of mounts. Used in sorting.
-func (m mounts) Len() int {
+func (m mountSort) Len() int {
 	return len(m)
 }
 
 // Less returns true if the number of parts (a/b/c would be 3 parts) in the
 // mount indexed by parameter 1 is less than that of the mount indexed by
 // parameter 2. Used in sorting.
-func (m mounts) Less(i, j int) bool {
+func (m mountSort) Less(i, j int) bool {
 	return m.parts(i) < m.parts(j)
 }
 
 // Swap swaps two items in an array of mounts. Used in sorting
-func (m mounts) Swap(i, j int) {
+func (m mountSort) Swap(i, j int) {
 	m[i], m[j] = m[j], m[i]
 }
 
 // parts returns the number of parts in the destination of a mount. Used in sorting.
-func (m mounts) parts(i int) int {
+func (m mountSort) parts(i int) int {
 	return strings.Count(filepath.Clean(m[i].Destination), string(os.PathSeparator))
+}
+
+// sortMounts sorts an array of mounts in lexicographic order. This ensure that
+// when mounting, the mounts don't shadow other mounts. For example, if mounting
+// /etc and /etc/resolv.conf, /etc/resolv.conf must not be mounted first.
+func sortMounts(m []container.Mount) []container.Mount {
+	sort.Sort(mountSort(m))
+	return m
 }
 
 // registerMountPoints initializes the container mount points with the configured volumes and bind mounts.
@@ -134,7 +147,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 			return err
 		}
 		if needsSlavePropagation {
-			bind.Propagation = mount.PropagationRSlave
+			bind.Propagation = mounttypes.PropagationRSlave
 		}
 
 		// #10618
@@ -158,7 +171,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 			}
 		}
 
-		if bind.Type == mount.TypeBind && !bind.RW {
+		if bind.Type == mounttypes.TypeBind && !bind.RW {
 			if defaultReadOnlyNonRecursive {
 				if bind.Spec.BindOptions == nil {
 					bind.Spec.BindOptions = &mounttypes.BindOptions{}
@@ -182,7 +195,7 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 			return err
 		}
 		if needsSlavePropagation {
-			mp.Propagation = mount.PropagationRSlave
+			mp.Propagation = mounttypes.PropagationRSlave
 		}
 
 		if binds[mp.Destination] {
@@ -232,6 +245,42 @@ func (daemon *Daemon) registerMountPoints(container *container.Container, hostCo
 				}
 				mp.Spec.BindOptions.ReadOnlyNonRecursive = true
 			}
+		}
+
+		if mp.Type == mounttypes.TypeImage {
+			img, err := daemon.imageService.GetImage(ctx, mp.Source, backend.GetImageOpts{})
+			if err != nil {
+				return err
+			}
+
+			rwLayerOpts := &layer.CreateRWLayerOpts{
+				StorageOpt: container.HostConfig.StorageOpt,
+			}
+
+			layerName := fmt.Sprintf("%s-%s", container.ID, mp.Source)
+			layer, err := daemon.imageService.CreateLayerFromImage(img, layerName, rwLayerOpts)
+			if err != nil {
+				return err
+			}
+			metadata, err := layer.Metadata()
+			if err != nil {
+				return err
+			}
+
+			path, err := layer.Mount("")
+			if err != nil {
+				return err
+			}
+
+			if metadata["ID"] != "" {
+				mp.ID = metadata["ID"]
+			}
+
+			mp.Name = mp.Spec.Source
+			mp.Spec.Source = img.ID().String()
+			mp.Source = path
+			mp.Layer = layer
+			mp.RW = false
 		}
 
 		binds[mp.Destination] = true

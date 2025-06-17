@@ -4,8 +4,7 @@ package libnetwork
 
 import (
 	"context"
-
-	"github.com/docker/docker/libnetwork/etchosts"
+	"net/netip"
 )
 
 // Stub implementations for DNS related functions
@@ -18,11 +17,11 @@ func (sb *Sandbox) restoreHostsPath() {}
 
 func (sb *Sandbox) restoreResolvConfPath() {}
 
-func (sb *Sandbox) updateHostsFile(_ context.Context, ifaceIP []string) error {
+func (sb *Sandbox) addHostsEntries(_ context.Context, ifaceIP []netip.Addr) error {
 	return nil
 }
 
-func (sb *Sandbox) deleteHostsEntries(recs []etchosts.Record) {}
+func (sb *Sandbox) deleteHostsEntries(ifaceAddrs []netip.Addr) {}
 
 func (sb *Sandbox) updateDNS(ipv6Enabled bool) error {
 	return nil

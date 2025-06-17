@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/pkg/jsonmessage"
@@ -36,16 +37,14 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 
 	const imageTag = "capabilities:1.0"
 
-	tmp, err := os.MkdirTemp("", "integration-")
-	assert.NilError(t, err)
-	defer os.RemoveAll(tmp)
+	tmpDir := t.TempDir()
 
 	dUserRemap := daemon.New(t)
 	dUserRemap.Start(t, "--userns-remap", "default")
 	clientUserRemap := dUserRemap.NewClientT(t)
 	defer clientUserRemap.Close()
 
-	err = load.FrozenImagesLinux(ctx, clientUserRemap, "debian:bookworm-slim")
+	err := load.FrozenImagesLinux(ctx, clientUserRemap, "debian:bookworm-slim")
 	assert.NilError(t, err)
 
 	dUserRemapRunning := true
@@ -67,7 +66,7 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 
 	resp, err := clientUserRemap.ImageBuild(ctx,
 		source.AsTarReader(t),
-		types.ImageBuildOptions{
+		build.ImageBuildOptions{
 			Tags: []string{imageTag},
 		})
 	assert.NilError(t, err)
@@ -81,7 +80,7 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 	assert.NilError(t, err, "failed to download capabilities image")
 	defer reader.Close()
 
-	tar, err := os.Create(tmp + "/image.tar")
+	tar, err := os.Create(filepath.Join(tmpDir, "image.tar"))
 	assert.NilError(t, err, "failed to create image tar file")
 	defer tar.Close()
 
@@ -102,12 +101,12 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 	clientNoUserRemap := dNoUserRemap.NewClientT(t)
 	defer clientNoUserRemap.Close()
 
-	tarFile, err := os.Open(tmp + "/image.tar")
+	tarFile, err := os.Open(tmpDir + "/image.tar")
 	assert.NilError(t, err, "failed to open image tar file")
 	defer tarFile.Close()
 
 	tarReader := bufio.NewReader(tarFile)
-	loadResp, err := clientNoUserRemap.ImageLoad(ctx, tarReader, false)
+	loadResp, err := clientNoUserRemap.ImageLoad(ctx, tarReader)
 	assert.NilError(t, err, "failed to load image tar file")
 	defer loadResp.Body.Close()
 	buf = bytes.NewBuffer(nil)

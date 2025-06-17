@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	imagetypes "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/daemon"
@@ -104,7 +104,6 @@ func TestImportWithCustomPlatform(t *testing.T) {
 	}
 
 	for i, tc := range tests {
-		tc := tc
 		t.Run(tc.platform, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			reference := "import-with-platform:tc-" + strconv.Itoa(i)
@@ -115,7 +114,7 @@ func TestImportWithCustomPlatform(t *testing.T) {
 				imagetypes.ImportOptions{Platform: tc.platform})
 			assert.NilError(t, err)
 
-			inspect, _, err := client.ImageInspectWithRaw(ctx, reference)
+			inspect, err := client.ImageInspect(ctx, reference)
 			assert.NilError(t, err)
 			assert.Equal(t, inspect.Os, tc.expected.OS)
 			assert.Equal(t, inspect.Architecture, tc.expected.Architecture)
@@ -171,7 +170,6 @@ func TestImportWithCustomPlatformReject(t *testing.T) {
 	}
 
 	for i, tc := range tests {
-		tc := tc
 		t.Run(tc.platform, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			reference := "import-with-platform:tc-" + strconv.Itoa(i)
@@ -180,7 +178,7 @@ func TestImportWithCustomPlatformReject(t *testing.T) {
 				reference,
 				imagetypes.ImportOptions{Platform: tc.platform})
 
-			assert.Check(t, is.ErrorType(err, errdefs.IsInvalidParameter))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 			assert.Check(t, is.ErrorContains(err, tc.expectedErr))
 		})
 	}

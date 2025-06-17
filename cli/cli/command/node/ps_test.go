@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -9,10 +10,8 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -23,27 +22,27 @@ func TestNodePsErrors(t *testing.T) {
 		flags           map[string]string
 		infoFunc        func() (system.Info, error)
 		nodeInspectFunc func() (swarm.Node, []byte, error)
-		taskListFunc    func(options types.TaskListOptions) ([]swarm.Task, error)
+		taskListFunc    func(options swarm.TaskListOptions) ([]swarm.Task, error)
 		taskInspectFunc func(taskID string) (swarm.Task, []byte, error)
 		expectedError   string
 	}{
 		{
 			infoFunc: func() (system.Info, error) {
-				return system.Info{}, errors.Errorf("error asking for node info")
+				return system.Info{}, errors.New("error asking for node info")
 			},
 			expectedError: "error asking for node info",
 		},
 		{
 			args: []string{"nodeID"},
 			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return swarm.Node{}, []byte{}, errors.Errorf("error inspecting the node")
+				return swarm.Node{}, []byte{}, errors.New("error inspecting the node")
 			},
 			expectedError: "error inspecting the node",
 		},
 		{
 			args: []string{"nodeID"},
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
-				return []swarm.Task{}, errors.Errorf("error returning the task list")
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
+				return []swarm.Task{}, errors.New("error returning the task list")
 			},
 			expectedError: "error returning the task list",
 		},
@@ -73,9 +72,9 @@ func TestNodePs(t *testing.T) {
 		flags              map[string]string
 		infoFunc           func() (system.Info, error)
 		nodeInspectFunc    func() (swarm.Node, []byte, error)
-		taskListFunc       func(options types.TaskListOptions) ([]swarm.Task, error)
+		taskListFunc       func(options swarm.TaskListOptions) ([]swarm.Task, error)
 		taskInspectFunc    func(taskID string) (swarm.Task, []byte, error)
-		serviceInspectFunc func(ctx context.Context, serviceID string, opts types.ServiceInspectOptions) (swarm.Service, []byte, error)
+		serviceInspectFunc func(ctx context.Context, serviceID string, opts swarm.ServiceInspectOptions) (swarm.Service, []byte, error)
 	}{
 		{
 			name: "simple",
@@ -83,7 +82,7 @@ func TestNodePs(t *testing.T) {
 			nodeInspectFunc: func() (swarm.Node, []byte, error) {
 				return *builders.Node(), []byte{}, nil
 			},
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{
 					*builders.Task(builders.WithStatus(builders.Timestamp(time.Now().Add(-2*time.Hour)), builders.PortStatus([]swarm.PortConfig{
 						{
@@ -94,7 +93,7 @@ func TestNodePs(t *testing.T) {
 					}))),
 				}, nil
 			},
-			serviceInspectFunc: func(ctx context.Context, serviceID string, opts types.ServiceInspectOptions) (swarm.Service, []byte, error) {
+			serviceInspectFunc: func(ctx context.Context, serviceID string, opts swarm.ServiceInspectOptions) (swarm.Service, []byte, error) {
 				return swarm.Service{
 					ID: serviceID,
 					Spec: swarm.ServiceSpec{
@@ -111,7 +110,7 @@ func TestNodePs(t *testing.T) {
 			nodeInspectFunc: func() (swarm.Node, []byte, error) {
 				return *builders.Node(), []byte{}, nil
 			},
-			taskListFunc: func(options types.TaskListOptions) ([]swarm.Task, error) {
+			taskListFunc: func(options swarm.TaskListOptions) ([]swarm.Task, error) {
 				return []swarm.Task{
 					*builders.Task(builders.TaskID("taskID1"), builders.TaskServiceID("failure"),
 						builders.WithStatus(builders.Timestamp(time.Now().Add(-2*time.Hour)), builders.StatusErr("a task error"))),
@@ -121,7 +120,7 @@ func TestNodePs(t *testing.T) {
 						builders.WithStatus(builders.Timestamp(time.Now().Add(-4*time.Hour)), builders.StatusErr("a task error"))),
 				}, nil
 			},
-			serviceInspectFunc: func(ctx context.Context, serviceID string, opts types.ServiceInspectOptions) (swarm.Service, []byte, error) {
+			serviceInspectFunc: func(ctx context.Context, serviceID string, opts swarm.ServiceInspectOptions) (swarm.Service, []byte, error) {
 				return swarm.Service{
 					ID: serviceID,
 					Spec: swarm.ServiceSpec{
@@ -134,7 +133,6 @@ func TestNodePs(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				infoFunc:           tc.infoFunc,

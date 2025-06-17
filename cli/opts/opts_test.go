@@ -69,7 +69,6 @@ func TestValidateIPAddress(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.input, func(t *testing.T) {
 			actualOut, actualErr := ValidateIPAddress(tc.input)
 			assert.Check(t, is.Equal(tc.expectedOut, actualOut))
@@ -113,6 +112,7 @@ func TestMapOpts(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo // ignore "cyclomatic complexity 17 is too high"
 func TestListOptsWithoutValidator(t *testing.T) {
 	o := NewListOpts(nil)
 	err := o.Set("foo")
@@ -137,21 +137,22 @@ func TestListOptsWithoutValidator(t *testing.T) {
 		t.Errorf("%d != 3", o.Len())
 	}
 	if !o.Get("bar") {
-		t.Error("o.Get(\"bar\") == false")
+		t.Error(`o.Get("bar") == false`)
 	}
 	if o.Get("baz") {
-		t.Error("o.Get(\"baz\") == true")
+		t.Error(`o.Get("baz") == true`)
 	}
 	o.Delete("foo")
 	if o.String() != "[bar bar]" {
 		t.Errorf("%s != [bar bar]", o.String())
 	}
-	listOpts := o.GetAll()
-	if len(listOpts) != 2 || listOpts[0] != "bar" || listOpts[1] != "bar" {
+	if listOpts := o.GetAll(); len(listOpts) != 2 || listOpts[0] != "bar" || listOpts[1] != "bar" {
 		t.Errorf("Expected [[bar bar]], got [%v]", listOpts)
 	}
-	mapListOpts := o.GetMap()
-	if len(mapListOpts) != 1 {
+	if listOpts := o.GetSlice(); len(listOpts) != 2 || listOpts[0] != "bar" || listOpts[1] != "bar" {
+		t.Errorf("Expected [[bar bar]], got [%v]", listOpts)
+	}
+	if mapListOpts := o.GetMap(); len(mapListOpts) != 1 {
 		t.Errorf("Expected [map[bar:{}]], got [%v]", mapListOpts)
 	}
 }
@@ -191,7 +192,6 @@ func TestListOptsWithValidator(t *testing.T) {
 	}
 }
 
-//nolint:lll
 func TestValidateDNSSearch(t *testing.T) {
 	valid := []string{
 		`.`,
@@ -233,7 +233,11 @@ func TestValidateDNSSearch(t *testing.T) {
 		`foo.bar-.baz`,
 		`foo.-bar`,
 		`foo.-bar.baz`,
-		`foo.bar.baz.this.should.fail.on.long.name.because.it.is.longer.thanisshouldbethis.should.fail.on.long.name.because.it.is.longer.thanisshouldbethis.should.fail.on.long.name.because.it.is.longer.thanisshouldbethis.should.fail.on.long.name.because.it.is.longer.thanisshouldbe`,
+		`foo.bar.baz.` +
+			`this.should.fail.on.long.name.because.it.is.longer.thanisshouldbe` +
+			`this.should.fail.on.long.name.because.it.is.longer.thanisshouldbe` +
+			`this.should.fail.on.long.name.because.it.is.longer.thanisshouldbe` +
+			`this.should.fail.on.long.name.because.it.is.longer.thanisshouldbe`,
 	}
 
 	for _, domain := range valid {
@@ -339,7 +343,6 @@ func TestValidateLabel(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			val, err := ValidateLabel(tc.value)
 			if tc.expectedErr != "" {

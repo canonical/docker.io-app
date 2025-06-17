@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -9,9 +10,7 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -20,7 +19,7 @@ import (
 func TestSecretListErrors(t *testing.T) {
 	testCases := []struct {
 		args           []string
-		secretListFunc func(context.Context, types.SecretListOptions) ([]swarm.Secret, error)
+		secretListFunc func(context.Context, swarm.SecretListOptions) ([]swarm.Secret, error)
 		expectedError  string
 	}{
 		{
@@ -28,8 +27,8 @@ func TestSecretListErrors(t *testing.T) {
 			expectedError: "accepts no argument",
 		},
 		{
-			secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
-				return []swarm.Secret{}, errors.Errorf("error listing secrets")
+			secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
+				return []swarm.Secret{}, errors.New("error listing secrets")
 			},
 			expectedError: "error listing secrets",
 		},
@@ -49,7 +48,7 @@ func TestSecretListErrors(t *testing.T) {
 
 func TestSecretList(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 			return []swarm.Secret{
 				*builders.Secret(builders.SecretID("ID-1-foo"),
 					builders.SecretName("1-foo"),
@@ -81,7 +80,7 @@ func TestSecretList(t *testing.T) {
 
 func TestSecretListWithQuietOption(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 			return []swarm.Secret{
 				*builders.Secret(builders.SecretID("ID-foo"), builders.SecretName("foo")),
 				*builders.Secret(builders.SecretID("ID-bar"), builders.SecretName("bar"), builders.SecretLabels(map[string]string{
@@ -98,7 +97,7 @@ func TestSecretListWithQuietOption(t *testing.T) {
 
 func TestSecretListWithConfigFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 			return []swarm.Secret{
 				*builders.Secret(builders.SecretID("ID-foo"), builders.SecretName("foo")),
 				*builders.Secret(builders.SecretID("ID-bar"), builders.SecretName("bar"), builders.SecretLabels(map[string]string{
@@ -117,7 +116,7 @@ func TestSecretListWithConfigFormat(t *testing.T) {
 
 func TestSecretListWithFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 			return []swarm.Secret{
 				*builders.Secret(builders.SecretID("ID-foo"), builders.SecretName("foo")),
 				*builders.Secret(builders.SecretID("ID-bar"), builders.SecretName("bar"), builders.SecretLabels(map[string]string{
@@ -134,7 +133,7 @@ func TestSecretListWithFormat(t *testing.T) {
 
 func TestSecretListWithFilter(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		secretListFunc: func(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 			assert.Check(t, is.Equal("foo", options.Filters.Get("name")[0]), "foo")
 			assert.Check(t, is.Equal("lbl1=Label-bar", options.Filters.Get("label")[0]))
 			return []swarm.Secret{

@@ -113,7 +113,6 @@ func TestParseRemoteURL(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			repo, err := parseRemoteURL(tc.url)
 			assert.NilError(t, err)
@@ -217,14 +216,15 @@ func TestCheckoutGit(t *testing.T) {
 	server := httptest.NewServer(&githttp)
 	defer server.Close()
 
-	autocrlf := gitGetConfig("core.autocrlf")
-	if !(autocrlf == "true" || autocrlf == "false" ||
-		autocrlf == "input" || autocrlf == "") {
-		t.Logf("unknown core.autocrlf value: \"%s\"", autocrlf)
-	}
 	eol := "\n"
-	if autocrlf == "true" {
+	autocrlf := gitGetConfig("core.autocrlf")
+	switch autocrlf {
+	case "true":
 		eol = "\r\n"
+	case "false", "input", "":
+		// accepted values
+	default:
+		t.Logf(`unknown core.autocrlf value: "%s"`, autocrlf)
 	}
 
 	must := func(out []byte, err error) {
@@ -325,7 +325,7 @@ func TestCheckoutGit(t *testing.T) {
 				assert.Check(t, is.Equal("subcontents", string(b)))
 			} else {
 				_, err := os.Stat(filepath.Join(r, "sub/subfile"))
-				assert.Assert(t, is.ErrorContains(err, ""))
+				assert.ErrorContains(t, err, "")
 				assert.Assert(t, os.IsNotExist(err))
 			}
 
@@ -374,6 +374,8 @@ func TestGitInvalidRef(t *testing.T) {
 	for _, url := range gitUrls {
 		_, err := Clone(url)
 		assert.Assert(t, err != nil)
+		// On Windows, git has different case for the "invalid refspec" error,
+		// so we can't use ErrorContains.
 		assert.Check(t, is.Contains(strings.ToLower(err.Error()), "invalid refspec"))
 	}
 }

@@ -20,12 +20,13 @@ import (
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/fakecontext"
 	"github.com/docker/docker/testutil/fakegit"
 	"github.com/docker/docker/testutil/fakestorage"
 	"github.com/moby/buildkit/frontend/dockerfile/command"
+	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"github.com/opencontainers/go-digest"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -2008,7 +2009,7 @@ func (s *DockerCLIBuildSuite) TestBuildAddLocalAndRemoteFilesWithAndWithoutCache
 	}
 }
 
-func testContextTar(c *testing.T, compression archive.Compression) {
+func testContextTar(c *testing.T, comp compression.Compression) {
 	ctx := fakecontext.New(c, "",
 		fakecontext.WithDockerfile(`FROM busybox
 ADD foo /foo
@@ -2018,13 +2019,13 @@ CMD ["cat", "/foo"]`),
 		}),
 	)
 	defer ctx.Close()
-	context, err := archive.Tar(ctx.Dir, compression)
+	buildContext, err := archive.Tar(ctx.Dir, comp)
 	if err != nil {
 		c.Fatalf("failed to build context tar: %v", err)
 	}
 	const name = "contexttar"
 
-	cli.BuildCmd(c, name, build.WithStdinContext(context))
+	cli.BuildCmd(c, name, build.WithStdinContext(buildContext))
 }
 
 func (s *DockerCLIBuildSuite) TestBuildContextTarGzip(c *testing.T) {
@@ -3949,6 +3950,7 @@ func (s *DockerCLIBuildSuite) TestBuildEmptyStringVolume(c *testing.T) {
 
 func (s *DockerCLIBuildSuite) TestBuildContainerWithCgroupParent(c *testing.T) {
 	testRequires(c, testEnv.IsLocalDaemon, DaemonIsLinux)
+	skip.If(c, onlyCgroupsv2(), "FIXME: cgroupsV2 not supported yet")
 
 	cgroupParent := "test"
 	data, err := os.ReadFile("/proc/self/cgroup")
@@ -4554,9 +4556,9 @@ func (s *DockerCLIBuildSuite) TestBuildBuildTimeArgEnv(c *testing.T) {
 	out := result.Combined()[i:] // "out" should contain just the warning message now
 
 	// These were specified on a --build-arg but no ARG was in the Dockerfile
-	assert.Assert(c, strings.Contains(out, "FOO7"))
-	assert.Assert(c, strings.Contains(out, "FOO8"))
-	assert.Assert(c, strings.Contains(out, "FOO9"))
+	assert.Assert(c, is.Contains(out, "FOO7"))
+	assert.Assert(c, is.Contains(out, "FOO8"))
+	assert.Assert(c, is.Contains(out, "FOO9"))
 }
 
 func (s *DockerCLIBuildSuite) TestBuildBuildTimeArgQuotedValVariants(c *testing.T) {
@@ -4632,10 +4634,10 @@ func (s *DockerCLIBuildSuite) TestBuildMultiStageArg(c *testing.T) {
 	parentID := imgs[0]
 
 	result = cli.DockerCmd(c, "run", "--rm", parentID, "cat", "/out")
-	assert.Assert(c, strings.Contains(result.Stdout(), "foo=abc"))
+	assert.Assert(c, is.Contains(result.Stdout(), "foo=abc"))
 	result = cli.DockerCmd(c, "run", "--rm", imgName, "cat", "/out")
 	assert.Assert(c, !strings.Contains(result.Stdout(), "foo"))
-	assert.Assert(c, strings.Contains(result.Stdout(), "bar=def"))
+	assert.Assert(c, is.Contains(result.Stdout(), "bar=def"))
 }
 
 func (s *DockerCLIBuildSuite) TestBuildMultiStageGlobalArg(c *testing.T) {
@@ -4664,7 +4666,7 @@ func (s *DockerCLIBuildSuite) TestBuildMultiStageGlobalArg(c *testing.T) {
 	result = cli.DockerCmd(c, "run", "--rm", parentID, "cat", "/out")
 	assert.Assert(c, !strings.Contains(result.Stdout(), "tag"))
 	result = cli.DockerCmd(c, "run", "--rm", imgName, "cat", "/out")
-	assert.Assert(c, strings.Contains(result.Stdout(), "tag=latest"))
+	assert.Assert(c, is.Contains(result.Stdout(), "tag=latest"))
 }
 
 func (s *DockerCLIBuildSuite) TestBuildMultiStageUnusedArg(c *testing.T) {
@@ -4679,8 +4681,8 @@ func (s *DockerCLIBuildSuite) TestBuildMultiStageUnusedArg(c *testing.T) {
 		build.WithDockerfile(dockerfile),
 		cli.WithFlags("--build-arg", "baz=abc"))
 	result.Assert(c, icmd.Success)
-	assert.Assert(c, strings.Contains(result.Combined(), "[Warning]"))
-	assert.Assert(c, strings.Contains(result.Combined(), "[baz] were not consumed"))
+	assert.Assert(c, is.Contains(result.Combined(), "[Warning]"))
+	assert.Assert(c, is.Contains(result.Combined(), "[baz] were not consumed"))
 	result = cli.DockerCmd(c, "run", "--rm", imgName, "cat", "/out")
 	assert.Assert(c, !strings.Contains(result.Stdout(), "bar"))
 	assert.Assert(c, !strings.Contains(result.Stdout(), "baz"))
@@ -5361,9 +5363,9 @@ func (s *DockerCLIBuildSuite) TestBuildStepsWithProgress(c *testing.T) {
 	totalRun := 5
 	result := buildImage(name, build.WithDockerfile("FROM busybox\n"+strings.Repeat("RUN echo foo\n", totalRun)))
 	result.Assert(c, icmd.Success)
-	assert.Assert(c, strings.Contains(result.Combined(), fmt.Sprintf("Step 1/%d : FROM busybox", 1+totalRun)))
+	assert.Assert(c, is.Contains(result.Combined(), fmt.Sprintf("Step 1/%d : FROM busybox", 1+totalRun)))
 	for i := 2; i <= 1+totalRun; i++ {
-		assert.Assert(c, strings.Contains(result.Combined(), fmt.Sprintf("Step %d/%d : RUN echo foo", i, 1+totalRun)))
+		assert.Assert(c, is.Contains(result.Combined(), fmt.Sprintf("Step %d/%d : RUN echo foo", i, 1+totalRun)))
 	}
 }
 
@@ -5374,8 +5376,8 @@ func (s *DockerCLIBuildSuite) TestBuildWithFailure(c *testing.T) {
 	dockerfile := "FROM busybox\nRUN nobody"
 	result := buildImage(name, build.WithDockerfile(dockerfile))
 	assert.Assert(c, result.Error != nil)
-	assert.Assert(c, strings.Contains(result.Stdout(), "Step 1/2 : FROM busybox"))
-	assert.Assert(c, strings.Contains(result.Stdout(), "Step 2/2 : RUN nobody"))
+	assert.Assert(c, is.Contains(result.Stdout(), "Step 1/2 : FROM busybox"))
+	assert.Assert(c, is.Contains(result.Stdout(), "Step 2/2 : RUN nobody"))
 	// Second test case `FFOM` should have been detected before build runs so no steps
 	dockerfile = "FFOM nobody\nRUN nobody"
 	result = buildImage(name, build.WithDockerfile(dockerfile))
@@ -5457,8 +5459,8 @@ func (s *DockerCLIBuildSuite) TestBuildCacheFrom(c *testing.T) {
 
 	var layers1 []string
 	var layers2 []string
-	assert.Assert(c, json.Unmarshal([]byte(layers1Str), &layers1) == nil)
-	assert.Assert(c, json.Unmarshal([]byte(layers2Str), &layers2) == nil)
+	assert.NilError(c, json.Unmarshal([]byte(layers1Str), &layers1))
+	assert.NilError(c, json.Unmarshal([]byte(layers2Str), &layers2))
 
 	assert.Equal(c, len(layers1), len(layers2))
 	for i := 0; i < len(layers1)-1; i++ {
@@ -6200,7 +6202,6 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 		{buildkit: false},
 		{buildkit: true},
 	} {
-		builder := builder
 		for _, tc := range []struct {
 			name  string
 			args  []string
@@ -6210,7 +6211,9 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 				name: "no tag",
 				args: []string{},
 				check: func(t *testing.T, stdout string) {
-					assert.Check(t, is.Contains(stdout, "image create"))
+					if assert.Check(t, is.Contains(stdout, "image create")) {
+						assert.Check(t, strings.Count(stdout, "image create") == 1)
+					}
 					assert.Check(t, !strings.Contains(stdout, "image tag"))
 				},
 			},
@@ -6218,15 +6221,20 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 				name: "with tag",
 				args: []string{"-t", "testbuildemitsimagetagevent"},
 				check: func(t *testing.T, stdout string) {
-					assert.Check(t, is.Contains(stdout, "image create"))
-					assert.Check(t, is.Contains(stdout, "image tag"))
+					if assert.Check(t, is.Contains(stdout, "image create")) {
+						assert.Check(t, strings.Count(stdout, "image create") == 1)
+					}
+					if assert.Check(t, is.Contains(stdout, "image tag")) {
+						assert.Check(t, strings.Count(stdout, "image tag") == 1)
+					}
 					assert.Check(t, is.Contains(stdout, "testbuildemitsimagetagevent"))
 				},
 			},
 		} {
-			tc := tc
 			t.Run(fmt.Sprintf("buildkit=%v/%s", builder.buildkit, tc.name), func(t *testing.T) {
-				skip.If(t, DaemonIsWindows, "Buildkit is not supported on Windows")
+				if builder.buildkit {
+					skip.If(t, DaemonIsWindows, "Buildkit is not supported on Windows")
+				}
 
 				time.Sleep(time.Second)
 				before := time.Now()
@@ -6249,7 +6257,7 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 						"--since", before.Format(time.RFC3339),
 					),
 					cli.WithTimeout(time.Millisecond*300),
-					cli.WithEnvironmentVariables("DOCKER_API_VERSION=v1.46"), // FIXME(thaJeztah): integration-cli runs docker CLI 17.06; we're "upgrading" the API version to a version it doesn't support here ;)
+					cli.WithEnvironmentVariables("DOCKER_API_VERSION=v1.46"), // FIXME(thaJeztah): integration-cli runs docker CLI 18.06; we're "upgrading" the API version to a version it doesn't support here ;)
 				)
 
 				stdout := cmd.Stdout()

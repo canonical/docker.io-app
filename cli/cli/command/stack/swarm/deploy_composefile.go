@@ -5,17 +5,16 @@ import (
 	"errors"
 	"fmt"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	servicecli "github.com/docker/cli/cli/command/service"
 	"github.com/docker/cli/cli/command/stack/options"
 	"github.com/docker/cli/cli/compose/convert"
 	composetypes "github.com/docker/cli/cli/compose/types"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 )
 
 func deployCompose(ctx context.Context, dockerCli command.Cli, opts *options.Deploy, config *composetypes.Config) error {
@@ -98,7 +97,7 @@ func validateExternalNetworks(ctx context.Context, apiClient client.NetworkAPICl
 		}
 		nw, err := apiClient.NetworkInspect(ctx, networkName, network.InspectOptions{})
 		switch {
-		case errdefs.IsNotFound(err):
+		case cerrdefs.IsNotFound(err):
 			return fmt.Errorf("network %q is declared as external, but could not be found. You need to create a swarm-scoped network before the stack is deployed", networkName)
 		case err != nil:
 			return err
@@ -109,8 +108,8 @@ func validateExternalNetworks(ctx context.Context, apiClient client.NetworkAPICl
 	return nil
 }
 
-func createSecrets(ctx context.Context, dockerCli command.Cli, secrets []swarm.SecretSpec) error {
-	apiClient := dockerCli.Client()
+func createSecrets(ctx context.Context, dockerCLI command.Cli, secrets []swarm.SecretSpec) error {
+	apiClient := dockerCLI.Client()
 
 	for _, secretSpec := range secrets {
 		secret, _, err := apiClient.SecretInspectWithRaw(ctx, secretSpec.Name)
@@ -120,9 +119,9 @@ func createSecrets(ctx context.Context, dockerCli command.Cli, secrets []swarm.S
 			if err := apiClient.SecretUpdate(ctx, secret.ID, secret.Meta.Version, secretSpec); err != nil {
 				return fmt.Errorf("failed to update secret %s: %w", secretSpec.Name, err)
 			}
-		case errdefs.IsNotFound(err):
+		case cerrdefs.IsNotFound(err):
 			// secret does not exist, then we create a new one.
-			fmt.Fprintf(dockerCli.Out(), "Creating secret %s\n", secretSpec.Name)
+			_, _ = fmt.Fprintln(dockerCLI.Out(), "Creating secret", secretSpec.Name)
 			if _, err := apiClient.SecretCreate(ctx, secretSpec); err != nil {
 				return fmt.Errorf("failed to create secret %s: %w", secretSpec.Name, err)
 			}
@@ -133,8 +132,8 @@ func createSecrets(ctx context.Context, dockerCli command.Cli, secrets []swarm.S
 	return nil
 }
 
-func createConfigs(ctx context.Context, dockerCli command.Cli, configs []swarm.ConfigSpec) error {
-	apiClient := dockerCli.Client()
+func createConfigs(ctx context.Context, dockerCLI command.Cli, configs []swarm.ConfigSpec) error {
+	apiClient := dockerCLI.Client()
 
 	for _, configSpec := range configs {
 		config, _, err := apiClient.ConfigInspectWithRaw(ctx, configSpec.Name)
@@ -144,9 +143,9 @@ func createConfigs(ctx context.Context, dockerCli command.Cli, configs []swarm.C
 			if err := apiClient.ConfigUpdate(ctx, config.ID, config.Meta.Version, configSpec); err != nil {
 				return fmt.Errorf("failed to update config %s: %w", configSpec.Name, err)
 			}
-		case errdefs.IsNotFound(err):
+		case cerrdefs.IsNotFound(err):
 			// config does not exist, then we create a new one.
-			fmt.Fprintf(dockerCli.Out(), "Creating config %s\n", configSpec.Name)
+			_, _ = fmt.Fprintln(dockerCLI.Out(), "Creating config", configSpec.Name)
 			if _, err := apiClient.ConfigCreate(ctx, configSpec); err != nil {
 				return fmt.Errorf("failed to create config %s: %w", configSpec.Name, err)
 			}
@@ -157,8 +156,8 @@ func createConfigs(ctx context.Context, dockerCli command.Cli, configs []swarm.C
 	return nil
 }
 
-func createNetworks(ctx context.Context, dockerCli command.Cli, namespace convert.Namespace, networks map[string]network.CreateOptions) error {
-	apiClient := dockerCli.Client()
+func createNetworks(ctx context.Context, dockerCLI command.Cli, namespace convert.Namespace, networks map[string]network.CreateOptions) error {
+	apiClient := dockerCLI.Client()
 
 	existingNetworks, err := getStackNetworks(ctx, apiClient, namespace.Name())
 	if err != nil {
@@ -179,7 +178,7 @@ func createNetworks(ctx context.Context, dockerCli command.Cli, namespace conver
 			createOpts.Driver = defaultNetworkDriver
 		}
 
-		fmt.Fprintf(dockerCli.Out(), "Creating network %s\n", name)
+		_, _ = fmt.Fprintln(dockerCLI.Out(), "Creating network", name)
 		if _, err := apiClient.NetworkCreate(ctx, name, createOpts); err != nil {
 			return fmt.Errorf("failed to create network %s: %w", name, err)
 		}
@@ -187,9 +186,9 @@ func createNetworks(ctx context.Context, dockerCli command.Cli, namespace conver
 	return nil
 }
 
-func deployServices(ctx context.Context, dockerCli command.Cli, services map[string]swarm.ServiceSpec, namespace convert.Namespace, sendAuth bool, resolveImage string) ([]string, error) {
-	apiClient := dockerCli.Client()
-	out := dockerCli.Out()
+func deployServices(ctx context.Context, dockerCLI command.Cli, services map[string]swarm.ServiceSpec, namespace convert.Namespace, sendAuth bool, resolveImage string) ([]string, error) {
+	apiClient := dockerCLI.Client()
+	out := dockerCLI.Out()
 
 	existingServices, err := getStackServices(ctx, apiClient, namespace.Name())
 	if err != nil {
@@ -212,16 +211,16 @@ func deployServices(ctx context.Context, dockerCli command.Cli, services map[str
 
 		if sendAuth {
 			// Retrieve encoded auth token from the image reference
-			encodedAuth, err = command.RetrieveAuthTokenFromImage(dockerCli.ConfigFile(), image)
+			encodedAuth, err = command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), image)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		if service, exists := existingServiceMap[name]; exists {
-			fmt.Fprintf(out, "Updating service %s (id: %s)\n", name, service.ID)
+			_, _ = fmt.Fprintf(out, "Updating service %s (id: %s)\n", name, service.ID)
 
-			updateOpts := types.ServiceUpdateOptions{EncodedRegistryAuth: encodedAuth}
+			updateOpts := swarm.ServiceUpdateOptions{EncodedRegistryAuth: encodedAuth}
 
 			switch resolveImage {
 			case ResolveImageAlways:
@@ -259,14 +258,14 @@ func deployServices(ctx context.Context, dockerCli command.Cli, services map[str
 			}
 
 			for _, warning := range response.Warnings {
-				fmt.Fprintln(dockerCli.Err(), warning)
+				_, _ = fmt.Fprintln(dockerCLI.Err(), warning)
 			}
 
 			serviceIDs = append(serviceIDs, service.ID)
 		} else {
-			fmt.Fprintf(out, "Creating service %s\n", name)
+			_, _ = fmt.Fprintln(out, "Creating service", name)
 
-			createOpts := types.ServiceCreateOptions{EncodedRegistryAuth: encodedAuth}
+			createOpts := swarm.ServiceCreateOptions{EncodedRegistryAuth: encodedAuth}
 
 			// query registry if flag disabling it was not set
 			if resolveImage == ResolveImageAlways || resolveImage == ResolveImageChanged {
@@ -292,10 +291,5 @@ func waitOnServices(ctx context.Context, dockerCli command.Cli, serviceIDs []str
 			errs = append(errs, fmt.Errorf("%s: %w", serviceID, err))
 		}
 	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	return nil
+	return errors.Join(errs...)
 }

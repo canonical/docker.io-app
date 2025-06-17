@@ -2,12 +2,12 @@ package network
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/network"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -19,12 +19,12 @@ func TestNetworkConnectErrors(t *testing.T) {
 		expectedError      string
 	}{
 		{
-			expectedError: "requires exactly 2 arguments",
+			expectedError: "requires 2 arguments",
 		},
 		{
 			args: []string{"toto", "titi"},
 			networkConnectFunc: func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error {
-				return errors.Errorf("error connecting network")
+				return errors.New("error connecting network")
 			},
 			expectedError: "error connecting network",
 		},
@@ -56,6 +56,7 @@ func TestNetworkConnectWithFlags(t *testing.T) {
 			"driveropt1": "optval1,optval2",
 			"driveropt2": "optval4",
 		},
+		GwPriority: 100,
 	}
 	cli := test.NewFakeCli(&fakeClient{
 		networkConnectFunc: func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error {
@@ -76,6 +77,7 @@ func TestNetworkConnectWithFlags(t *testing.T) {
 		{"ip6", "fdef:f401:8da0:1234::5678"},
 		{"link", "otherctr"},
 		{"link-local-ip", "169.254.42.42"},
+		{"gw-priority", "100"},
 	} {
 		err := cmd.Flags().Set(opt.name, opt.value)
 		assert.Check(t, err)

@@ -1,10 +1,11 @@
 package system // import "github.com/docker/docker/integration/system"
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
+	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/integration/internal/container"
@@ -24,7 +25,7 @@ func TestDiskUsage(t *testing.T) {
 	defer d.Cleanup(t)
 	d.Start(t, "--iptables=false", "--ip6tables=false")
 	defer d.Stop(t)
-	client := d.NewClientT(t)
+	apiClient := d.NewClientT(t)
 
 	var stepDU types.DiskUsage
 	for _, step := range []struct {
@@ -34,7 +35,7 @@ func TestDiskUsage(t *testing.T) {
 		{
 			doc: "empty",
 			next: func(t *testing.T, _ types.DiskUsage) types.DiskUsage {
-				du, err := client.DiskUsage(ctx, types.DiskUsageOptions{})
+				du, err := apiClient.DiskUsage(ctx, types.DiskUsageOptions{})
 				assert.NilError(t, err)
 
 				expectedLayersSize := int64(0)
@@ -49,9 +50,9 @@ func TestDiskUsage(t *testing.T) {
 				assert.DeepEqual(t, du, types.DiskUsage{
 					LayersSize: expectedLayersSize,
 					Images:     []*image.Summary{},
-					Containers: []*types.Container{},
+					Containers: []*containertypes.Summary{},
 					Volumes:    []*volume.Volume{},
-					BuildCache: []*types.BuildCache{},
+					BuildCache: []*build.CacheRecord{},
 				})
 				return du
 			},
@@ -61,21 +62,15 @@ func TestDiskUsage(t *testing.T) {
 			next: func(t *testing.T, _ types.DiskUsage) types.DiskUsage {
 				d.LoadBusybox(ctx, t)
 
-				du, err := client.DiskUsage(ctx, types.DiskUsageOptions{})
+				du, err := apiClient.DiskUsage(ctx, types.DiskUsageOptions{})
 				assert.NilError(t, err)
 				assert.Assert(t, du.LayersSize > 0)
 				assert.Equal(t, len(du.Images), 1)
 				assert.Equal(t, len(du.Images[0].RepoTags), 1)
 				assert.Check(t, is.Equal(du.Images[0].RepoTags[0], "busybox:latest"))
 
-				// Image size is layer size + content size, should be greater than total layer size
-				assert.Assert(t, du.Images[0].Size >= du.LayersSize)
-
-				// If size is greater, than content exists and should have a repodigest
-				if du.Images[0].Size > du.LayersSize {
-					assert.Equal(t, len(du.Images[0].RepoDigests), 1)
-					assert.Check(t, strings.HasPrefix(du.Images[0].RepoDigests[0], "busybox@"))
-				}
+				// Image size is layer size + content size. Content size is included in layers size.
+				assert.Equal(t, du.Images[0].Size, du.LayersSize)
 
 				return du
 			},
@@ -83,9 +78,9 @@ func TestDiskUsage(t *testing.T) {
 		{
 			doc: "after container.Run",
 			next: func(t *testing.T, prev types.DiskUsage) types.DiskUsage {
-				cID := container.Run(ctx, t, client)
+				cID := container.Run(ctx, t, apiClient)
 
-				du, err := client.DiskUsage(ctx, types.DiskUsageOptions{})
+				du, err := apiClient.DiskUsage(ctx, types.DiskUsageOptions{})
 				assert.NilError(t, err)
 				assert.Equal(t, len(du.Containers), 1)
 				assert.Equal(t, len(du.Containers[0].Names), 1)
@@ -102,9 +97,8 @@ func TestDiskUsage(t *testing.T) {
 				assert.Check(t, is.Equal(du.Containers[0].Image, "busybox"))
 				assert.Check(t, is.Equal(du.Containers[0].ImageID, prev.Images[0].ID))
 
-				// The rootfs size should be equivalent to all the layers,
-				// previously used prev.Images[0].Size, which may differ from content data
-				assert.Check(t, is.Equal(du.Containers[0].SizeRootFs, du.LayersSize))
+				// ImageManifestDescriptor should NOT be populated.
+				assert.Check(t, is.Nil(du.Containers[0].ImageManifestDescriptor))
 
 				return du
 			},
@@ -257,12 +251,11 @@ func TestDiskUsage(t *testing.T) {
 					},
 				},
 			} {
-				tc := tc
 				t.Run(tc.doc, func(t *testing.T) {
 					ctx := testutil.StartSpan(ctx, t)
 					// TODO: Run in parallel once https://github.com/moby/moby/pull/42560 is merged.
 
-					du, err := client.DiskUsage(ctx, tc.options)
+					du, err := apiClient.DiskUsage(ctx, tc.options)
 					assert.NilError(t, err)
 					assert.DeepEqual(t, du, tc.expected)
 				})

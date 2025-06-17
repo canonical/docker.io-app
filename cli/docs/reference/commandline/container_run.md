@@ -107,6 +107,7 @@ Create and run a new container from an image
 | [`--tmpfs`](#tmpfs)                                   | `list`        |           | Mount a tmpfs directory                                                                                                                                                                                                                                                                                          |
 | [`-t`](#tty), [`--tty`](#tty)                         | `bool`        |           | Allocate a pseudo-TTY                                                                                                                                                                                                                                                                                            |
 | [`--ulimit`](#ulimit)                                 | `ulimit`      |           | Ulimit options                                                                                                                                                                                                                                                                                                   |
+| `--use-api-socket`                                    | `bool`        |           | Bind mount Docker API socket and required auth                                                                                                                                                                                                                                                                   |
 | `-u`, `--user`                                        | `string`      |           | Username or UID (format: <name\|uid>[:<group\|gid>])                                                                                                                                                                                                                                                             |
 | [`--userns`](#userns)                                 | `string`      |           | User namespace to use                                                                                                                                                                                                                                                                                            |
 | [`--uts`](#uts)                                       | `string`      |           | UTS namespace to use                                                                                                                                                                                                                                                                                             |
@@ -387,7 +388,7 @@ none            1.9G     0  1.9G   0% /mnt
 ### <a name="workdir"></a> Set working directory (-w, --workdir)
 
 ```console
-$ docker run -w /path/to/dir/ -i -t ubuntu pwd
+$ docker run -w /path/to/dir/ ubuntu pwd
 ```
 
 The `-w` option runs the command executed inside the directory specified, in this example,
@@ -749,15 +750,16 @@ To specify options when connecting to more than one network, use the extended sy
 for the `--network` flag. Comma-separated options that can be specified in the extended
 `--network` syntax are:
 
-| Option          | Top-level Equivalent                  | Description                                     |
-|-----------------|---------------------------------------|-------------------------------------------------|
-| `name`          |                                       | The name of the network (mandatory)             |
-| `alias`         | `--network-alias`                     | Add network-scoped alias for the container      |
-| `ip`            | `--ip`                                | IPv4 address (e.g., 172.30.100.104)             |
-| `ip6`           | `--ip6`                               | IPv6 address (e.g., 2001:db8::33)               |
-| `mac-address`   | `--mac-address`                       | Container MAC address (e.g., 92:d0:c6:0a:29:33) |
-| `link-local-ip` | `--link-local-ip`                     | Container IPv4/IPv6 link-local addresses        |
-| `driver-opt`    | `docker network connect --driver-opt` | Network driver options                          |
+| Option          | Top-level Equivalent                  | Description                                                                             |
+|-----------------|---------------------------------------|-----------------------------------------------------------------------------------------|
+| `name`          |                                       | The name of the network (mandatory)                                                     |
+| `alias`         | `--network-alias`                     | Add network-scoped alias for the container                                              |
+| `ip`            | `--ip`                                | IPv4 address (e.g., 172.30.100.104)                                                     |
+| `ip6`           | `--ip6`                               | IPv6 address (e.g., 2001:db8::33)                                                       |
+| `mac-address`   | `--mac-address`                       | Container MAC address (e.g., 92:d0:c6:0a:29:33)                                         |
+| `link-local-ip` | `--link-local-ip`                     | Container IPv4/IPv6 link-local addresses                                                |
+| `driver-opt`    | `docker network connect --driver-opt` | Network driver options                                                                  |
+| `gw-priority`   |                                       | Highest gw-priority provides the default gateway. Accepts positive and negative values. |
 
 ```console
 $ docker network create --subnet 192.0.2.0/24 my-net1
@@ -1347,6 +1349,26 @@ $ docker run --ulimit nofile=1024:1024 --rm debian sh -c "ulimit -n"
 > ```console
 > $ docker run -it --ulimit as=1024 fedora /bin/bash
 > ```
+
+#### Supported options for `--ulimit`:
+
+| Option       | Description                                               |
+|:-------------|:----------------------------------------------------------|
+| `core`       | Maximum size of core files created (`RLIMIT_CORE`)        |
+| `cpu`        | CPU time limit in seconds (`RLIMIT_CPU`)                  |
+| `data`       | Maximum data segment size (`RLIMIT_DATA`)                 |
+| `fsize`      | Maximum file size (`RLIMIT_FSIZE`)                        |
+| `locks`      | Maximum number of file locks (`RLIMIT_LOCKS`)             |
+| `memlock`    | Maximum locked-in-memory address space (`RLIMIT_MEMLOCK`) |
+| `msgqueue`   | Maximum bytes in POSIX message queues (`RLIMIT_MSGQUEUE`) |
+| `nice`       | Maximum nice priority adjustment (`RLIMIT_NICE`)          |
+| `nofile`     | Maximum number of open file descriptors (`RLIMIT_NOFILE`) |
+| `nproc`      | Maximum number of processes available (`RLIMIT_NPROC`)    |
+| `rss`        | Maximum resident set size (`RLIMIT_RSS`)                  |
+| `rtprio`     | Maximum real-time scheduling priority (`RLIMIT_RTPRIO`)   |
+| `rttime`     | Maximum real-time execution time (`RLIMIT_RTTIME`)        |
+| `sigpending` | Maximum number of pending signals (`RLIMIT_SIGPENDING`)   |
+| `stack`      | Maximum stack size (`RLIMIT_STACK`)                       |
 
 Docker sends the values to the appropriate OS `syscall` and doesn't perform any byte conversion.
 Take this into account when setting the values.

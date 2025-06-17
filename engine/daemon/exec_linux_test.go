@@ -6,10 +6,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/containerd/containerd/pkg/apparmor"
+	"github.com/containerd/containerd/v2/pkg/apparmor"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/container"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"gotest.tools/v3/assert"
 )
 
@@ -62,7 +62,6 @@ func TestExecSetPlatformOptAppArmor(t *testing.T) {
 	// both give the same result.
 	for _, execPrivileged := range []bool{false, true} {
 		for _, tc := range tests {
-			tc := tc
 			doc := tc.doc
 			if !appArmorEnabled {
 				// no profile should be set if the host does not support AppArmor

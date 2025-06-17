@@ -9,9 +9,10 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/image"
+	"github.com/docker/cli/internal/jsonstream"
+	"github.com/docker/cli/internal/prompt"
 	"github.com/docker/docker/api/types"
 	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/registry"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -64,10 +65,7 @@ func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOpti
 		return types.PluginInstallOptions{}, err
 	}
 
-	repoInfo, err := registry.ParseRepositoryInfo(ref)
-	if err != nil {
-		return types.PluginInstallOptions{}, err
-	}
+	repoInfo, _ := registry.ParseRepositoryInfo(ref)
 
 	remote := ref.String()
 
@@ -104,7 +102,7 @@ func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOpti
 	return options, nil
 }
 
-func runInstall(ctx context.Context, dockerCli command.Cli, opts pluginOptions) error {
+func runInstall(ctx context.Context, dockerCLI command.Cli, opts pluginOptions) error {
 	var localName string
 	if opts.localName != "" {
 		aref, err := reference.ParseNormalizedNamed(opts.localName)
@@ -117,11 +115,11 @@ func runInstall(ctx context.Context, dockerCli command.Cli, opts pluginOptions) 
 		localName = reference.FamiliarString(reference.TagNameOnly(aref))
 	}
 
-	options, err := buildPullConfig(ctx, dockerCli, opts, "plugin install")
+	options, err := buildPullConfig(ctx, dockerCLI, opts, "plugin install")
 	if err != nil {
 		return err
 	}
-	responseBody, err := dockerCli.Client().PluginInstall(ctx, localName, options)
+	responseBody, err := dockerCLI.Client().PluginInstall(ctx, localName, options)
 	if err != nil {
 		if strings.Contains(err.Error(), "(image) when fetching") {
 			return errors.New(err.Error() + " - Use \"docker image pull\"")
@@ -129,19 +127,19 @@ func runInstall(ctx context.Context, dockerCli command.Cli, opts pluginOptions) 
 		return err
 	}
 	defer responseBody.Close()
-	if err := jsonmessage.DisplayJSONMessagesToStream(responseBody, dockerCli.Out(), nil); err != nil {
+	if err := jsonstream.Display(ctx, responseBody, dockerCLI.Out()); err != nil {
 		return err
 	}
-	fmt.Fprintf(dockerCli.Out(), "Installed plugin %s\n", opts.remote) // todo: return proper values from the API for this result
+	_, _ = fmt.Fprintln(dockerCLI.Out(), "Installed plugin", opts.remote) // todo: return proper values from the API for this result
 	return nil
 }
 
-func acceptPrivileges(dockerCli command.Cli, name string) func(ctx context.Context, privileges types.PluginPrivileges) (bool, error) {
+func acceptPrivileges(dockerCLI command.Streams, name string) func(ctx context.Context, privileges types.PluginPrivileges) (bool, error) {
 	return func(ctx context.Context, privileges types.PluginPrivileges) (bool, error) {
-		fmt.Fprintf(dockerCli.Out(), "Plugin %q is requesting the following privileges:\n", name)
+		_, _ = fmt.Fprintf(dockerCLI.Out(), "Plugin %q is requesting the following privileges:\n", name)
 		for _, privilege := range privileges {
-			fmt.Fprintf(dockerCli.Out(), " - %s: %v\n", privilege.Name, privilege.Value)
+			_, _ = fmt.Fprintf(dockerCLI.Out(), " - %s: %v\n", privilege.Name, privilege.Value)
 		}
-		return command.PromptForConfirmation(ctx, dockerCli.In(), dockerCli.Out(), "Do you grant the above permissions?")
+		return prompt.Confirm(ctx, dockerCLI.In(), dockerCLI.Out(), "Do you grant the above permissions?")
 	}
 }

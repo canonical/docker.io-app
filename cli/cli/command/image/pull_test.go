@@ -23,7 +23,7 @@ func TestNewPullCommandErrors(t *testing.T) {
 	}{
 		{
 			name:          "wrong-args",
-			expectedError: "requires exactly 1 argument.",
+			expectedError: "requires 1 argument",
 			args:          []string{},
 		},
 		{
@@ -38,7 +38,6 @@ func TestNewPullCommandErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{})
 			cmd := NewPullCommand(cli)
@@ -73,7 +72,6 @@ func TestNewPullCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				imagePullFunc: func(ref string, options image.PullOptions) (io.ReadCloser, error) {
@@ -119,7 +117,6 @@ func TestNewPullCommandWithContentTrustErrors(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				imagePullFunc: func(ref string, options image.PullOptions) (io.ReadCloser, error) {

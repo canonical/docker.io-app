@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.23
+
 package libnetwork
 
 import (
@@ -5,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -45,7 +49,7 @@ type Sandbox struct {
 	endpoints          []*Endpoint
 	epPriority         map[string]int
 	populatedEndpoints map[string]struct{}
-	joinLeaveDone      chan struct{}
+	joinLeaveMu        sync.Mutex
 	dbIndex            uint64
 	dbExists           bool
 	isStub             bool
@@ -67,13 +71,6 @@ type hostsPathConfig struct {
 	hostsPath       string
 	originHostsPath string
 	extraHosts      []extraHost
-	parentUpdates   []parentUpdate
-}
-
-type parentUpdate struct {
-	cid  string
-	name string
-	ip   string
 }
 
 type extraHost struct {
@@ -92,10 +89,9 @@ type resolvConfPathConfig struct {
 }
 
 type containerConfig struct {
-	containerConfigOS //nolint:nolintlint,unused // only populated on windows
 	hostsPathConfig
 	resolvConfPathConfig
-	generic           map[string]interface{}
+	generic           map[string]any
 	useDefaultSandBox bool
 	useExternalKey    bool
 	exposedPorts      []types.TransportPort
@@ -120,10 +116,10 @@ func (sb *Sandbox) Key() string {
 }
 
 // Labels returns the sandbox's labels.
-func (sb *Sandbox) Labels() map[string]interface{} {
+func (sb *Sandbox) Labels() map[string]any {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	opts := make(map[string]interface{}, len(sb.config.generic))
+	opts := make(map[string]any, len(sb.config.generic))
 	for k, v := range sb.config.generic {
 		opts[k] = v
 	}
@@ -272,6 +268,15 @@ func (sb *Sandbox) Refresh(ctx context.Context, options ...SandboxOption) error 
 	}
 
 	return nil
+}
+
+func (sb *Sandbox) UpdateLabels(labels map[string]any) {
+	if sb.config.generic == nil {
+		sb.config.generic = make(map[string]any, len(labels))
+	}
+	for k, v := range labels {
+		sb.config.generic[k] = v
+	}
 }
 
 func (sb *Sandbox) MarshalJSON() ([]byte, error) {
@@ -439,27 +444,18 @@ func (sb *Sandbox) ResolveName(ctx context.Context, name string, ipType int) ([]
 
 	for i := 0; i < len(reqName); i++ {
 		// First check for local container alias
-		ip, ipv6Miss := sb.resolveName(ctx, reqName[i], networkName[i], epList, true, ipType)
-		if ip != nil {
-			return ip, false
+		if ip, ok := sb.resolveName(ctx, reqName[i], networkName[i], epList, true, ipType); ok {
+			return ip, true
 		}
-		if ipv6Miss {
-			return ip, ipv6Miss
-		}
-
 		// Resolve the actual container name
-		ip, ipv6Miss = sb.resolveName(ctx, reqName[i], networkName[i], epList, false, ipType)
-		if ip != nil {
-			return ip, false
-		}
-		if ipv6Miss {
-			return ip, ipv6Miss
+		if ip, ok := sb.resolveName(ctx, reqName[i], networkName[i], epList, false, ipType); ok {
+			return ip, true
 		}
 	}
 	return nil, false
 }
 
-func (sb *Sandbox) resolveName(ctx context.Context, nameOrAlias string, networkName string, epList []*Endpoint, lookupAlias bool, ipType int) (_ []net.IP, ipv6Miss bool) {
+func (sb *Sandbox) resolveName(ctx context.Context, nameOrAlias string, networkName string, epList []*Endpoint, lookupAlias bool, ipType int) ([]net.IP, bool) {
 	ctx, span := otel.Tracer("").Start(ctx, "Sandbox.resolveName", trace.WithAttributes(
 		attribute.String("libnet.resolver.name-or-alias", nameOrAlias),
 		attribute.String("libnet.network.name", networkName),
@@ -497,15 +493,12 @@ func (sb *Sandbox) resolveName(ctx context.Context, nameOrAlias string, networkN
 			}
 		}
 
-		ip, miss := nw.ResolveName(ctx, name, ipType)
-		if ip != nil {
-			return ip, false
-		}
-		if miss {
-			ipv6Miss = miss
+		ip, ok := nw.ResolveName(ctx, name, ipType)
+		if ok {
+			return ip, true
 		}
 	}
-	return nil, ipv6Miss
+	return nil, false
 }
 
 // hasExternalAccess returns true if any of sb's Endpoints appear to have external
@@ -516,7 +509,7 @@ func (sb *Sandbox) hasExternalAccess() bool {
 		if nw.Internal() || nw.Type() == "null" || nw.Type() == "host" {
 			continue
 		}
-		if ep.hasGatewayOrDefaultRoute() {
+		if v4, v6 := ep.hasGatewayOrDefaultRoute(); v4 || v6 {
 			return true
 		}
 	}
@@ -595,41 +588,22 @@ func (sb *Sandbox) clearNetworkResources(origEp *Endpoint) error {
 		return nil
 	}
 
-	var (
-		gwepBefore, gwepAfter *Endpoint
-		index                 = -1
-	)
-	for i, e := range sb.endpoints {
-		if e == ep {
-			index = i
-		}
-		if len(e.Gateway()) > 0 && gwepBefore == nil {
-			gwepBefore = e
-		}
-		if index != -1 && gwepBefore != nil {
-			break
-		}
-	}
-
-	if index == -1 {
+	if !slices.Contains(sb.endpoints, ep) {
 		log.G(context.TODO()).Warnf("Endpoint %s has already been deleted", ep.Name())
 		sb.mu.Unlock()
 		return nil
 	}
 
+	gwepBefore4, gwepBefore6 := selectGatewayEndpoint(sb.endpoints)
 	sb.removeEndpointRaw(ep)
-	for _, e := range sb.endpoints {
-		if len(e.Gateway()) > 0 {
-			gwepAfter = e
-			break
-		}
-	}
+	gwepAfter4, gwepAfter6 := selectGatewayEndpoint(sb.endpoints)
 	delete(sb.epPriority, ep.ID())
+
 	sb.mu.Unlock()
 
-	if gwepAfter != nil && gwepBefore != gwepAfter {
-		if err := sb.updateGateway(gwepAfter); err != nil {
-			return err
+	if (gwepAfter4 != nil && gwepBefore4 != gwepAfter4) || (gwepAfter6 != nil && gwepBefore6 != gwepAfter6) {
+		if err := sb.updateGateway(gwepAfter4, gwepAfter6); err != nil {
+			return fmt.Errorf("updating gateway endpoint: %w", err)
 		}
 	}
 
@@ -644,97 +618,60 @@ func (sb *Sandbox) clearNetworkResources(origEp *Endpoint) error {
 	return nil
 }
 
-// joinLeaveStart waits to ensure there are no joins or leaves in progress and
-// marks this join/leave in progress without race
-func (sb *Sandbox) joinLeaveStart() {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-
-	for sb.joinLeaveDone != nil {
-		joinLeaveDone := sb.joinLeaveDone
-		sb.mu.Unlock()
-
-		<-joinLeaveDone
-
-		sb.mu.Lock()
-	}
-
-	sb.joinLeaveDone = make(chan struct{})
-}
-
-// joinLeaveEnd marks the end of this join/leave operation and
-// signals the same without race to other join and leave waiters
-func (sb *Sandbox) joinLeaveEnd() {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
-
-	if sb.joinLeaveDone != nil {
-		close(sb.joinLeaveDone)
-		sb.joinLeaveDone = nil
-	}
-}
-
-// <=> Returns true if a < b, false if a > b and advances to next level if a == b
-// epi.prio <=> epj.prio           # 2 < 1
-// epi.gw <=> epj.gw               # non-gw < gw
-// epi.internal <=> epj.internal   # non-internal < internal
-// epi.joininfo <=> epj.joininfo   # ipv6 < ipv4
-// epi.name <=> epj.name           # bar < foo
-func (epi *Endpoint) Less(epj *Endpoint) bool {
-	var prioi, prioj int
-
-	sbi, _ := epi.getSandbox()
+// Less defines an ordering over endpoints, with better candidates for the default
+// gateway sorted first.
+//
+//	<=> Returns true if a < b, false if a > b and advances to next level if a == b
+//	ep.prio <=> epj.prio           # 2 < 1
+//	ep.gw <=> epj.gw               # non-gw < gw
+//	ep.internal <=> epj.internal   # non-internal < internal
+//	ep.hasGw <=> epj.hasGw         # (gw4 and gw6) < (gw4 or gw6) < (no gw)
+//	ep.name <=> epj.name           # bar < foo
+func (ep *Endpoint) Less(epj *Endpoint) bool {
+	sbi, _ := ep.getSandbox()
 	sbj, _ := epj.getSandbox()
 
 	// Prio defaults to 0
+	var prioi, prioj int
 	if sbi != nil {
-		prioi = sbi.epPriority[epi.ID()]
+		prioi = sbi.epPriority[ep.ID()]
 	}
 	if sbj != nil {
 		prioj = sbj.epPriority[epj.ID()]
 	}
-
 	if prioi != prioj {
 		return prioi > prioj
 	}
 
-	gwi := epi.endpointInGWNetwork()
-	gwj := epj.endpointInGWNetwork()
-	if gwi != gwj {
-		return gwj
+	gwNeti := ep.endpointInGWNetwork()
+	gwNetj := epj.endpointInGWNetwork()
+	if gwNeti != gwNetj {
+		return gwNetj
 	}
 
-	inti := epi.getNetwork().Internal()
+	inti := ep.getNetwork().Internal()
 	intj := epj.getNetwork().Internal()
 	if inti != intj {
 		return intj
 	}
 
-	jii := 0
-	if epi.joinInfo != nil {
-		if epi.joinInfo.gw != nil {
-			jii = jii + 1
+	gwCount := func(ep *Endpoint) int {
+		gw4, gw6 := ep.hasGatewayOrDefaultRoute()
+		if gw4 && gw6 {
+			return 2
 		}
-		if epi.joinInfo.gw6 != nil {
-			jii = jii + 2
+		if gw4 || gw6 {
+			return 1
 		}
+		return 0
+	}
+	gwCounti := gwCount(ep)
+	gwCountj := gwCount(epj)
+	if gwCounti != gwCountj {
+		return gwCounti > gwCountj
 	}
 
-	jij := 0
-	if epj.joinInfo != nil {
-		if epj.joinInfo.gw != nil {
-			jij = jij + 1
-		}
-		if epj.joinInfo.gw6 != nil {
-			jij = jij + 2
-		}
-	}
-
-	if jii != jij {
-		return jii > jij
-	}
-
-	return epi.network.Name() < epj.network.Name()
+	return ep.network.Name() < epj.network.Name()
 }
 
 func (sb *Sandbox) NdotsSet() bool {

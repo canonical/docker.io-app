@@ -8,6 +8,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/config"
+	"github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/libnetwork"
 	"github.com/docker/docker/pkg/system"
 	"github.com/pkg/errors"
@@ -15,6 +16,16 @@ import (
 
 func (daemon *Daemon) setupLinkedContainers(ctr *container.Container) ([]string, error) {
 	return nil, nil
+}
+
+func (daemon *Daemon) addLegacyLinks(
+	ctx context.Context,
+	cfg *config.Config,
+	ctr *container.Container,
+	epConfig *network.EndpointSettings,
+	sb *libnetwork.Sandbox,
+) error {
+	return nil
 }
 
 func (daemon *Daemon) setupConfigDir(ctr *container.Container) (setupErr error) {
@@ -150,10 +161,6 @@ func killProcessDirectly(ctr *container.Container) error {
 	return nil
 }
 
-func isLinkable(child *container.Container) bool {
-	return false
-}
-
 func enableIPOnPredefinedNetwork() bool {
 	return true
 }
@@ -164,12 +171,6 @@ func serviceDiscoveryOnDefaultNetwork() bool {
 }
 
 func buildSandboxPlatformOptions(ctr *container.Container, cfg *config.Config, sboxOptions *[]libnetwork.SandboxOption) error {
-	// By default, the Windows internal resolver forwards requests to external
-	// resolvers - but forwarding can be disabled using feature flag
-	// "windows-dns-proxy":false.
-	if doproxy, exists := cfg.Features["windows-dns-proxy"]; exists && !doproxy {
-		*sboxOptions = append(*sboxOptions, libnetwork.OptionDNSNoProxy())
-	}
 	return nil
 }
 

@@ -32,10 +32,14 @@ type fallbackError struct {
 
 // Error renders the FallbackError as a string.
 func (f fallbackError) Error() string {
-	return f.Cause().Error()
+	return f.err.Error()
 }
 
 func (f fallbackError) Cause() error {
+	return f.err
+}
+
+func (f fallbackError) Unwrap() error {
 	return f.err
 }
 
@@ -64,6 +68,10 @@ func (e notFoundError) Cause() error {
 	return e.cause
 }
 
+func (e notFoundError) Unwrap() error {
+	return e.cause
+}
+
 // unsupportedMediaTypeError is an error issued when attempted
 // to pull unsupported content.
 type unsupportedMediaTypeError struct {
@@ -82,6 +90,10 @@ func (e unsupportedMediaTypeError) Error() string {
 // information which is not used by the returned error gets output to
 // log at info level.
 func translatePullError(err error, ref reference.Named) error {
+	// FIXME(thaJeztah): cleanup error and context handling in this package, as it's really messy.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	switch v := err.(type) {
 	case errcode.Errors:
 		if len(v) != 0 {
@@ -102,26 +114,13 @@ func translatePullError(err error, ref reference.Named) error {
 	return errdefs.Unknown(err)
 }
 
-func isNotFound(err error) bool {
-	switch v := err.(type) {
-	case errcode.Errors:
-		for _, e := range v {
-			if isNotFound(e) {
-				return true
-			}
-		}
-	case errcode.Error:
-		switch v.Code {
-		case errcode.ErrorCodeDenied, v2.ErrorCodeManifestUnknown, v2.ErrorCodeNameUnknown:
-			return true
-		}
-	}
-	return false
-}
-
 // continueOnError returns true if we should fallback to the next endpoint
 // as a result of this error.
 func continueOnError(err error, mirrorEndpoint bool) bool {
+	// FIXME(thaJeztah): cleanup error and context handling in this package, as it's really messy.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	switch v := err.(type) {
 	case errcode.Errors:
 		if len(v) == 0 {
@@ -142,12 +141,13 @@ func continueOnError(err error, mirrorEndpoint bool) bool {
 		return false
 	case error:
 		return !strings.Contains(err.Error(), strings.ToLower(syscall.ESRCH.Error()))
+	default:
+		// let's be nice and fallback if the error is a completely
+		// unexpected one.
+		// If new errors have to be handled in some way, please
+		// add them to the switch above.
+		return true
 	}
-	// let's be nice and fallback if the error is a completely
-	// unexpected one.
-	// If new errors have to be handled in some way, please
-	// add them to the switch above.
-	return true
 }
 
 // retryOnError wraps the error in xfer.DoNotRetry if we should not retry the
@@ -186,6 +186,14 @@ func retryOnError(err error) error {
 	return err
 }
 
+type AIModelNotSupportedError struct{}
+
+func (e AIModelNotSupportedError) Error() string {
+	return `AI models are not yet supported by the Engine, please use "docker model pull/run" instead`
+}
+
+func (e AIModelNotSupportedError) InvalidParameter() {}
+
 type invalidManifestClassError struct {
 	mediaType string
 	class     string
@@ -218,7 +226,7 @@ type invalidArgumentErr struct{ error }
 func (invalidArgumentErr) InvalidParameter() {}
 
 func DeprecatedSchema1ImageError(ref reference.Named) error {
-	msg := "[DEPRECATION NOTICE] Docker Image Format v1 and Docker Image manifest version 2, schema 1 support is disabled by default and will be removed in an upcoming release."
+	msg := "Docker Image Format v1 and Docker Image manifest version 2, schema 1 support has been removed."
 	if ref != nil {
 		msg += " Suggest the author of " + ref.String() + " to upgrade the image to the OCI Format or Docker Image manifest v2, schema 2."
 	}
