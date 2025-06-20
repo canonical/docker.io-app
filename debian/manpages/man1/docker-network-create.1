@@ -1,6 +1,6 @@
 '\" t
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-network-create - Create a network
@@ -276,10 +276,6 @@ node1$ docker network create -d macvlan --scope swarm --config-from mv-config --
 	IPv4 or IPv6 Gateway for the master subnet
 
 .PP
-\fB-h\fP, \fB--help\fP[=false]
-	help for create
-
-.PP
 \fB--ingress\fP[=false]
 	Create swarm routing-mesh network
 
@@ -300,8 +296,12 @@ node1$ docker network create -d macvlan --scope swarm --config-from mv-config --
 	Set IPAM driver specific options
 
 .PP
+\fB--ipv4\fP[=true]
+	Enable or disable IPv4 address assignment
+
+.PP
 \fB--ipv6\fP[=false]
-	Enable or disable IPv6 networking
+	Enable or disable IPv6 address assignment
 
 .PP
 \fB--label\fP=
