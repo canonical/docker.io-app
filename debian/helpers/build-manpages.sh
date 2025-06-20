@@ -28,17 +28,16 @@ if dpkg -l golang-1.24-go >/dev/null 2>&1; then
   # (in case the default is not 1.24).
   PATH=/usr/lib/go-1.24/bin:"${PATH}"
 else
-  echo "[E] Please, install golang-1.21-go."
+  echo "[E] Please, install golang-1.24-go."
   exit 5
 fi
 
-# Place built binaries in ${build_dir} instead of /tmp
-sed -i s#/tmp/gen-manpages#"${build_dir}"/gen-manpages#g ./scripts/docs/generate-man.sh
-sed -i s#/tmp/go-md2man#"${build_dir}"/go-md2man#g ./scripts/docs/generate-man.sh
-
 # Execute upstream script to generate manpages.
 # It will download some Go modules.
-./scripts/docs/generate-man.sh
+# This was taken from the upstream Makefile. with-go-mod creates a stub go.mod
+# file to allow some go commands to run. Refer to the Makefile or the scripts
+# being rin for further reference.
+scripts/with-go-mod.sh scripts/docs/generate-man.sh
 
 popd
 
