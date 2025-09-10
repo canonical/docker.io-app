@@ -2,12 +2,12 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -20,12 +20,12 @@ func TestSecretRemoveErrors(t *testing.T) {
 	}{
 		{
 			args:          []string{},
-			expectedError: "requires at least 1 argument.",
+			expectedError: "requires at least 1 argument",
 		},
 		{
 			args: []string{"foo"},
 			secretRemoveFunc: func(_ context.Context, name string) error {
-				return errors.Errorf("error removing secret")
+				return errors.New("error removing secret")
 			},
 			expectedError: "error removing secret",
 		},
@@ -67,7 +67,7 @@ func TestSecretRemoveContinueAfterError(t *testing.T) {
 		secretRemoveFunc: func(_ context.Context, name string) error {
 			removedSecrets = append(removedSecrets, name)
 			if name == "foo" {
-				return errors.Errorf("error removing secret: %s", name)
+				return errors.New("error removing secret: " + name)
 			}
 			return nil
 		},

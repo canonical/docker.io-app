@@ -8,13 +8,14 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
 // Record Structure for a single host record
 type Record struct {
 	Hosts string
-	IP    string
+	IP    netip.Addr
 }
 
 // WriteTo writes record to file and returns bytes written or error
@@ -26,14 +27,14 @@ func (r Record) WriteTo(w io.Writer) (int64, error) {
 var (
 	// Default hosts config records slice
 	defaultContentIPv4 = []Record{
-		{Hosts: "localhost", IP: "127.0.0.1"},
+		{Hosts: "localhost", IP: netip.MustParseAddr("127.0.0.1")},
 	}
 	defaultContentIPv6 = []Record{
-		{Hosts: "localhost ip6-localhost ip6-loopback", IP: "::1"},
-		{Hosts: "ip6-localnet", IP: "fe00::0"},
-		{Hosts: "ip6-mcastprefix", IP: "ff00::0"},
-		{Hosts: "ip6-allnodes", IP: "ff02::1"},
-		{Hosts: "ip6-allrouters", IP: "ff02::2"},
+		{Hosts: "localhost ip6-localhost ip6-loopback", IP: netip.IPv6Loopback()},
+		{Hosts: "ip6-localnet", IP: netip.MustParseAddr("fe00::")},
+		{Hosts: "ip6-mcastprefix", IP: netip.MustParseAddr("ff00::")},
+		{Hosts: "ip6-allnodes", IP: netip.MustParseAddr("ff02::1")},
+		{Hosts: "ip6-allrouters", IP: netip.MustParseAddr("ff02::2")},
 	}
 
 	// A cache of path level locks for synchronizing /etc/hosts
@@ -79,8 +80,7 @@ func Build(path string, extraContent []Record) error {
 func BuildNoIPv6(path string, extraContent []Record) error {
 	var ipv4ExtraContent []Record
 	for _, rec := range extraContent {
-		addr, err := netip.ParseAddr(rec.IP)
-		if err != nil || !addr.Is6() {
+		if !rec.IP.Is6() {
 			ipv4ExtraContent = append(ipv4ExtraContent, rec)
 		}
 	}
@@ -106,57 +106,46 @@ func build(path string, contents ...[]Record) error {
 
 // Add adds an arbitrary number of Records to an already existing /etc/hosts file
 func Add(path string, recs []Record) error {
-	defer pathLock(path)()
-
 	if len(recs) == 0 {
 		return nil
 	}
 
-	b, err := mergeRecords(path, recs)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, b, 0o644)
-}
-
-func mergeRecords(path string, recs []Record) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+	defer pathLock(path)()
 
 	content := bytes.NewBuffer(nil)
-
-	if _, err := content.ReadFrom(f); err != nil {
-		return nil, err
-	}
-
 	for _, r := range recs {
 		if _, err := r.WriteTo(content); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return content.Bytes(), nil
-}
-
-// Delete deletes an arbitrary number of Records already existing in /etc/hosts file
-func Delete(path string, recs []Record) error {
-	defer pathLock(path)()
-
-	if len(recs) == 0 {
-		return nil
-	}
-	old, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
+	_, err = f.Write(content.Bytes())
+	_ = f.Close()
+	return err
+}
+
+// Delete deletes Records from /etc/hosts.
+// The hostnames must be an exact match (if the user has modified the record,
+// it won't be deleted). The address, parsed as a netip.Addr must also match
+// the value in recs.
+func Delete(path string, recs []Record) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	defer pathLock(path)()
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
 	var buf bytes.Buffer
 
-	s := bufio.NewScanner(old)
+	s := bufio.NewScanner(f)
 	eol := []byte{'\n'}
 loop:
 	for s.Scan() {
@@ -171,18 +160,23 @@ loop:
 			continue
 		}
 		for _, r := range recs {
-			if bytes.HasSuffix(b, []byte("\t"+r.Hosts)) {
-				continue loop
+			if before, found := strings.CutSuffix(string(b), "\t"+r.Hosts); found {
+				if addr, err := netip.ParseAddr(strings.TrimSpace(before)); err == nil && addr == r.IP {
+					continue loop
+				}
 			}
 		}
 		buf.Write(b)
 		buf.Write(eol)
 	}
-	old.Close()
 	if err := s.Err(); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	_, err = f.WriteAt(buf.Bytes(), 0)
+	return err
 }
 
 // Update all IP addresses where hostname matches.
@@ -190,12 +184,15 @@ loop:
 // IP is new IP address
 // hostname is hostname to search for to replace IP
 func Update(path, IP, hostname string) error {
+	re, err := regexp.Compile(fmt.Sprintf(`(\S*)(\t%s)(\s|\.)`, regexp.QuoteMeta(hostname)))
+	if err != nil {
+		return err
+	}
 	defer pathLock(path)()
 
 	old, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	re := regexp.MustCompile(fmt.Sprintf("(\\S*)(\\t%s)(\\s|\\.)", regexp.QuoteMeta(hostname)))
 	return os.WriteFile(path, re.ReplaceAll(old, []byte(IP+"$2"+"$3")), 0o644)
 }

@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/metadata"
-	"github.com/containerd/containerd/namespaces"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/metadata"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/log/logtest"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/container"
 	daemonevents "github.com/docker/docker/daemon/events"
 	dimages "github.com/docker/docker/daemon/images"
@@ -20,8 +21,8 @@ func TestImageDelete(t *testing.T) {
 
 	for _, tc := range []struct {
 		ref       string
-		starting  []images.Image
-		remaining []images.Image
+		starting  []c8dimages.Image
+		remaining []c8dimages.Image
 		err       error
 		// TODO: Records
 		// TODO: Containers
@@ -33,7 +34,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "justoneimage",
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/justoneimage:latest",
 					Target: desc(10),
@@ -42,7 +43,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "justoneref",
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/justoneref:latest",
 					Target: desc(10),
@@ -52,7 +53,7 @@ func TestImageDelete(t *testing.T) {
 					Target: desc(10),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/differentrepo:latest",
 					Target: desc(10),
@@ -61,7 +62,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "hasdigest",
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/hasdigest:latest",
 					Target: desc(10),
@@ -74,7 +75,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: digestFor(11).String(),
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/byid:latest",
 					Target: desc(11),
@@ -87,7 +88,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "bydigest@" + digestFor(12).String(),
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/bydigest:latest",
 					Target: desc(12),
@@ -100,7 +101,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "onerefoftwo",
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/onerefoftwo:latest",
 					Target: desc(12),
@@ -114,7 +115,7 @@ func TestImageDelete(t *testing.T) {
 					Target: desc(12),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/onerefoftwo:other",
 					Target: desc(12),
@@ -127,7 +128,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "otherreporemaining",
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/otherreporemaining:latest",
 					Target: desc(12),
@@ -141,7 +142,7 @@ func TestImageDelete(t *testing.T) {
 					Target: desc(12),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/someotherrepo:latest",
 					Target: desc(12),
@@ -150,7 +151,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "repoanddigest@" + digestFor(15).String(),
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/repoanddigest:latest",
 					Target: desc(15),
@@ -164,7 +165,7 @@ func TestImageDelete(t *testing.T) {
 					Target: desc(15),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/someotherrepo:latest",
 					Target: desc(15),
@@ -173,7 +174,7 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "repoanddigestothertags@" + digestFor(15).String(),
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/repoanddigestothertags:v1",
 					Target: desc(15),
@@ -195,7 +196,7 @@ func TestImageDelete(t *testing.T) {
 					Target: desc(15),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/someotherrepo:latest",
 					Target: desc(15),
@@ -204,13 +205,13 @@ func TestImageDelete(t *testing.T) {
 		},
 		{
 			ref: "repoanddigestzerocase@" + digestFor(16).String(),
-			starting: []images.Image{
+			starting: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/someotherrepo:latest",
 					Target: desc(16),
 				},
 			},
-			remaining: []images.Image{
+			remaining: []c8dimages.Image{
 				{
 					Name:   "docker.io/library/someotherrepo:latest",
 					Target: desc(16),
@@ -219,7 +220,6 @@ func TestImageDelete(t *testing.T) {
 			err: dimages.ErrImageDoesNotExist{Ref: nameDigest("repoanddigestzerocase", digestFor(16))},
 		},
 	} {
-		tc := tc
 		t.Run(tc.ref, func(t *testing.T) {
 			t.Parallel()
 			ctx := logtest.WithT(ctx, t)
@@ -235,7 +235,7 @@ func TestImageDelete(t *testing.T) {
 				}
 			}
 
-			_, err := service.ImageDelete(ctx, tc.ref, false, false)
+			_, err := service.ImageDelete(ctx, tc.ref, image.RemoveOptions{})
 			if tc.err == nil {
 				assert.NilError(t, err)
 			} else {

@@ -19,7 +19,7 @@ func TestTagUnprefixedRepoByNameOrName(t *testing.T) {
 	assert.NilError(t, err)
 
 	// By ID
-	insp, _, err := client.ImageInspectWithRaw(ctx, "busybox")
+	insp, err := client.ImageInspect(ctx, "busybox")
 	assert.NilError(t, err)
 	err = client.ImageTag(ctx, insp.ID, "testfoobarbaz")
 	assert.NilError(t, err)
@@ -41,7 +41,6 @@ func TestTagValidPrefixedRepo(t *testing.T) {
 	validRepos := []string{"fooo/bar", "fooaa/test", "foooo:t", "HOSTNAME.DOMAIN.COM:443/foo/bar"}
 
 	for _, repo := range validRepos {
-		repo := repo
 		t.Run(repo, func(t *testing.T) {
 			t.Parallel()
 			err := client.ImageTag(ctx, "busybox", repo)
@@ -74,13 +73,12 @@ func TestTagOfficialNames(t *testing.T) {
 	}
 
 	for _, name := range names {
-		name := name
 		t.Run("tag from busybox to "+name, func(t *testing.T) {
 			err := client.ImageTag(ctx, "busybox", name+":latest")
 			assert.NilError(t, err)
 
 			// ensure we don't have multiple tag names.
-			insp, _, err := client.ImageInspectWithRaw(ctx, "busybox")
+			insp, err := client.ImageInspect(ctx, "busybox")
 			assert.NilError(t, err)
 			// TODO(vvoland): Not sure what's actually being tested here. Is is still doing anything useful?
 			assert.Assert(t, !is.Contains(insp.RepoTags, name)().Success())
@@ -102,6 +100,6 @@ func TestTagMatchesDigest(t *testing.T) {
 	assert.Check(t, is.ErrorContains(err, "refusing to create a tag with a digest reference"))
 
 	// check that no new image matches the digest
-	_, _, err = client.ImageInspectWithRaw(ctx, digest)
+	_, err = client.ImageInspect(ctx, digest)
 	assert.Check(t, is.ErrorContains(err, fmt.Sprintf("No such image: %s", digest)))
 }

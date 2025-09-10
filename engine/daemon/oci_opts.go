@@ -3,10 +3,10 @@ package daemon
 import (
 	"context"
 
-	"github.com/containerd/containerd/containers"
-	coci "github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/v2/core/containers"
+	coci "github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/docker/docker/container"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // WithConsoleSize sets the initial console size

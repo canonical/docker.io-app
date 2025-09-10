@@ -1,17 +1,18 @@
 package registry
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/docker/cli/cli/command"
 	configtypes "github.com/docker/cli/cli/config/types"
 	"github.com/docker/cli/cli/streams"
+	"github.com/docker/cli/internal/prompt"
 	"github.com/docker/cli/internal/test"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/system"
@@ -33,11 +34,11 @@ type fakeClient struct {
 	client.Client
 }
 
-func (c *fakeClient) Info(context.Context) (system.Info, error) {
+func (*fakeClient) Info(context.Context) (system.Info, error) {
 	return system.Info{}, nil
 }
 
-func (c *fakeClient) RegistryLogin(_ context.Context, auth registrytypes.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
+func (*fakeClient) RegistryLogin(_ context.Context, auth registrytypes.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
 	if auth.Password == expiredPassword {
 		return registrytypes.AuthenticateOKBody{}, errors.New("Invalid Username or Password")
 	}
@@ -55,31 +56,35 @@ func (c *fakeClient) RegistryLogin(_ context.Context, auth registrytypes.AuthCon
 func TestLoginWithCredStoreCreds(t *testing.T) {
 	testCases := []struct {
 		inputAuthConfig registrytypes.AuthConfig
-		expectedMsg     string
 		expectedErr     string
+		expectedMsg     string
+		expectedErrMsg  string
 	}{
 		{
 			inputAuthConfig: registrytypes.AuthConfig{},
-			expectedMsg:     "Authenticating with existing credentials...\n",
 		},
 		{
 			inputAuthConfig: registrytypes.AuthConfig{
 				Username: unknownUser,
 			},
-			expectedMsg: "Authenticating with existing credentials...\n",
-			expectedErr: fmt.Sprintf("Login did not succeed, error: %s\n", errUnknownUser),
+			expectedErr:    errUnknownUser,
+			expectedErrMsg: fmt.Sprintf("Login did not succeed, error: %s\n", errUnknownUser),
 		},
 	}
 	ctx := context.Background()
+	cli := test.NewFakeCli(&fakeClient{})
+	cli.ConfigFile().Filename = filepath.Join(t.TempDir(), "config.json")
 	for _, tc := range testCases {
-		cli := test.NewFakeCli(&fakeClient{})
-		errBuf := new(bytes.Buffer)
-		cli.SetErr(streams.NewOut(errBuf))
-		loginWithStoredCredentials(ctx, cli, tc.inputAuthConfig)
-		outputString := cli.OutBuffer().String()
-		assert.Check(t, is.Equal(tc.expectedMsg, outputString))
-		errorString := errBuf.String()
-		assert.Check(t, is.Equal(tc.expectedErr, errorString))
+		_, err := loginWithStoredCredentials(ctx, cli, tc.inputAuthConfig)
+		if tc.expectedErrMsg != "" {
+			assert.Check(t, is.Error(err, tc.expectedErr))
+		} else {
+			assert.NilError(t, err)
+		}
+		assert.Check(t, is.Equal(tc.expectedMsg, cli.OutBuffer().String()))
+		assert.Check(t, is.Contains(cli.ErrBuffer().String(), tc.expectedErrMsg))
+		cli.ErrBuffer().Reset()
+		cli.OutBuffer().Reset()
 	}
 }
 
@@ -349,16 +354,16 @@ func TestLoginNonInteractive(t *testing.T) {
 		// "" meaning default registry
 		registries := []string{"", "my-registry.com"}
 
-		for _, registry := range registries {
+		for _, registryAddr := range registries {
 			for _, tc := range testCases {
 				t.Run(tc.doc, func(t *testing.T) {
 					tmpFile := fs.NewFile(t, "test-run-login")
 					defer tmpFile.Remove()
 					cli := test.NewFakeCli(&fakeClient{})
-					configfile := cli.ConfigFile()
-					configfile.Filename = tmpFile.Path()
+					cfg := cli.ConfigFile()
+					cfg.Filename = tmpFile.Path()
 					options := loginOptions{
-						serverAddress: registry,
+						serverAddress: registryAddr,
 					}
 					if tc.username {
 						options.user = "my-username"
@@ -412,26 +417,26 @@ func TestLoginNonInteractive(t *testing.T) {
 		// "" meaning default registry
 		registries := []string{"", "my-registry.com"}
 
-		for _, registry := range registries {
+		for _, registryAddr := range registries {
 			for _, tc := range testCases {
 				t.Run(tc.doc, func(t *testing.T) {
 					tmpFile := fs.NewFile(t, "test-run-login")
 					defer tmpFile.Remove()
 					cli := test.NewFakeCli(&fakeClient{})
-					configfile := cli.ConfigFile()
-					configfile.Filename = tmpFile.Path()
-					serverAddress := registry
+					cfg := cli.ConfigFile()
+					cfg.Filename = tmpFile.Path()
+					serverAddress := registryAddr
 					if serverAddress == "" {
 						serverAddress = "https://index.docker.io/v1/"
 					}
-					assert.NilError(t, configfile.GetCredentialsStore(serverAddress).Store(configtypes.AuthConfig{
+					assert.NilError(t, cfg.GetCredentialsStore(serverAddress).Store(configtypes.AuthConfig{
 						Username:      "my-username",
 						Password:      "my-password",
 						ServerAddress: serverAddress,
 					}))
 
 					options := loginOptions{
-						serverAddress: registry,
+						serverAddress: registryAddr,
 					}
 					if tc.username {
 						options.user = "my-username"
@@ -488,7 +493,7 @@ func TestLoginTermination(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out after 1 second. `runLogin` did not return")
 	case err := <-runErr:
-		assert.ErrorIs(t, err, command.ErrPromptTerminated)
+		assert.ErrorIs(t, err, prompt.ErrTerminated)
 	}
 }
 
@@ -533,5 +538,63 @@ func TestIsOauthLoginDisabled(t *testing.T) {
 		disabled := isOauthLoginDisabled()
 
 		assert.Equal(t, disabled, tc.disabled)
+	}
+}
+
+func TestLoginValidateFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		expectedErr string
+	}{
+		{
+			name:        "--password-stdin without --username",
+			args:        []string{"--password-stdin"},
+			expectedErr: `the --password-stdin option requires --username to be set`,
+		},
+		{
+			name:        "--password-stdin with empty --username",
+			args:        []string{"--password-stdin", "--username", ""},
+			expectedErr: `username is empty`,
+		},
+		{
+			name:        "empty --username",
+			args:        []string{"--username", ""},
+			expectedErr: `username is empty`,
+		},
+		{
+			name:        "--username without value",
+			args:        []string{"--username"},
+			expectedErr: `flag needs an argument: --username`,
+		},
+		{
+			name:        "conflicting options --password-stdin and --password",
+			args:        []string{"--password-stdin", "--password", ""},
+			expectedErr: `conflicting options: cannot specify both --password and --password-stdin`,
+		},
+		{
+			name:        "empty --password",
+			args:        []string{"--password", ""},
+			expectedErr: `password is empty`,
+		},
+		{
+			name:        "--password without value",
+			args:        []string{"--password"},
+			expectedErr: `flag needs an argument: --password`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewLoginCommand(test.NewFakeCli(&fakeClient{}))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			if tc.expectedErr != "" {
+				assert.Check(t, is.ErrorContains(err, tc.expectedErr))
+			} else {
+				assert.Check(t, is.Nil(err))
+			}
+		})
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	realcontainer "github.com/docker/docker/container"
@@ -73,7 +72,7 @@ func TestContainerStartOnDaemonRestart(t *testing.T) {
 	assert.Check(t, err, "failed to start test container")
 }
 
-func getContainerdShimPid(t *testing.T, c types.ContainerJSON) int {
+func getContainerdShimPid(t *testing.T, c containertypes.InspectResponse) int {
 	statB, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", c.State.Pid))
 	assert.Check(t, err, "error looking up containerd-shim pid")
 
@@ -270,7 +269,7 @@ func TestHardRestartWhenContainerIsRunning(t *testing.T) {
 		defer cancel()
 		inspect, err := apiClient.ContainerInspect(ctx, noPolicy)
 		assert.NilError(t, err)
-		assert.Check(t, is.Equal(inspect.State.Status, "exited"))
+		assert.Check(t, is.Equal(inspect.State.Status, containertypes.StateExited))
 		assert.Check(t, is.Equal(inspect.State.ExitCode, 255))
 		finishedAt, err := time.Parse(time.RFC3339Nano, inspect.State.FinishedAt)
 		if assert.Check(t, err) {
@@ -284,7 +283,7 @@ func TestHardRestartWhenContainerIsRunning(t *testing.T) {
 		defer cancel()
 		inspect, err := apiClient.ContainerInspect(ctx, onFailure)
 		assert.NilError(t, err)
-		assert.Check(t, is.Equal(inspect.State.Status, "running"))
+		assert.Check(t, is.Equal(inspect.State.Status, containertypes.StateRunning))
 		assert.Check(t, is.Equal(inspect.State.ExitCode, 0))
 		finishedAt, err := time.Parse(time.RFC3339Nano, inspect.State.FinishedAt)
 		if assert.Check(t, err) {

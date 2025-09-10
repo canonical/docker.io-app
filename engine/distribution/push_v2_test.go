@@ -17,6 +17,8 @@ import (
 	refstore "github.com/docker/docker/reference"
 	registrypkg "github.com/docker/docker/registry"
 	"github.com/opencontainers/go-digest"
+	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestGetRepositoryMountCandidates(t *testing.T) {
@@ -396,7 +398,7 @@ func TestLayerAlreadyExists(t *testing.T) {
 		ms := &mockV2MetadataService{}
 		pd := &pushDescriptor{
 			hmacKey:  []byte(tc.hmacKey),
-			repoInfo: repoInfo,
+			repoName: repoInfo,
 			layer: &storeLayer{
 				Layer: layer.EmptyLayer,
 			},
@@ -414,9 +416,7 @@ func TestLayerAlreadyExists(t *testing.T) {
 		if exists != tc.expectedExists {
 			t.Errorf("[%s] got unexpected exists: %t != %t", tc.name, exists, tc.expectedExists)
 		}
-		if !reflect.DeepEqual(err, tc.expectedError) {
-			t.Errorf("[%s] got unexpected error: %#+v != %#+v", tc.name, err, tc.expectedError)
-		}
+		assert.Check(t, is.ErrorIs(err, tc.expectedError))
 
 		if len(repo.requests) != len(tc.expectedRequests) {
 			t.Errorf("[%s] got unexpected number of requests: %d != %d", tc.name, len(repo.requests), len(tc.expectedRequests))
@@ -506,23 +506,20 @@ func TestWhenEmptyAuthConfig(t *testing.T) {
 			RegistryToken: authInfo.registryToken,
 		}
 		imagePushConfig.ReferenceStore = &mockReferenceStore{}
-		repoInfo, _ := reference.ParseNormalizedNamed("xujihui1985/test.img")
-		pusher := &pusher{
-			config: imagePushConfig,
-			repoInfo: &registrypkg.RepositoryInfo{
-				Name: repoInfo,
-			},
+		repoName, _ := reference.ParseNormalizedNamed("xujihui1985/test.img")
+		testPusher := &pusher{
+			config:   imagePushConfig,
+			repoName: repoName,
 			endpoint: registrypkg.APIEndpoint{
 				URL: &url.URL{
 					Scheme: "https",
 					Host:   registrypkg.IndexHostname,
 				},
-				TrimHostname: true,
 			},
 		}
-		pusher.push(context.Background())
-		if pusher.pushState.hasAuthInfo != authInfo.expected {
-			t.Errorf("hasAuthInfo does not match expected: %t != %t", authInfo.expected, pusher.pushState.hasAuthInfo)
+		_ = testPusher.push(context.Background())
+		if testPusher.pushState.hasAuthInfo != authInfo.expected {
+			t.Errorf("hasAuthInfo does not match expected: %t != %t", authInfo.expected, testPusher.pushState.hasAuthInfo)
 		}
 	}
 }
@@ -584,7 +581,7 @@ func TestPushRegistryWhenAuthInfoEmpty(t *testing.T) {
 	}
 	pd := &pushDescriptor{
 		hmacKey:  []byte("abcd"),
-		repoInfo: repoInfo,
+		repoName: repoInfo,
 		layer: &storeLayer{
 			Layer: layer.EmptyLayer,
 		},

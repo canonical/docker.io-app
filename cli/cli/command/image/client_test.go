@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/system"
@@ -16,18 +16,18 @@ import (
 type fakeClient struct {
 	client.Client
 	imageTagFunc     func(string, string) error
-	imageSaveFunc    func(images []string) (io.ReadCloser, error)
+	imageSaveFunc    func(images []string, options ...client.ImageSaveOption) (io.ReadCloser, error)
 	imageRemoveFunc  func(image string, options image.RemoveOptions) ([]image.DeleteResponse, error)
 	imagePushFunc    func(ref string, options image.PushOptions) (io.ReadCloser, error)
 	infoFunc         func() (system.Info, error)
 	imagePullFunc    func(ref string, options image.PullOptions) (io.ReadCloser, error)
 	imagesPruneFunc  func(pruneFilter filters.Args) (image.PruneReport, error)
-	imageLoadFunc    func(input io.Reader, quiet bool) (image.LoadResponse, error)
+	imageLoadFunc    func(input io.Reader, options ...client.ImageLoadOption) (image.LoadResponse, error)
 	imageListFunc    func(options image.ListOptions) ([]image.Summary, error)
-	imageInspectFunc func(image string) (types.ImageInspect, []byte, error)
+	imageInspectFunc func(img string) (image.InspectResponse, error)
 	imageImportFunc  func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error)
-	imageHistoryFunc func(image string) ([]image.HistoryResponseItem, error)
-	imageBuildFunc   func(context.Context, io.Reader, types.ImageBuildOptions) (types.ImageBuildResponse, error)
+	imageHistoryFunc func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error)
+	imageBuildFunc   func(context.Context, io.Reader, build.ImageBuildOptions) (build.ImageBuildResponse, error)
 }
 
 func (cli *fakeClient) ImageTag(_ context.Context, img, ref string) error {
@@ -37,9 +37,9 @@ func (cli *fakeClient) ImageTag(_ context.Context, img, ref string) error {
 	return nil
 }
 
-func (cli *fakeClient) ImageSave(_ context.Context, images []string) (io.ReadCloser, error) {
+func (cli *fakeClient) ImageSave(_ context.Context, images []string, options ...client.ImageSaveOption) (io.ReadCloser, error) {
 	if cli.imageSaveFunc != nil {
-		return cli.imageSaveFunc(images)
+		return cli.imageSaveFunc(images, options...)
 	}
 	return io.NopCloser(strings.NewReader("")), nil
 }
@@ -69,7 +69,7 @@ func (cli *fakeClient) Info(_ context.Context) (system.Info, error) {
 
 func (cli *fakeClient) ImagePull(_ context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
 	if cli.imagePullFunc != nil {
-		cli.imagePullFunc(ref, options)
+		return cli.imagePullFunc(ref, options)
 	}
 	return io.NopCloser(strings.NewReader("")), nil
 }
@@ -81,9 +81,9 @@ func (cli *fakeClient) ImagesPrune(_ context.Context, pruneFilter filters.Args) 
 	return image.PruneReport{}, nil
 }
 
-func (cli *fakeClient) ImageLoad(_ context.Context, input io.Reader, quiet bool) (image.LoadResponse, error) {
+func (cli *fakeClient) ImageLoad(_ context.Context, input io.Reader, options ...client.ImageLoadOption) (image.LoadResponse, error) {
 	if cli.imageLoadFunc != nil {
-		return cli.imageLoadFunc(input, quiet)
+		return cli.imageLoadFunc(input, options...)
 	}
 	return image.LoadResponse{}, nil
 }
@@ -95,11 +95,11 @@ func (cli *fakeClient) ImageList(_ context.Context, options image.ListOptions) (
 	return []image.Summary{}, nil
 }
 
-func (cli *fakeClient) ImageInspectWithRaw(_ context.Context, img string) (types.ImageInspect, []byte, error) {
+func (cli *fakeClient) ImageInspect(_ context.Context, img string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
 	if cli.imageInspectFunc != nil {
 		return cli.imageInspectFunc(img)
 	}
-	return types.ImageInspect{}, nil, nil
+	return image.InspectResponse{}, nil
 }
 
 func (cli *fakeClient) ImageImport(_ context.Context, source image.ImportSource, ref string,
@@ -111,16 +111,16 @@ func (cli *fakeClient) ImageImport(_ context.Context, source image.ImportSource,
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
-func (cli *fakeClient) ImageHistory(_ context.Context, img string) ([]image.HistoryResponseItem, error) {
+func (cli *fakeClient) ImageHistory(_ context.Context, img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
 	if cli.imageHistoryFunc != nil {
-		return cli.imageHistoryFunc(img)
+		return cli.imageHistoryFunc(img, options...)
 	}
 	return []image.HistoryResponseItem{{ID: img, Created: time.Now().Unix()}}, nil
 }
 
-func (cli *fakeClient) ImageBuild(ctx context.Context, buildContext io.Reader, options types.ImageBuildOptions) (types.ImageBuildResponse, error) {
+func (cli *fakeClient) ImageBuild(ctx context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error) {
 	if cli.imageBuildFunc != nil {
 		return cli.imageBuildFunc(ctx, buildContext, options)
 	}
-	return types.ImageBuildResponse{Body: io.NopCloser(strings.NewReader(""))}, nil
+	return build.ImageBuildResponse{Body: io.NopCloser(strings.NewReader(""))}, nil
 }

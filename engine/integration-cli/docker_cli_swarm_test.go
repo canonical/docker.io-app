@@ -19,6 +19,7 @@ import (
 
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/integration-cli/checker"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/daemon"
@@ -32,6 +33,7 @@ import (
 	"github.com/moby/swarmkit/v2/ca/keyutils"
 	"github.com/vishvananda/netlink"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
 	"gotest.tools/v3/icmd"
 	"gotest.tools/v3/poll"
@@ -50,15 +52,15 @@ func (s *DockerSwarmSuite) TestSwarmUpdate(c *testing.T) {
 	assert.NilError(c, err, out)
 
 	spec := getSpec()
-	assert.Equal(c, spec.CAConfig.NodeCertExpiry, 30*time.Hour)
-	assert.Equal(c, spec.Dispatcher.HeartbeatPeriod, 11*time.Second)
+	assert.Check(c, is.Equal(spec.CAConfig.NodeCertExpiry, 30*time.Hour))
+	assert.Check(c, is.Equal(spec.Dispatcher.HeartbeatPeriod, 11*time.Second))
 
 	// setting anything under 30m for cert-expiry is not allowed
 	out, err = d.Cmd("swarm", "update", "--cert-expiry", "15m")
 	assert.ErrorContains(c, err, "")
-	assert.Assert(c, strings.Contains(out, "minimum certificate expiry time"))
+	assert.Assert(c, is.Contains(out, "minimum certificate expiry time"))
 	spec = getSpec()
-	assert.Equal(c, spec.CAConfig.NodeCertExpiry, 30*time.Hour)
+	assert.Check(c, is.Equal(spec.CAConfig.NodeCertExpiry, 30*time.Hour))
 
 	// passing an external CA (this is without starting a root rotation) does not fail
 	cli.Docker(cli.Args("swarm", "update", "--external-ca", "protocol=cfssl,url=https://something.org",
@@ -68,14 +70,21 @@ func (s *DockerSwarmSuite) TestSwarmUpdate(c *testing.T) {
 	expected, err := os.ReadFile("fixtures/https/ca.pem")
 	assert.NilError(c, err)
 
-	spec = getSpec()
-	assert.Equal(c, len(spec.CAConfig.ExternalCAs), 2)
-	assert.Equal(c, spec.CAConfig.ExternalCAs[0].CACert, "")
-	assert.Equal(c, spec.CAConfig.ExternalCAs[1].CACert, string(expected))
+	version := cli.Docker(cli.Args("version", "--format", "{{ .Client.Version }}"), cli.Daemon(d)).Stdout()
+	version = strings.TrimSpace(version)
+	// This was broken in v18.06
+	// See: https://github.com/docker/cli/pull/5995
+	if version != "" && versions.LessThan(version, "18.06") {
+		spec = getSpec()
+		sw := d.GetSwarm(c)
+		if assert.Check(c, is.Len(spec.CAConfig.ExternalCAs, 2)) {
+			assert.Check(c, is.Equal(spec.CAConfig.ExternalCAs[0].CACert, sw.TLSInfo.TrustRoot))
+			assert.Check(c, is.Equal(spec.CAConfig.ExternalCAs[1].CACert, string(expected)))
+		}
+	}
 
 	// passing an invalid external CA fails
 	tempFile := fs.NewFile(c, "testfile", fs.WithContent("fakecert"))
-	defer tempFile.Remove()
 
 	result := cli.Docker(cli.Args("swarm", "update",
 		"--external-ca", fmt.Sprintf("protocol=cfssl,url=https://something.org,cacert=%s", tempFile.Path())),
@@ -97,7 +106,6 @@ func (s *DockerSwarmSuite) TestSwarmInit(c *testing.T) {
 
 	// passing an invalid external CA fails
 	tempFile := fs.NewFile(c, "testfile", fs.WithContent("fakecert"))
-	defer tempFile.Remove()
 
 	result := cli.Docker(cli.Args("swarm", "init", "--cert-expiry", "30h", "--dispatcher-heartbeat", "11s",
 		"--external-ca", fmt.Sprintf("protocol=cfssl,url=https://somethingelse.org,cacert=%s", tempFile.Path())),
@@ -116,18 +124,29 @@ func (s *DockerSwarmSuite) TestSwarmInit(c *testing.T) {
 	assert.NilError(c, err)
 
 	spec := getSpec()
-	assert.Equal(c, spec.CAConfig.NodeCertExpiry, 30*time.Hour)
-	assert.Equal(c, spec.Dispatcher.HeartbeatPeriod, 11*time.Second)
-	assert.Equal(c, len(spec.CAConfig.ExternalCAs), 2)
-	assert.Equal(c, spec.CAConfig.ExternalCAs[0].CACert, "")
-	assert.Equal(c, spec.CAConfig.ExternalCAs[1].CACert, string(expected))
+	assert.Check(c, is.Equal(spec.CAConfig.NodeCertExpiry, 30*time.Hour))
+	assert.Check(c, is.Equal(spec.Dispatcher.HeartbeatPeriod, 11*time.Second))
 
-	assert.Assert(c, d.SwarmLeave(ctx, c, true) == nil)
+	version := cli.Docker(cli.Args("version", "--format", "{{ .Client.Version }}"), cli.Daemon(d)).Stdout()
+	version = strings.TrimSpace(version)
+	// This was broken in v18.06
+	// See: https://github.com/docker/cli/pull/5995
+	if version != "" && versions.LessThan(version, "18.06") {
+		if assert.Check(c, is.Len(spec.CAConfig.ExternalCAs, 2)) {
+			// TODO: Should this actually be:
+			// assert.Check(c, is.Equal(spec.CAConfig.ExternalCAs[0].CACert, sw.TLSInfo.TrustRoot))
+			assert.Check(c, is.Equal(spec.CAConfig.ExternalCAs[0].CACert, ""))
+
+			assert.Check(c, is.Equal(spec.CAConfig.ExternalCAs[1].CACert, string(expected)))
+		}
+	}
+
+	assert.NilError(c, d.SwarmLeave(ctx, c, true))
 	cli.Docker(cli.Args("swarm", "init"), cli.Daemon(d)).Assert(c, icmd.Success)
 
 	spec = getSpec()
-	assert.Equal(c, spec.CAConfig.NodeCertExpiry, 90*24*time.Hour)
-	assert.Equal(c, spec.Dispatcher.HeartbeatPeriod, 5*time.Second)
+	assert.Check(c, is.Equal(spec.CAConfig.NodeCertExpiry, 90*24*time.Hour))
+	assert.Check(c, is.Equal(spec.Dispatcher.HeartbeatPeriod, 5*time.Second))
 }
 
 func (s *DockerSwarmSuite) TestSwarmInitIPv6(c *testing.T) {
@@ -142,7 +161,7 @@ func (s *DockerSwarmSuite) TestSwarmInitIPv6(c *testing.T) {
 		cli.Daemon(d2)).Assert(c, icmd.Success)
 
 	out := cli.Docker(cli.Args("info"), cli.Daemon(d2)).Assert(c, icmd.Success).Combined()
-	assert.Assert(c, strings.Contains(out, "Swarm: active"))
+	assert.Assert(c, is.Contains(out, "Swarm: active"))
 }
 
 func (s *DockerSwarmSuite) TestSwarmInitUnspecifiedAdvertiseAddr(c *testing.T) {
@@ -150,7 +169,7 @@ func (s *DockerSwarmSuite) TestSwarmInitUnspecifiedAdvertiseAddr(c *testing.T) {
 	d := s.AddDaemon(ctx, c, false, false)
 	out, err := d.Cmd("swarm", "init", "--advertise-addr", "0.0.0.0")
 	assert.ErrorContains(c, err, "")
-	assert.Assert(c, strings.Contains(out, "advertise address must be a non-zero IP address"))
+	assert.Assert(c, is.Contains(out, "advertise address must be a non-zero IP address"))
 }
 
 func (s *DockerSwarmSuite) TestSwarmIncompatibleDaemon(c *testing.T) {
@@ -166,7 +185,7 @@ func (s *DockerSwarmSuite) TestSwarmIncompatibleDaemon(c *testing.T) {
 	assert.ErrorContains(c, err, "")
 	content, err := d.ReadLogFile()
 	assert.NilError(c, err)
-	assert.Assert(c, strings.Contains(string(content), "--live-restore daemon configuration is incompatible with swarm mode"))
+	assert.Assert(c, is.Contains(string(content), "--live-restore daemon configuration is incompatible with swarm mode"))
 	// restart for teardown
 	d.StartNode(c)
 }
@@ -175,7 +194,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceTemplatingHostname(c *testing.T) {
 	ctx := testutil.GetContext(c)
 	d := s.AddDaemon(ctx, c, true, true)
 	hostname, err := d.Cmd("node", "inspect", "--format", "{{.Description.Hostname}}", "self")
-	assert.Assert(c, err == nil, hostname)
+	assert.NilError(c, err, hostname)
 
 	out, err := d.Cmd("service", "create", "--detach", "--no-resolve-image", "--name", "test", "--hostname", "{{.Service.Name}}-{{.Task.Slot}}-{{.Node.Hostname}}", "busybox", "top")
 	assert.NilError(c, err, out)
@@ -215,19 +234,19 @@ func (s *DockerSwarmSuite) TestSwarmServiceListFilter(c *testing.T) {
 	// We search checker.Contains with `name+" "` to prevent prefix only.
 	out, err = d.Cmd("service", "ls", "--filter", filter1)
 	assert.NilError(c, err, out)
-	assert.Assert(c, strings.Contains(out, name1+" "), out)
-	assert.Assert(c, !strings.Contains(out, name2+" "), out)
-	assert.Assert(c, !strings.Contains(out, name3+" "), out)
+	assert.Check(c, is.Contains(out, name1+" "))
+	assert.Check(c, !strings.Contains(out, name2+" "), out)
+	assert.Check(c, !strings.Contains(out, name3+" "), out)
 	out, err = d.Cmd("service", "ls", "--filter", filter2)
 	assert.NilError(c, err, out)
-	assert.Assert(c, strings.Contains(out, name1+" "), out)
-	assert.Assert(c, strings.Contains(out, name2+" "), out)
-	assert.Assert(c, !strings.Contains(out, name3+" "), out)
+	assert.Check(c, is.Contains(out, name1+" "))
+	assert.Check(c, is.Contains(out, name2+" "))
+	assert.Check(c, !strings.Contains(out, name3+" "))
 	out, err = d.Cmd("service", "ls")
 	assert.NilError(c, err, out)
-	assert.Assert(c, strings.Contains(out, name1+" "), out)
-	assert.Assert(c, strings.Contains(out, name2+" "), out)
-	assert.Assert(c, strings.Contains(out, name3+" "), out)
+	assert.Check(c, is.Contains(out, name1+" "))
+	assert.Check(c, is.Contains(out, name2+" "))
+	assert.Check(c, is.Contains(out, name3+" "))
 }
 
 func (s *DockerSwarmSuite) TestSwarmNodeListFilter(c *testing.T) {
@@ -243,7 +262,7 @@ func (s *DockerSwarmSuite) TestSwarmNodeListFilter(c *testing.T) {
 
 	out, err = d.Cmd("node", "ls", "--filter", filter)
 	assert.NilError(c, err, out)
-	assert.Assert(c, strings.Contains(out, name), out)
+	assert.Assert(c, is.Contains(out, name))
 	out, err = d.Cmd("node", "ls", "--filter", "name=none")
 	assert.NilError(c, err, out)
 	assert.Assert(c, !strings.Contains(out, name), out)
@@ -265,9 +284,9 @@ func (s *DockerSwarmSuite) TestSwarmNodeTaskListFilter(c *testing.T) {
 
 	out, err = d.Cmd("node", "ps", "--filter", filter, "self")
 	assert.NilError(c, err, out)
-	assert.Assert(c, strings.Contains(out, name+".1"), out)
-	assert.Assert(c, strings.Contains(out, name+".2"), out)
-	assert.Assert(c, strings.Contains(out, name+".3"), out)
+	assert.Check(c, is.Contains(out, name+".1"))
+	assert.Check(c, is.Contains(out, name+".2"))
+	assert.Check(c, is.Contains(out, name+".3"))
 	out, err = d.Cmd("node", "ps", "--filter", "name=none", "self")
 	assert.NilError(c, err, out)
 	assert.Assert(c, !strings.Contains(out, name+".1"), out)
@@ -294,13 +313,13 @@ func (s *DockerSwarmSuite) TestSwarmPublishAdd(c *testing.T) {
 	assert.NilError(c, err, out)
 
 	_, err = d.CmdRetryOutOfSequence("service", "update", "--detach", "--publish-add", "80:80", "--publish-add", "80:20", name)
-	assert.ErrorContains(c, err, "")
+	assert.Check(c, is.ErrorContains(err, ""))
 
 	// this last command does not have to be retried because service inspect
 	// does not return out of sequence errors.
 	out, err = d.Cmd("service", "inspect", "--format", "{{ .Spec.EndpointSpec.Ports }}", name)
 	assert.NilError(c, err, out)
-	assert.Equal(c, strings.TrimSpace(out), "[{ tcp 80 80 ingress}]")
+	assert.Check(c, is.Equal(strings.TrimSpace(out), "[{ tcp 80 80 ingress}]"))
 }
 
 func (s *DockerSwarmSuite) TestSwarmServiceWithGroup(c *testing.T) {
@@ -323,7 +342,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceWithGroup(c *testing.T) {
 
 	out, err = d.Cmd("exec", container, "id")
 	assert.NilError(c, err, out)
-	assert.Equal(c, strings.TrimSpace(out), "uid=0(root) gid=0(root) groups=0(root),10(wheel),29(audio),50(staff),777")
+	assert.Check(c, is.Equal(strings.TrimSpace(out), "uid=0(root) gid=0(root) groups=0(root),10(wheel),29(audio),50(staff),777"))
 }
 
 func (s *DockerSwarmSuite) TestSwarmContainerAutoStart(c *testing.T) {
@@ -442,7 +461,7 @@ func (s *DockerSwarmSuite) TestOverlayAttachableOnSwarmLeave(c *testing.T) {
 	assert.NilError(c, err, out)
 
 	// Leave the swarm
-	assert.Assert(c, d.SwarmLeave(ctx, c, true) == nil)
+	assert.NilError(c, d.SwarmLeave(ctx, c, true))
 
 	// Check the container is disconnected
 	out, err = d.Cmd("inspect", "c1", "--format", "{{.NetworkSettings.Networks."+nwName+"}}")
@@ -1661,7 +1680,7 @@ func (s *DockerSwarmSuite) TestSwarmInitWithDrain(c *testing.T) {
 
 	out, err = d.Cmd("node", "ls")
 	assert.NilError(c, err)
-	assert.Assert(c, strings.Contains(out, "Drain"))
+	assert.Assert(c, is.Contains(out, "Drain"))
 }
 
 func (s *DockerSwarmSuite) TestSwarmReadonlyRootfs(c *testing.T) {

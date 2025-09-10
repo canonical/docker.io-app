@@ -4,12 +4,15 @@ package iptables
 
 import (
 	"net"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/internal/testutils/netnsutils"
 	"golang.org/x/sync/errgroup"
+	"gotest.tools/v3/assert"
 )
 
 const (
@@ -25,16 +28,8 @@ func createNewChain(t *testing.T) (*IPTable, *ChainInfo, *ChainInfo) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = iptable.ProgramChain(natChain, bridgeName, false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	filterChain, err := iptable.NewChain(chainName, Filter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = iptable.ProgramChain(filterChain, bridgeName, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +43,8 @@ func TestNewChain(t *testing.T) {
 
 func TestLink(t *testing.T) {
 	iptable, _, filterChain := createNewChain(t)
-	ip1 := net.ParseIP("192.168.1.1")
-	ip2 := net.ParseIP("192.168.1.2")
+	ip1 := netip.MustParseAddr("192.168.1.1")
+	ip2 := netip.MustParseAddr("192.168.1.2")
 	port := 1234
 	proto := "tcp"
 
@@ -128,25 +123,10 @@ func TestOutput(t *testing.T) {
 	}
 }
 
-func TestConcurrencyWithWait(t *testing.T) {
-	RunConcurrencyTest(t, true)
-}
-
-func TestConcurrencyNoWait(t *testing.T) {
-	RunConcurrencyTest(t, false)
-}
-
 // Runs 10 concurrent rule additions. This will fail if iptables
 // is actually invoked simultaneously without --wait.
-// Note that if iptables does not support the xtable lock on this
-// system, then allowXlock has no effect -- it will always be off.
-func RunConcurrencyTest(t *testing.T, allowXlock bool) {
+func TestConcurrencyWithWait(t *testing.T) {
 	_, natChain, _ := createNewChain(t)
-
-	if !allowXlock && supportsXlock {
-		supportsXlock = false
-		defer func() { supportsXlock = true }()
-	}
 
 	ip := net.ParseIP("192.168.1.1")
 	port := 1234
@@ -212,19 +192,6 @@ func addSomeRules(c *ChainInfo, ip net.IP, port int, proto, destAddr string, des
 func TestCleanup(t *testing.T) {
 	iptable, _, filterChain := createNewChain(t)
 
-	var rules []byte
-
-	// Cleanup filter/FORWARD first otherwise output of iptables-save is dirty
-	link := []string{
-		"-t", string(filterChain.Table),
-		string(Delete), "FORWARD",
-		"-o", bridgeName,
-		"-j", filterChain.Name,
-	}
-
-	if _, err := iptable.Raw(link...); err != nil {
-		t.Fatal(err)
-	}
 	filterChain.Remove()
 
 	err := iptable.RemoveExistingChain(chainName, Nat)
@@ -232,7 +199,7 @@ func TestCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rules, err = exec.Command("iptables-save").Output()
+	rules, err := exec.Command("iptables-save").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,4 +255,58 @@ func TestExistsRaw(t *testing.T) {
 			t.Fatalf("Invalid detection. i=%d", i)
 		}
 	}
+}
+
+func TestRule(t *testing.T) {
+	_ = firewalldInit()
+	if res, _ := UsingFirewalld(); res {
+		t.Skip("firewalld in host netns cannot create rules in the test's netns")
+	}
+	defer netnsutils.SetupTestOSContext(t)()
+
+	assert.NilError(t, exec.Command("iptables", "-N", "TESTCHAIN").Run())
+
+	rule := Rule{IPVer: IPv4, Table: Filter, Chain: "TESTCHAIN", Args: []string{"-j", "RETURN"}}
+	assert.NilError(t, rule.Insert())
+	assert.Equal(t, rule.Exists(), true)
+	assert.Equal(t, mustDumpChain(t, Filter, "TESTCHAIN"), `-N TESTCHAIN
+-A TESTCHAIN -j RETURN
+`)
+
+	// Test that Insert is idempotent
+	assert.NilError(t, rule.Insert())
+	assert.Equal(t, mustDumpChain(t, Filter, "TESTCHAIN"), `-N TESTCHAIN
+-A TESTCHAIN -j RETURN
+`)
+
+	rule = Rule{IPVer: IPv4, Table: Filter, Chain: "TESTCHAIN", Args: []string{"-j", "ACCEPT"}}
+	assert.NilError(t, rule.Append())
+	assert.Equal(t, rule.Exists(), true)
+	assert.Equal(t, mustDumpChain(t, Filter, "TESTCHAIN"), `-N TESTCHAIN
+-A TESTCHAIN -j RETURN
+-A TESTCHAIN -j ACCEPT
+`)
+
+	// Test that Append is idempotent
+	assert.NilError(t, rule.Append())
+	assert.Equal(t, mustDumpChain(t, Filter, "TESTCHAIN"), `-N TESTCHAIN
+-A TESTCHAIN -j RETURN
+-A TESTCHAIN -j ACCEPT
+`)
+
+	assert.NilError(t, rule.Delete())
+	assert.Equal(t, rule.Exists(), false)
+	assert.Equal(t, mustDumpChain(t, Filter, "TESTCHAIN"), `-N TESTCHAIN
+-A TESTCHAIN -j RETURN
+`)
+
+	// Test that Delete is idempotent
+	assert.NilError(t, rule.Delete())
+}
+
+func mustDumpChain(t *testing.T, table Table, chain string) string {
+	t.Helper()
+	out, err := exec.Command("iptables", "-t", string(table), "-S", chain).CombinedOutput()
+	assert.NilError(t, err, "output:\n%s", out)
+	return string(out)
 }

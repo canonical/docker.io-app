@@ -12,8 +12,9 @@ import (
 	"testing"
 
 	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/pkg/archive"
+	"github.com/moby/go-archive"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 type fileType uint32
@@ -163,7 +164,7 @@ func makeTestContainer(c *testing.T, options testContainerOptions) (containerID 
 	}
 	assert.Equal(c, exitCode, "0", "failed to make test container: %s", out)
 
-	return
+	return containerID
 }
 
 func makeCatFileCommand(path string) string {
@@ -201,17 +202,17 @@ func runDockerCp(c *testing.T, src, dst string) error {
 	return nil
 }
 
-func startContainerGetOutput(c *testing.T, containerID string) (out string, err error) {
+func startContainerGetOutput(c *testing.T, containerID string) (string, error) {
 	c.Helper()
 
 	args := []string{"start", "-a", containerID}
 
-	out, _, err = runCommandWithOutput(exec.Command(dockerBinary, args...))
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, args...))
 	if err != nil {
-		err = fmt.Errorf("error executing `docker start` command: %s: %s", err, out)
+		return "", fmt.Errorf("error executing `docker start` command: %s: %s", err, out)
 	}
 
-	return
+	return out, nil
 }
 
 func getTestDir(c *testing.T, label string) (tmpDir string) {
@@ -222,15 +223,15 @@ func getTestDir(c *testing.T, label string) (tmpDir string) {
 	// unable to make temporary directory
 	assert.NilError(c, err)
 
-	return
+	return tmpDir
 }
 
-func isCpDirNotExist(err error) bool {
-	return strings.Contains(err.Error(), archive.ErrDirNotExists.Error())
+func isCpDirNotExist(err error) is.Comparison {
+	return is.ErrorContains(err, archive.ErrDirNotExists.Error())
 }
 
-func isCpCannotCopyDir(err error) bool {
-	return strings.Contains(err.Error(), archive.ErrCannotCopyDir.Error())
+func isCpCannotCopyDir(err error) is.Comparison {
+	return is.ErrorContains(err, archive.ErrCannotCopyDir.Error())
 }
 
 func fileContentEquals(c *testing.T, filename, contents string) error {

@@ -11,7 +11,6 @@ import (
 
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/testutil/fakecontext"
 	"github.com/docker/go-connections/nat"
 	"gotest.tools/v3/assert"
@@ -229,45 +228,12 @@ func (s *DockerCLICreateSuite) TestCreateModeIpcContainer(c *testing.T) {
 	cli.DockerCmd(c, "create", fmt.Sprintf("--ipc=container:%s", id), "busybox")
 }
 
-func (s *DockerCLICreateSuite) TestCreateByImageID(c *testing.T) {
-	imageName := "testcreatebyimageid"
-	buildImageSuccessfully(c, imageName, build.WithDockerfile(`FROM busybox
-		MAINTAINER dockerio`))
-	imageID := getIDByName(c, imageName)
-	truncatedImageID := stringid.TruncateID(imageID)
-
-	cli.DockerCmd(c, "create", imageID)
-	cli.DockerCmd(c, "create", truncatedImageID)
-
-	// Ensure this fails
-	out, exit, _ := dockerCmdWithError("create", fmt.Sprintf("%s:%s", imageName, imageID))
-	if exit == 0 {
-		c.Fatalf("expected non-zero exit code; received %d", exit)
-	}
-
-	if expected := "invalid reference format"; !strings.Contains(out, expected) {
-		c.Fatalf(`Expected %q in output; got: %s`, expected, out)
-	}
-
-	if i := strings.IndexRune(imageID, ':'); i >= 0 {
-		imageID = imageID[i+1:]
-	}
-	out, exit, _ = dockerCmdWithError("create", fmt.Sprintf("%s:%s", "wrongimage", imageID))
-	if exit == 0 {
-		c.Fatalf("expected non-zero exit code; received %d", exit)
-	}
-
-	if expected := "Unable to find image"; !strings.Contains(out, expected) {
-		c.Fatalf(`Expected %q in output; got: %s`, expected, out)
-	}
-}
-
 func (s *DockerCLICreateSuite) TestCreateStopSignal(c *testing.T) {
 	const name = "test_create_stop_signal"
 	cli.DockerCmd(c, "create", "--name", name, "--stop-signal", "9", "busybox")
 
 	res := inspectFieldJSON(c, name, "Config.StopSignal")
-	assert.Assert(c, strings.Contains(res, "9"))
+	assert.Assert(c, is.Contains(res, "9"))
 }
 
 func (s *DockerCLICreateSuite) TestCreateWithWorkdir(c *testing.T) {
@@ -296,19 +262,11 @@ func (s *DockerCLICreateSuite) TestCreateWithInvalidLogOpts(c *testing.T) {
 	const name = "test-invalidate-log-opts"
 	out, _, err := dockerCmdWithError("create", "--name", name, "--log-opt", "invalid=true", "busybox")
 	assert.ErrorContains(c, err, "")
-	assert.Assert(c, strings.Contains(out, "unknown log opt"))
+	assert.Assert(c, is.Contains(out, "unknown log opt"))
 	assert.Assert(c, is.Contains(out, "unknown log opt"))
 
 	out = cli.DockerCmd(c, "ps", "-a").Stdout()
 	assert.Assert(c, !strings.Contains(out, name))
-}
-
-// #20972
-func (s *DockerCLICreateSuite) TestCreate64ByteHexID(c *testing.T) {
-	out := inspectField(c, "busybox", "Id")
-	imageID := strings.TrimPrefix(strings.TrimSpace(out), "sha256:")
-
-	cli.DockerCmd(c, "create", imageID)
 }
 
 // Test case for #23498
@@ -344,10 +302,10 @@ func (s *DockerCLICreateSuite) TestCreateStopTimeout(c *testing.T) {
 	cli.DockerCmd(c, "create", "--name", name1, "--stop-timeout", "15", "busybox")
 
 	res := inspectFieldJSON(c, name1, "Config.StopTimeout")
-	assert.Assert(c, strings.Contains(res, "15"))
+	assert.Assert(c, is.Contains(res, "15"))
 	name2 := "test_create_stop_timeout_2"
 	cli.DockerCmd(c, "create", "--name", name2, "busybox")
 
 	res = inspectFieldJSON(c, name2, "Config.StopTimeout")
-	assert.Assert(c, strings.Contains(res, "null"))
+	assert.Assert(c, is.Contains(res, "null"))
 }

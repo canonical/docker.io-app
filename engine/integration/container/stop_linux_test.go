@@ -4,75 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 )
-
-// TestStopContainerWithTimeout checks that ContainerStop with
-// a timeout works as documented, i.e. in case of negative timeout
-// waiting is not limited (issue #35311).
-func TestStopContainerWithTimeout(t *testing.T) {
-	ctx := setupTest(t)
-
-	apiClient := testEnv.APIClient()
-
-	testCmd := container.WithCmd("sh", "-c", "sleep 2 && exit 42")
-	testData := []struct {
-		doc              string
-		timeout          int
-		expectedExitCode int
-	}{
-		// In case container is forcefully killed, 137 is returned,
-		// otherwise the exit code from the above script
-		{
-			"zero timeout: expect forceful container kill",
-			0, 137,
-		},
-		{
-			"too small timeout: expect forceful container kill",
-			1, 137,
-		},
-		{
-			"big enough timeout: expect graceful container stop",
-			3, 42,
-		},
-		{
-			"unlimited timeout: expect graceful container stop",
-			-1, 42,
-		},
-	}
-
-	for _, d := range testData {
-		d := d
-		t.Run(strconv.Itoa(d.timeout), func(t *testing.T) {
-			t.Parallel()
-			ctx := testutil.StartSpan(ctx, t)
-			id := container.Run(ctx, t, apiClient, testCmd)
-
-			err := apiClient.ContainerStop(ctx, id, containertypes.StopOptions{Timeout: &d.timeout})
-			assert.NilError(t, err)
-
-			poll.WaitOn(t, container.IsStopped(ctx, apiClient, id),
-				poll.WithDelay(100*time.Millisecond))
-
-			inspect, err := apiClient.ContainerInspect(ctx, id)
-			assert.NilError(t, err)
-			assert.Equal(t, inspect.State.ExitCode, d.expectedExitCode)
-		})
-	}
-}
 
 // TestStopContainerWithTimeoutCancel checks that ContainerStop is not cancelled
 // if the request is cancelled.
@@ -106,7 +50,7 @@ func TestStopContainerWithTimeoutCancel(t *testing.T) {
 
 	select {
 	case stoppedErr := <-stoppedCh:
-		assert.Check(t, is.ErrorType(stoppedErr, errdefs.IsCancelled))
+		assert.Check(t, is.ErrorType(stoppedErr, cerrdefs.IsCanceled))
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for stop request to be cancelled")
 	}

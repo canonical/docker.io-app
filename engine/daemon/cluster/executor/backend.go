@@ -7,7 +7,6 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/docker/distribution"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
@@ -17,7 +16,6 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
-	containerpkg "github.com/docker/docker/container"
 	clustertypes "github.com/docker/docker/daemon/cluster/provider"
 	networkSettings "github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/image"
@@ -45,15 +43,15 @@ type Backend interface {
 	ActivateContainerServiceBinding(containerName string) error
 	DeactivateContainerServiceBinding(containerName string) error
 	UpdateContainerServiceConfig(containerName string, serviceConfig *clustertypes.ServiceConfig) error
-	ContainerInspectCurrent(ctx context.Context, name string, size bool) (*types.ContainerJSON, error)
-	ContainerWait(ctx context.Context, name string, condition containerpkg.WaitCondition) (<-chan containerpkg.StateStatus, error)
+	ContainerInspect(ctx context.Context, name string, options backend.ContainerInspectOptions) (*container.InspectResponse, error)
+	ContainerWait(ctx context.Context, name string, condition container.WaitCondition) (<-chan container.StateStatus, error)
 	ContainerRm(name string, config *backend.ContainerRmConfig) error
 	ContainerKill(name string, sig string) error
 	SetContainerDependencyStore(name string, store exec.DependencyGetter) error
 	SetContainerSecretReferences(name string, refs []*swarm.SecretReference) error
 	SetContainerConfigReferences(name string, refs []*swarm.ConfigReference) error
 	SystemInfo(context.Context) (*system.Info, error)
-	Containers(ctx context.Context, config *container.ListOptions) ([]*types.Container, error)
+	Containers(ctx context.Context, config *container.ListOptions) ([]*container.Summary, error)
 	SetNetworkBootstrapKeys([]*networktypes.EncryptionKey) error
 	DaemonJoinsCluster(provider cluster.Provider)
 	DaemonLeavesCluster()

@@ -1,6 +1,7 @@
 package image
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -8,7 +9,6 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/image"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -24,18 +24,17 @@ func TestNewImagesCommandErrors(t *testing.T) {
 		{
 			name:          "wrong-args",
 			args:          []string{"arg1", "arg2"},
-			expectedError: "requires at most 1 argument.",
+			expectedError: "requires at most 1 argument",
 		},
 		{
 			name:          "failed-list",
 			expectedError: "something went wrong",
 			imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
-				return []image.Summary{}, errors.Errorf("something went wrong")
+				return []image.Summary{}, errors.New("something went wrong")
 			},
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewImagesCommand(test.NewFakeCli(&fakeClient{imageListFunc: tc.imageListFunc}))
 			cmd.SetOut(io.Discard)
@@ -83,7 +82,6 @@ func TestNewImagesCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imageListFunc: tc.imageListFunc})
 			cli.SetConfigFile(&configfile.ConfigFile{ImagesFormat: tc.imageFormat})

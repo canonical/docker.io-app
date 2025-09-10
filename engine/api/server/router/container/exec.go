@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/api/server/httputils"
@@ -15,10 +14,11 @@ import (
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/pkg/errors"
 )
 
-func (s *containerRouter) getExecByID(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	eConfig, err := s.backend.ContainerExecInspect(vars["id"])
+func (c *containerRouter) getExecByID(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	eConfig, err := c.backend.ContainerExecInspect(vars["id"])
 	if err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func (execCommandError) Error() string {
 
 func (execCommandError) InvalidParameter() {}
 
-func (s *containerRouter) postContainerExecCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (c *containerRouter) postContainerExecCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
@@ -55,19 +55,19 @@ func (s *containerRouter) postContainerExecCreate(ctx context.Context, w http.Re
 	}
 
 	// Register an instance of Exec in container.
-	id, err := s.backend.ContainerExecCreate(vars["name"], execConfig)
+	id, err := c.backend.ContainerExecCreate(vars["name"], execConfig)
 	if err != nil {
 		log.G(ctx).Errorf("Error setting up exec command in container %s: %v", vars["name"], err)
 		return err
 	}
 
-	return httputils.WriteJSON(w, http.StatusCreated, &types.IDResponse{
+	return httputils.WriteJSON(w, http.StatusCreated, &container.ExecCreateResponse{
 		ID: id,
 	})
 }
 
 // TODO(vishh): Refactor the code to avoid having to specify stream config as part of both create and start.
-func (s *containerRouter) postContainerExecStart(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (c *containerRouter) postContainerExecStart(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (s *containerRouter) postContainerExecStart(ctx context.Context, w http.Res
 		return err
 	}
 
-	if exists, err := s.backend.ExecExists(execName); !exists {
+	if exists, err := c.backend.ExecExists(execName); !exists {
 		return err
 	}
 
@@ -138,7 +138,7 @@ func (s *containerRouter) postContainerExecStart(ctx context.Context, w http.Res
 	// Now run the user process in container.
 	//
 	// TODO: Maybe we should we pass ctx here if we're not detaching?
-	err := s.backend.ContainerExecStart(context.Background(), execName, backend.ExecStartConfig{
+	err := c.backend.ContainerExecStart(context.Background(), execName, backend.ExecStartConfig{
 		Stdin:       stdin,
 		Stdout:      stdout,
 		Stderr:      stderr,
@@ -154,18 +154,18 @@ func (s *containerRouter) postContainerExecStart(ctx context.Context, w http.Res
 	return nil
 }
 
-func (s *containerRouter) postContainerExecResize(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (c *containerRouter) postContainerExecResize(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
-	height, err := strconv.Atoi(r.Form.Get("h"))
+	height, err := httputils.Uint32Value(r, "h")
 	if err != nil {
-		return errdefs.InvalidParameter(err)
+		return errdefs.InvalidParameter(errors.Wrapf(err, "invalid resize height %q", r.Form.Get("h")))
 	}
-	width, err := strconv.Atoi(r.Form.Get("w"))
+	width, err := httputils.Uint32Value(r, "w")
 	if err != nil {
-		return errdefs.InvalidParameter(err)
+		return errdefs.InvalidParameter(errors.Wrapf(err, "invalid resize width %q", r.Form.Get("w")))
 	}
 
-	return s.backend.ContainerExecResize(vars["name"], height, width)
+	return c.backend.ContainerExecResize(ctx, vars["name"], height, width)
 }

@@ -2,17 +2,16 @@ package convert
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	composetypes "github.com/docker/cli/cli/compose/types"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -409,7 +408,6 @@ func TestConvertCredentialSpec(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			namespace := NewNamespace(tc.name)
 			swarmSpec, err := convertCredentialSpec(namespace, tc.in, tc.configs)
@@ -515,7 +513,7 @@ func TestConvertServiceSecrets(t *testing.T) {
 		},
 	}
 	apiClient := &fakeClient{
-		secretListFunc: func(opts types.SecretListOptions) ([]swarm.Secret, error) {
+		secretListFunc: func(opts swarm.SecretListOptions) ([]swarm.Secret, error) {
 			assert.Check(t, is.Contains(opts.Filters.Get("name"), "foo_secret"))
 			assert.Check(t, is.Contains(opts.Filters.Get("name"), "bar_secret"))
 			return []swarm.Secret{
@@ -573,7 +571,7 @@ func TestConvertServiceConfigs(t *testing.T) {
 		},
 	}
 	apiClient := &fakeClient{
-		configListFunc: func(opts types.ConfigListOptions) ([]swarm.Config, error) {
+		configListFunc: func(opts swarm.ConfigListOptions) ([]swarm.Config, error) {
 			assert.Check(t, is.Contains(opts.Filters.Get("name"), "foo_config"))
 			assert.Check(t, is.Contains(opts.Filters.Get("name"), "bar_config"))
 			assert.Check(t, is.Contains(opts.Filters.Get("name"), "baz_config"))
@@ -616,18 +614,18 @@ func TestConvertServiceConfigs(t *testing.T) {
 
 type fakeClient struct {
 	client.Client
-	secretListFunc func(types.SecretListOptions) ([]swarm.Secret, error)
-	configListFunc func(types.ConfigListOptions) ([]swarm.Config, error)
+	secretListFunc func(swarm.SecretListOptions) ([]swarm.Secret, error)
+	configListFunc func(swarm.ConfigListOptions) ([]swarm.Config, error)
 }
 
-func (c *fakeClient) SecretList(_ context.Context, options types.SecretListOptions) ([]swarm.Secret, error) {
+func (c *fakeClient) SecretList(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
 	if c.secretListFunc != nil {
 		return c.secretListFunc(options)
 	}
 	return []swarm.Secret{}, nil
 }
 
-func (c *fakeClient) ConfigList(_ context.Context, options types.ConfigListOptions) ([]swarm.Config, error) {
+func (c *fakeClient) ConfigList(_ context.Context, options swarm.ConfigListOptions) ([]swarm.Config, error) {
 	if c.configListFunc != nil {
 		return c.configListFunc(options)
 	}
@@ -691,7 +689,6 @@ func TestConvertServiceCapAddAndCapDrop(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.title, func(t *testing.T) {
 			result, err := Service("1.41", Namespace{name: "foo"}, tc.in, nil, nil, nil, nil)
 			assert.NilError(t, err)

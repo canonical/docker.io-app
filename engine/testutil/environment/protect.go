@@ -4,25 +4,33 @@ import (
 	"context"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/testutil"
 	"go.opentelemetry.io/otel"
 	"gotest.tools/v3/assert"
 )
 
-var frozenImages = []string{"busybox:latest", "busybox:glibc", "hello-world:frozen", "debian:bookworm-slim"}
+var frozenImages = []string{
+	"busybox:latest",
+	"busybox:glibc",
+	"hello-world:frozen",
+	"debian:bookworm-slim",
+	"hello-world:amd64",
+	"hello-world:arm64",
+}
 
 type protectedElements struct {
-	containers map[string]struct{}
-	images     map[string]struct{}
-	networks   map[string]struct{}
-	plugins    map[string]struct{}
-	volumes    map[string]struct{}
+	containers        map[string]struct{}
+	defaultBridgeInfo *defaultBridgeInfo
+	images            map[string]struct{}
+	networks          map[string]struct{}
+	plugins           map[string]struct{}
+	volumes           map[string]struct{}
 }
 
 func newProtectedElements() protectedElements {
@@ -50,6 +58,7 @@ func ProtectAll(ctx context.Context, t testing.TB, testEnv *Execution) {
 	ProtectNetworks(ctx, t, testEnv)
 	ProtectVolumes(ctx, t, testEnv)
 	if testEnv.DaemonInfo.OSType == "linux" {
+		ProtectDefaultBridge(ctx, t, testEnv)
 		ProtectPlugins(ctx, t, testEnv)
 	}
 }
@@ -191,7 +200,7 @@ func getExistingPlugins(ctx context.Context, t testing.TB, testEnv *Execution) [
 	client := testEnv.APIClient()
 	pluginList, err := client.PluginList(ctx, filters.Args{})
 	// Docker EE does not allow cluster-wide plugin management.
-	if errdefs.IsNotImplemented(err) {
+	if cerrdefs.IsNotImplemented(err) {
 		return []string{}
 	}
 	assert.NilError(t, err, "failed to list plugins")

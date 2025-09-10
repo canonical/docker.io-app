@@ -14,8 +14,8 @@ import (
 	"github.com/distribution/reference"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/server/httputils"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
@@ -27,6 +27,8 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
+	"github.com/docker/go-connections/nat"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -247,7 +249,22 @@ func (ir *imageRouter) getImagesGet(ctx context.Context, w http.ResponseWriter, 
 		names = r.Form["names"]
 	}
 
-	if err := ir.backend.ExportImage(ctx, names, output); err != nil {
+	var platform *ocispec.Platform
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.48") {
+		if formPlatforms := r.Form["platform"]; len(formPlatforms) > 1 {
+			// TODO(thaJeztah): remove once we support multiple platforms: see https://github.com/moby/moby/issues/48759
+			return errdefs.InvalidParameter(errors.New("multiple platform parameters not supported"))
+		}
+		if formPlatform := r.Form.Get("platform"); formPlatform != "" {
+			p, err := httputils.DecodePlatform(formPlatform)
+			if err != nil {
+				return err
+			}
+			platform = p
+		}
+	}
+
+	if err := ir.backend.ExportImage(ctx, names, platform, output); err != nil {
 		if !output.Flushed() {
 			return err
 		}
@@ -260,13 +277,28 @@ func (ir *imageRouter) postImagesLoad(ctx context.Context, w http.ResponseWriter
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
+
+	var platform *ocispec.Platform
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.48") {
+		if formPlatforms := r.Form["platform"]; len(formPlatforms) > 1 {
+			// TODO(thaJeztah): remove once we support multiple platforms: see https://github.com/moby/moby/issues/48759
+			return errdefs.InvalidParameter(errors.New("multiple platform parameters not supported"))
+		}
+		if formPlatform := r.Form.Get("platform"); formPlatform != "" {
+			p, err := httputils.DecodePlatform(formPlatform)
+			if err != nil {
+				return err
+			}
+			platform = p
+		}
+	}
 	quiet := httputils.BoolValueOrDefault(r, "quiet", true)
 
 	w.Header().Set("Content-Type", "application/json")
 
 	output := ioutils.NewWriteFlusher(w)
 	defer output.Close()
-	if err := ir.backend.LoadImage(ctx, r.Body, output, quiet); err != nil {
+	if err := ir.backend.LoadImage(ctx, r.Body, platform, output, quiet); err != nil {
 		_, _ = output.Write(streamformatter.FormatError(err))
 	}
 	return nil
@@ -294,7 +326,20 @@ func (ir *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, 
 	force := httputils.BoolValue(r, "force")
 	prune := !httputils.BoolValue(r, "noprune")
 
-	list, err := ir.backend.ImageDelete(ctx, name, force, prune)
+	var platforms []ocispec.Platform
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.50") {
+		p, err := httputils.DecodePlatforms(r.Form["platforms"])
+		if err != nil {
+			return err
+		}
+		platforms = p
+	}
+
+	list, err := ir.backend.ImageDelete(ctx, name, imagetypes.RemoveOptions{
+		Force:         force,
+		PruneChildren: prune,
+		Platforms:     platforms,
+	})
 	if err != nil {
 		return err
 	}
@@ -303,14 +348,43 @@ func (ir *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (ir *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	img, err := ir.backend.GetImage(ctx, vars["name"], backend.GetImageOpts{Details: true})
+	if err := httputils.ParseForm(r); err != nil {
+		return err
+	}
+
+	var manifests bool
+	if r.Form.Get("manifests") != "" && versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.48") {
+		manifests = httputils.BoolValue(r, "manifests")
+	}
+
+	var platform *ocispec.Platform
+	if r.Form.Get("platform") != "" && versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.49") {
+		p, err := httputils.DecodePlatform(r.Form.Get("platform"))
+		if err != nil {
+			return errdefs.InvalidParameter(err)
+		}
+		platform = p
+	}
+
+	if manifests && platform != nil {
+		return errdefs.InvalidParameter(errors.New("conflicting options: manifests and platform options cannot both be set"))
+	}
+
+	imageInspect, err := ir.backend.ImageInspect(ctx, vars["name"], backend.ImageInspectOpts{
+		Manifests: manifests,
+		Platform:  platform,
+	})
 	if err != nil {
 		return err
 	}
 
-	imageInspect, err := ir.toImageInspect(img)
-	if err != nil {
-		return err
+	// Make sure we output empty arrays instead of nil. While Go nil slice is functionally equivalent to an empty slice,
+	// it matters for the JSON representation.
+	if imageInspect.RepoTags == nil {
+		imageInspect.RepoTags = []string{}
+	}
+	if imageInspect.RepoDigests == nil {
+		imageInspect.RepoDigests = []string{}
 	}
 
 	version := httputils.VersionFromContext(ctx)
@@ -327,75 +401,21 @@ func (ir *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWrite
 		imageInspect.Container = ""        //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
 		imageInspect.ContainerConfig = nil //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
 	}
-	return httputils.WriteJSON(w, http.StatusOK, imageInspect)
-}
-
-func (ir *imageRouter) toImageInspect(img *image.Image) (*types.ImageInspect, error) {
-	var repoTags, repoDigests []string
-	for _, ref := range img.Details.References {
-		switch ref.(type) {
-		case reference.NamedTagged:
-			repoTags = append(repoTags, reference.FamiliarString(ref))
-		case reference.Canonical:
-			repoDigests = append(repoDigests, reference.FamiliarString(ref))
+	if versions.LessThan(version, "1.48") {
+		imageInspect.Descriptor = nil
+	}
+	if versions.LessThan(version, "1.50") {
+		type imageInspectLegacy struct {
+			imagetypes.InspectResponse
+			LegacyConfig *container.Config `json:"Config"`
 		}
+		return httputils.WriteJSON(w, http.StatusOK, imageInspectLegacy{
+			InspectResponse: *imageInspect,
+			LegacyConfig:    dockerOCIImageConfigToContainerConfig(*imageInspect.Config),
+		})
 	}
 
-	comment := img.Comment
-	if len(comment) == 0 && len(img.History) > 0 {
-		comment = img.History[len(img.History)-1].Comment
-	}
-
-	// Make sure we output empty arrays instead of nil.
-	if repoTags == nil {
-		repoTags = []string{}
-	}
-	if repoDigests == nil {
-		repoDigests = []string{}
-	}
-
-	var created string
-	if img.Created != nil {
-		created = img.Created.Format(time.RFC3339Nano)
-	}
-
-	return &types.ImageInspect{
-		ID:              img.ID().String(),
-		RepoTags:        repoTags,
-		RepoDigests:     repoDigests,
-		Parent:          img.Parent.String(),
-		Comment:         comment,
-		Created:         created,
-		Container:       img.Container,        //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
-		ContainerConfig: &img.ContainerConfig, //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.45.
-		DockerVersion:   img.DockerVersion,
-		Author:          img.Author,
-		Config:          img.Config,
-		Architecture:    img.Architecture,
-		Variant:         img.Variant,
-		Os:              img.OperatingSystem(),
-		OsVersion:       img.OSVersion,
-		Size:            img.Details.Size,
-		GraphDriver: types.GraphDriverData{
-			Name: img.Details.Driver,
-			Data: img.Details.Metadata,
-		},
-		RootFS: rootFSToAPIType(img.RootFS),
-		Metadata: imagetypes.Metadata{
-			LastTagTime: img.Details.LastUpdated,
-		},
-	}, nil
-}
-
-func rootFSToAPIType(rootfs *image.RootFS) types.RootFS {
-	var layers []string
-	for _, l := range rootfs.DiffIDs {
-		layers = append(layers, l.String())
-	}
-	return types.RootFS{
-		Type:   rootfs.Type,
-		Layers: layers,
-	}
+	return httputils.WriteJSON(w, http.StatusOK, imageInspect)
 }
 
 func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
@@ -440,6 +460,7 @@ func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter,
 
 	useNone := versions.LessThan(version, "1.43")
 	withVirtualSize := versions.LessThan(version, "1.44")
+	noDescriptor := versions.LessThan(version, "1.48")
 	for _, img := range images {
 		if useNone {
 			if len(img.RepoTags) == 0 && len(img.RepoDigests) == 0 {
@@ -457,13 +478,30 @@ func (ir *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter,
 		if withVirtualSize {
 			img.VirtualSize = img.Size //nolint:staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.44.
 		}
+		if noDescriptor {
+			img.Descriptor = nil
+		}
 	}
 
 	return httputils.WriteJSON(w, http.StatusOK, images)
 }
 
 func (ir *imageRouter) getImagesHistory(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
-	history, err := ir.backend.ImageHistory(ctx, vars["name"])
+	if err := httputils.ParseForm(r); err != nil {
+		return err
+	}
+
+	var platform *ocispec.Platform
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.48") {
+		if formPlatform := r.Form.Get("platform"); formPlatform != "" {
+			p, err := httputils.DecodePlatform(formPlatform)
+			if err != nil {
+				return err
+			}
+			platform = p
+		}
+	}
+	history, err := ir.backend.ImageHistory(ctx, vars["name"], platform)
 	if err != nil {
 		return err
 	}
@@ -559,4 +597,28 @@ func validateRepoName(name reference.Named) error {
 		return fmt.Errorf("'%s' is a reserved name", familiarName)
 	}
 	return nil
+}
+
+// FIXME(thaJeztah): this is a copy of dockerOCIImageConfigToContainerConfig in daemon/containerd: https://github.com/moby/moby/blob/6b617699c500522aa6526cfcae4558333911b11f/daemon/containerd/imagespec.go#L107-L128
+func dockerOCIImageConfigToContainerConfig(cfg dockerspec.DockerOCIImageConfig) *container.Config {
+	exposedPorts := make(nat.PortSet, len(cfg.ExposedPorts))
+	for k, v := range cfg.ExposedPorts {
+		exposedPorts[nat.Port(k)] = v
+	}
+
+	return &container.Config{
+		Entrypoint:   cfg.Entrypoint,
+		Env:          cfg.Env,
+		Cmd:          cfg.Cmd,
+		User:         cfg.User,
+		WorkingDir:   cfg.WorkingDir,
+		ExposedPorts: exposedPorts,
+		Volumes:      cfg.Volumes,
+		Labels:       cfg.Labels,
+		ArgsEscaped:  cfg.ArgsEscaped, //nolint:staticcheck // Ignore SA1019. Need to keep it in image.
+		StopSignal:   cfg.StopSignal,
+		Healthcheck:  cfg.Healthcheck,
+		OnBuild:      cfg.OnBuild,
+		Shell:        cfg.Shell,
+	}
 }

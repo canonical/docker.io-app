@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package libnetwork
 
@@ -57,7 +57,7 @@ type service struct {
 	// associated with it. At stable state the endpoint ID expected is 1
 	// but during transition and service change it is possible to have
 	// temporary more than 1
-	ipToEndpoint setmatrix.SetMatrix[string]
+	ipToEndpoint setmatrix.SetMatrix[string, string]
 
 	deleted bool
 

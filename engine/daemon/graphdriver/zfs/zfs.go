@@ -15,12 +15,12 @@ import (
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/pkg/idtools"
-	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/docker/daemon/internal/mountref"
 	zfs "github.com/mistifyio/go-zfs/v3"
 	"github.com/moby/locker"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
+	"github.com/moby/sys/user"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
@@ -46,7 +46,7 @@ func (*Logger) Log(cmd []string) {
 // Init returns a new ZFS driver.
 // It takes base mount path and an array of options which are represented as key value pairs.
 // Each option is in the for key=value. 'zfs.fsname' is expected to be a valid key in the options.
-func Init(base string, opt []string, idMap idtools.IdentityMapping) (graphdriver.Driver, error) {
+func Init(base string, opt []string, idMap user.IdentityMapping) (graphdriver.Driver, error) {
 	var err error
 
 	logger := log.G(context.TODO()).WithField("storage-driver", "zfs")
@@ -105,11 +105,8 @@ func Init(base string, opt []string, idMap idtools.IdentityMapping) (graphdriver
 		return nil, fmt.Errorf("BUG: zfs get all -t filesystem -rHp '%s' should contain '%s'", options.fsName, options.fsName)
 	}
 
-	dirID := idtools.Identity{
-		UID: idtools.CurrentIdentity().UID,
-		GID: idMap.RootPair().GID,
-	}
-	if err := idtools.MkdirAllAndChown(base, 0o710, dirID); err != nil {
+	_, gid := idMap.RootPair()
+	if err := user.MkdirAllAndChown(base, 0o710, os.Getuid(), gid); err != nil {
 		return nil, fmt.Errorf("Failed to create '%s': %v", base, err)
 	}
 
@@ -118,17 +115,24 @@ func Init(base string, opt []string, idMap idtools.IdentityMapping) (graphdriver
 		options:          options,
 		filesystemsCache: filesystemsCache,
 		idMap:            idMap,
-		ctr:              graphdriver.NewRefCounter(graphdriver.NewDefaultChecker()),
+		ctr:              mountref.NewCounter(isMounted),
 		locker:           locker.New(),
 	}
 	return graphdriver.NewNaiveDiffDriver(d, idMap), nil
+}
+
+// isMounted parses /proc/mountinfo to check whether the specified path
+// is mounted.
+func isMounted(path string) bool {
+	m, _ := mountinfo.Mounted(path)
+	return m
 }
 
 func parseOptions(opt []string) (zfsOptions, error) {
 	var options zfsOptions
 	options.fsName = ""
 	for _, option := range opt {
-		key, val, err := parsers.ParseKeyValueOpt(option)
+		key, val, err := graphdriver.ParseStorageOptKeyValue(option)
 		if err != nil {
 			return options, err
 		}
@@ -174,8 +178,8 @@ type Driver struct {
 	options          zfsOptions
 	sync.Mutex       // protects filesystem cache against concurrent access
 	filesystemsCache map[string]bool
-	idMap            idtools.IdentityMapping
-	ctr              *graphdriver.RefCounter
+	idMap            user.IdentityMapping
+	ctr              *mountref.Counter
 	locker           *locker.Locker
 }
 
@@ -397,9 +401,9 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 	options := label.FormatMountLabel("", mountLabel)
 	log.G(context.TODO()).WithField("storage-driver", "zfs").Debugf(`mount("%s", "%s", "%s")`, filesystem, mountpoint, options)
 
-	root := d.idMap.RootPair()
+	uid, gid := d.idMap.RootPair()
 	// Create the target directories if they don't exist
-	if err := idtools.MkdirAllAndChown(mountpoint, 0o755, root); err != nil {
+	if err := user.MkdirAllAndChown(mountpoint, 0o755, uid, gid); err != nil {
 		return "", err
 	}
 
@@ -409,7 +413,7 @@ func (d *Driver) Get(id, mountLabel string) (_ string, retErr error) {
 
 	// this could be our first mount after creation of the filesystem, and the root dir may still have root
 	// permissions instead of the remapped root uid:gid (if user namespaces are enabled):
-	if err := root.Chown(mountpoint); err != nil {
+	if err := os.Chown(mountpoint, uid, gid); err != nil {
 		return "", fmt.Errorf("error modifying zfs mountpoint (%s) directory ownership: %v", mountpoint, err)
 	}
 

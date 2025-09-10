@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,9 +9,9 @@ import (
 	"strings"
 
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
+	"github.com/docker/cli/cli-plugins/metadata"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/docker/api/types"
-	"github.com/pkg/errors"
+	"github.com/docker/docker/api/types/build"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -27,6 +28,10 @@ const (
 
 	buildxMissingError = `ERROR: BuildKit is enabled but the buildx component is missing or broken.
        Install the buildx component to build images with BuildKit:
+       https://docs.docker.com/go/buildx/`
+
+	bakeMissingError = `ERROR: docker bake requires the buildx component but it is missing or broken.
+       Install the buildx component to use bake:
        https://docs.docker.com/go/buildx/`
 )
 
@@ -50,13 +55,17 @@ func processBuilder(dockerCli command.Cli, cmd *cobra.Command, args, osargs []st
 	if v := os.Getenv("DOCKER_BUILDKIT"); v != "" {
 		enabled, err := strconv.ParseBool(v)
 		if err != nil {
-			return args, osargs, nil, errors.Wrap(err, "DOCKER_BUILDKIT environment variable expects boolean value")
+			return args, osargs, nil, fmt.Errorf("DOCKER_BUILDKIT environment variable expects boolean value: %w", err)
 		}
 		if !enabled {
 			buildKitDisabled = true
 		} else {
 			useBuilder = true
 		}
+	}
+	// docker bake always requires buildkit; ignore "DOCKER_BUILDKIT=0".
+	if buildKitDisabled && len(args) > 0 && args[0] == "bake" {
+		buildKitDisabled = false
 	}
 
 	// if a builder alias is defined, use it instead
@@ -79,7 +88,7 @@ func processBuilder(dockerCli command.Cli, cmd *cobra.Command, args, osargs []st
 		// Builder is not explicitly configured as an alias for buildx.
 		// Detect whether we should use BuildKit, or fallback to the
 		// legacy builder.
-		if si := dockerCli.ServerInfo(); si.BuildkitVersion != types.BuilderBuildKit && si.OSType == "windows" {
+		if si := dockerCli.ServerInfo(); si.BuildkitVersion != build.BuilderBuildKit && si.OSType == "windows" {
 			// The daemon didn't advertise BuildKit as the preferred builder,
 			// so use the legacy builder, which is still the default for
 			// Windows / WCOW.
@@ -104,6 +113,10 @@ func processBuilder(dockerCli command.Cli, cmd *cobra.Command, args, osargs []st
 		perr = plugin.Err
 	}
 	if perr != nil {
+		// Using bake without buildx installed is always an error.
+		if len(args) > 0 && args[0] == "bake" {
+			return args, osargs, nil, newBuilderError(bakeMissingError, perr)
+		}
 		// if builder is enforced with DOCKER_BUILDKIT=1, cmd must fail
 		// if the plugin is missing or broken.
 		if useBuilder {
@@ -127,13 +140,18 @@ func processBuilder(dockerCli command.Cli, cmd *cobra.Command, args, osargs []st
 	}
 
 	// overwrite the command path for this plugin using the alias name.
-	cmd.Annotations[pluginmanager.CommandAnnotationPluginCommandPath] = strings.Join(append([]string{cmd.CommandPath()}, fwcmdpath...), " ")
+	cmd.Annotations[metadata.CommandAnnotationPluginCommandPath] = strings.Join(append([]string{cmd.CommandPath()}, fwcmdpath...), " ")
 
 	return fwargs, fwosargs, envs, nil
 }
 
 func forwardBuilder(alias string, args, osargs []string) ([]string, []string, []string, bool) {
 	aliases := [][3][]string{
+		{
+			{"bake"},
+			{alias, "bake"},
+			{},
+		},
 		{
 			{"builder"},
 			{alias},
@@ -151,8 +169,8 @@ func forwardBuilder(alias string, args, osargs []string) ([]string, []string, []
 		},
 	}
 	for _, al := range aliases {
-		if fwargs, changed := command.StringSliceReplaceAt(args, al[0], al[1], 0); changed {
-			fwosargs, _ := command.StringSliceReplaceAt(osargs, al[0], al[1], -1)
+		if fwargs, changed := stringSliceReplaceAt(args, al[0], al[1], 0); changed {
+			fwosargs, _ := stringSliceReplaceAt(osargs, al[0], al[1], -1)
 			fwcmdpath := al[2]
 			return fwargs, fwosargs, fwcmdpath, true
 		}

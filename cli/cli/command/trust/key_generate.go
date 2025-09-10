@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/trust"
+	"github.com/docker/cli/internal/lazyregexp"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/theupdateframework/notary"
@@ -41,7 +41,7 @@ func newKeyGenerateCommand(dockerCli command.Streams) *cobra.Command {
 }
 
 // key names can use lowercase alphanumeric + _ + - characters
-var validKeyName = regexp.MustCompile(`^[a-z0-9][a-z0-9\_\-]*$`).MatchString
+var validKeyName = lazyregexp.New(`^[a-z0-9][a-z0-9\_\-]*$`).MatchString
 
 // validate that all of the key names are unique and are alphanumeric + _ + -
 // and that we do not already have public key files in the target dir on disk
@@ -78,7 +78,7 @@ func validateAndGenerateKey(streams command.Streams, keyName string, workingDir 
 	if err := validateKeyArgs(keyName, workingDir); err != nil {
 		return err
 	}
-	fmt.Fprintf(streams.Out(), "Generating key for %s...\n", keyName)
+	_, _ = fmt.Fprintf(streams.Out(), "Generating key for %s...\n", keyName)
 	// Automatically load the private key to local storage for use
 	privKeyFileStore, err := trustmanager.NewKeyFileStore(trust.GetTrustDirectory(), freshPassRetGetter())
 	if err != nil {
@@ -87,7 +87,7 @@ func validateAndGenerateKey(streams command.Streams, keyName string, workingDir 
 
 	pubPEM, err := generateKeyAndOutputPubPEM(keyName, privKeyFileStore)
 	if err != nil {
-		fmt.Fprint(streams.Out(), err.Error())
+		_, _ = fmt.Fprint(streams.Out(), err)
 		return errors.Wrapf(err, "failed to generate key for %s", keyName)
 	}
 
@@ -96,7 +96,7 @@ func validateAndGenerateKey(streams command.Streams, keyName string, workingDir 
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(streams.Out(), "Successfully generated and loaded private key. Corresponding public key available: %s\n", writtenPubFile)
+	_, _ = fmt.Fprintln(streams.Out(), "Successfully generated and loaded private key. Corresponding public key available:", writtenPubFile)
 
 	return nil
 }

@@ -5,7 +5,6 @@ import (
 
 	"github.com/docker/cli/cli/compose/convert"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
@@ -31,7 +30,7 @@ func getAllStacksFilter() filters.Args {
 }
 
 func getStackServices(ctx context.Context, apiclient client.APIClient, namespace string) ([]swarm.Service, error) {
-	return apiclient.ServiceList(ctx, types.ServiceListOptions{Filters: getStackFilter(namespace)})
+	return apiclient.ServiceList(ctx, swarm.ServiceListOptions{Filters: getStackFilter(namespace)})
 }
 
 func getStackNetworks(ctx context.Context, apiclient client.APIClient, namespace string) ([]network.Summary, error) {
@@ -39,13 +38,13 @@ func getStackNetworks(ctx context.Context, apiclient client.APIClient, namespace
 }
 
 func getStackSecrets(ctx context.Context, apiclient client.APIClient, namespace string) ([]swarm.Secret, error) {
-	return apiclient.SecretList(ctx, types.SecretListOptions{Filters: getStackFilter(namespace)})
+	return apiclient.SecretList(ctx, swarm.SecretListOptions{Filters: getStackFilter(namespace)})
 }
 
 func getStackConfigs(ctx context.Context, apiclient client.APIClient, namespace string) ([]swarm.Config, error) {
-	return apiclient.ConfigList(ctx, types.ConfigListOptions{Filters: getStackFilter(namespace)})
+	return apiclient.ConfigList(ctx, swarm.ConfigListOptions{Filters: getStackFilter(namespace)})
 }
 
 func getStackTasks(ctx context.Context, apiclient client.APIClient, namespace string) ([]swarm.Task, error) {
-	return apiclient.TaskList(ctx, types.TaskListOptions{Filters: getStackFilter(namespace)})
+	return apiclient.TaskList(ctx, swarm.TaskListOptions{Filters: getStackFilter(namespace)})
 }

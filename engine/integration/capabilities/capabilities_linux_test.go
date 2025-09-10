@@ -5,9 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -38,7 +37,7 @@ func TestNoNewPrivileges(t *testing.T) {
 	// Build image
 	resp, err := client.ImageBuild(ctx,
 		source.AsTarReader(t),
-		types.ImageBuildOptions{
+		build.ImageBuildOptions{
 			Tags: []string{imageTag},
 		})
 	assert.NilError(t, err)
@@ -70,7 +69,6 @@ func TestNoNewPrivileges(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 
@@ -81,7 +79,7 @@ func TestNoNewPrivileges(t *testing.T) {
 				container.WithSecurityOpt("no-new-privileges=true"),
 			)
 			cid := container.Run(ctx, t, client, opts...)
-			poll.WaitOn(t, container.IsInState(ctx, client, cid, "exited"), poll.WithDelay(100*time.Millisecond))
+			poll.WaitOn(t, container.IsInState(ctx, client, cid, containertypes.StateExited))
 
 			// Assert on outputs
 			logReader, err := client.ContainerLogs(ctx, cid, containertypes.LogsOptions{

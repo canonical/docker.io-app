@@ -165,10 +165,25 @@ target "bin-image-cross" {
 }
 
 #
+# dind
+#
+
+target "dind" {
+  inherits = ["_common"]
+  target = "dind"
+  tags = ["docker-dind"]
+  output = ["type=docker"]
+}
+
+#
 # dev
 #
 
 variable "SYSTEMD" {
+  default = "false"
+}
+
+variable "FIREWALLD" {
   default = "false"
 }
 
@@ -177,6 +192,7 @@ target "dev" {
   target = "dev"
   args = {
     SYSTEMD = SYSTEMD
+    FIREWALLD = FIREWALLD
   }
   tags = ["docker-dev"]
   output = ["type=docker"]

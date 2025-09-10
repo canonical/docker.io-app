@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-rmi - Remove one or more images
@@ -18,12 +18,12 @@ Alias for \fBdocker image rm\fR\&.
 	Force removal of the image
 
 .PP
-\fB-h\fP, \fB--help\fP[=false]
-	help for rmi
-
-.PP
 \fB--no-prune\fP[=false]
 	Do not delete untagged parents
+
+.PP
+\fB--platform\fP=[]
+	Remove only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")
 
 
 .SH SEE ALSO

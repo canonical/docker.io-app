@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/testutil"
@@ -76,7 +76,7 @@ func (s *DockerAPISuite) TestInspectAPIImageResponse(c *testing.T) {
 	assert.NilError(c, err)
 	defer apiClient.Close()
 
-	imageJSON, _, err := apiClient.ImageInspectWithRaw(testutil.GetContext(c), "busybox")
+	imageJSON, err := apiClient.ImageInspect(testutil.GetContext(c), "busybox")
 	assert.NilError(c, err)
 
 	assert.Check(c, len(imageJSON.RepoTags) == 2)
@@ -98,7 +98,7 @@ func (s *DockerAPISuite) TestInspectAPIBridgeNetworkSettings121(c *testing.T) {
 
 	body := getInspectBody(c, "", containerID)
 
-	var inspectJSON types.ContainerJSON
+	var inspectJSON container.InspectResponse
 	err := json.Unmarshal(body, &inspectJSON)
 	assert.NilError(c, err)
 

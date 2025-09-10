@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/types"
@@ -129,8 +130,10 @@ func (sb *Sandbox) needDefaultGW() bool {
 		if ep.joinInfo != nil && ep.joinInfo.disableGatewayService {
 			continue
 		}
-		// TODO v6 needs to be handled.
 		if len(ep.Gateway()) > 0 {
+			return false
+		}
+		if len(ep.GatewayIPv6()) > 0 {
 			return false
 		}
 		for _, r := range ep.StaticRoutes() {
@@ -167,21 +170,47 @@ func (c *Controller) defaultGwNetwork() (*Network, error) {
 	defer func() { <-procGwNetwork }()
 
 	n, err := c.NetworkByName(libnGWNetwork)
-	if _, ok := err.(types.NotFoundError); ok {
+	if cerrdefs.IsNotFound(err) {
 		n, err = c.createGWNetwork()
 	}
 	return n, err
 }
 
-// Returns the endpoint which is providing external connectivity to the sandbox
-func (sb *Sandbox) getGatewayEndpoint() *Endpoint {
-	for _, ep := range sb.Endpoints() {
+// getGatewayEndpoint returns the endpoints providing external connectivity to
+// the sandbox. If the gateway is dual-stack, ep4 and ep6 will point at the same
+// endpoint. If there is no IPv4/IPv6 connectivity, nil pointers will be returned.
+func (sb *Sandbox) getGatewayEndpoint() (ep4, ep6 *Endpoint) {
+	return selectGatewayEndpoint(sb.Endpoints())
+}
+
+// selectGatewayEndpoint is like getGatewayEndpoint, but selects only from
+// endpoints.
+func selectGatewayEndpoint(endpoints []*Endpoint) (ep4, ep6 *Endpoint) {
+	for _, ep := range endpoints {
 		if ep.getNetwork().Type() == "null" || ep.getNetwork().Type() == "host" {
 			continue
 		}
-		if len(ep.Gateway()) != 0 {
-			return ep
+		gw4, gw6 := ep.hasGatewayOrDefaultRoute()
+		if gw4 && gw6 {
+			// The first dual-stack endpoint is the gateway, no need to search further.
+			//
+			// FIXME(robmry) - this means a dual-stack gateway is preferred over single-stack
+			// gateways with higher gateway-priorities. A dual-stack network should probably
+			// be preferred over two single-stack networks, if they all have equal priorities.
+			// It'd probably also be better to use a dual-stack endpoint as the gateway for
+			// a single address family, if there's a higher-priority single-stack gateway for
+			// the other address family. (But, priority is currently a Sandbox property, not
+			// an Endpoint property. So, this function doesn't have access to priorities.)
+			return ep, ep
+		}
+		if gw4 && ep4 == nil {
+			// Found the best IPv4-only gateway, keep searching for an IPv6 or dual-stack gateway.
+			ep4 = ep
+		}
+		if gw6 && ep6 == nil {
+			// Found the best IPv6-only gateway, keep searching for an IPv4 or dual-stack gateway.
+			ep6 = ep
 		}
 	}
-	return nil
+	return ep4, ep6
 }

@@ -4,14 +4,16 @@ import (
 	"context"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/containers"
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/log"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/container"
 	mobyc8dstore "github.com/docker/docker/daemon/containerd"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/metrics"
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/libcontainerd"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel"
@@ -72,10 +74,15 @@ func (daemon *Daemon) ContainerStart(ctx context.Context, name string, checkpoin
 // between containers. The container is left waiting for a signal to
 // begin running.
 func (daemon *Daemon) containerStart(ctx context.Context, daemonCfg *configStore, container *container.Container, checkpoint string, checkpointDir string, resetRestartManager bool) (retErr error) {
-	ctx, span := otel.Tracer("").Start(ctx, "daemon.containerStart", trace.WithAttributes(
+	ctx, span := otel.Tracer("").Start(ctx, "daemon.containerStart", trace.WithAttributes(append(
+		labelsAsOTelAttributes(container.Config.Labels),
 		attribute.String("container.ID", container.ID),
-		attribute.String("container.Name", container.Name)))
-	defer span.End()
+		attribute.String("container.Name", container.Name),
+	)...))
+	defer func() {
+		otelutil.RecordStatus(span, retErr)
+		span.End()
+	}()
 
 	start := time.Now()
 	container.Lock()
@@ -124,9 +131,20 @@ func (daemon *Daemon) containerStart(ctx context.Context, daemonCfg *configStore
 		return err
 	}
 
-	if err := daemon.initializeNetworking(ctx, &daemonCfg.Config, container); err != nil {
+	newSandbox, err := daemon.initializeNetworking(ctx, &daemonCfg.Config, container)
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if retErr != nil && newSandbox != nil {
+			if err := newSandbox.Delete(ctx); err != nil {
+				log.G(ctx).WithFields(log.Fields{
+					"error":     err,
+					"container": container.ID,
+				}).Warn("After failure in networking initialisation, failed to remove sandbox")
+			}
+		}
+	}()
 
 	mnts, err := daemon.setupContainerDirs(container)
 	if err != nil {
@@ -221,7 +239,7 @@ func (daemon *Daemon) containerStart(ctx context.Context, daemonCfg *configStore
 		}
 	}()
 
-	if err := daemon.initializeCreatedTask(ctx, tsk, container, spec); err != nil {
+	if err := daemon.initializeCreatedTask(ctx, &daemonCfg.Config, tsk, container, spec); err != nil {
 		return err
 	}
 
@@ -242,7 +260,7 @@ func (daemon *Daemon) containerStart(ctx context.Context, daemonCfg *configStore
 	}
 
 	daemon.LogContainerEvent(container, events.ActionStart)
-	containerActions.WithValues("start").UpdateSince(start)
+	metrics.ContainerActions.WithValues("start").UpdateSince(start)
 
 	return nil
 }

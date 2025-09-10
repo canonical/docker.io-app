@@ -1,14 +1,13 @@
 package stack
 
 import (
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -17,7 +16,7 @@ func TestListErrors(t *testing.T) {
 	testCases := []struct {
 		args            []string
 		flags           map[string]string
-		serviceListFunc func(options types.ServiceListOptions) ([]swarm.Service, error)
+		serviceListFunc func(options swarm.ServiceListOptions) ([]swarm.Service, error)
 		expectedError   string
 	}{
 		{
@@ -33,14 +32,14 @@ func TestListErrors(t *testing.T) {
 		},
 		{
 			args: []string{},
-			serviceListFunc: func(options types.ServiceListOptions) ([]swarm.Service, error) {
-				return []swarm.Service{}, errors.Errorf("error getting services")
+			serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
+				return []swarm.Service{}, errors.New("error getting services")
 			},
 			expectedError: "error getting services",
 		},
 		{
 			args: []string{},
-			serviceListFunc: func(options types.ServiceListOptions) ([]swarm.Service, error) {
+			serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
 				return []swarm.Service{*builders.Service()}, nil
 			},
 			expectedError: "cannot get label",
@@ -48,7 +47,6 @@ func TestListErrors(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.expectedError, func(t *testing.T) {
 			cmd := newListCommand(test.NewFakeCli(&fakeClient{
 				serviceListFunc: tc.serviceListFunc,
@@ -104,7 +102,6 @@ func TestStackList(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			var services []swarm.Service
 			for _, name := range tc.serviceNames {
@@ -117,7 +114,7 @@ func TestStackList(t *testing.T) {
 				)
 			}
 			cli := test.NewFakeCli(&fakeClient{
-				serviceListFunc: func(options types.ServiceListOptions) ([]swarm.Service, error) {
+				serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
 					return services, nil
 				},
 			})

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
+	"github.com/docker/cli/cli-plugins/metadata"
 	"github.com/docker/cli/internal/test"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm"
@@ -68,8 +69,6 @@ var sampleInfoNoSwarm = system.Info{
 	Architecture:       "x86_64",
 	IndexServerAddress: "https://index.docker.io/v1/",
 	RegistryConfig: &registrytypes.ServiceConfig{
-		AllowNondistributableArtifactsCIDRs:     nil,
-		AllowNondistributableArtifactsHostnames: nil,
 		InsecureRegistryCIDRs: []*registrytypes.NetIPNet{
 			{
 				IP:   net.ParseIP("127.0.0.0"),
@@ -203,7 +202,7 @@ var samplePluginsInfo = []pluginmanager.Plugin{
 	{
 		Name: "goodplugin",
 		Path: "/path/to/docker-goodplugin",
-		Metadata: pluginmanager.Metadata{
+		Metadata: metadata.Metadata{
 			SchemaVersion:    "0.1.0",
 			ShortDescription: "unit test is good",
 			Vendor:           "ACME Corp",
@@ -213,7 +212,7 @@ var samplePluginsInfo = []pluginmanager.Plugin{
 	{
 		Name: "unversionedplugin",
 		Path: "/path/to/docker-unversionedplugin",
-		Metadata: pluginmanager.Metadata{
+		Metadata: metadata.Metadata{
 			SchemaVersion:    "0.1.0",
 			ShortDescription: "this plugin has no version",
 			Vendor:           "ACME Corp",
@@ -260,6 +259,12 @@ func TestPrettyPrintInfo(t *testing.T) {
 	sampleInfoLabelsNil.Labels = nil
 	sampleInfoLabelsEmpty := sampleInfoNoSwarm
 	sampleInfoLabelsEmpty.Labels = []string{}
+
+	sampleInfoWithDevices := sampleInfoNoSwarm
+	sampleInfoWithDevices.DiscoveredDevices = []system.DeviceInfo{
+		{Source: "cdi", ID: "com.example.device1"},
+		{Source: "cdi", ID: "nvidia.com/gpu=gpu0"},
+	}
 
 	for _, tc := range []struct {
 		doc        string
@@ -367,8 +372,15 @@ func TestPrettyPrintInfo(t *testing.T) {
 			warningsGolden: "docker-info-badsec-stderr",
 			expectedError:  "errors pretty printing info",
 		},
+		{
+			doc: "info with devices",
+			dockerInfo: dockerInfo{
+				Info: &sampleInfoWithDevices,
+			},
+			prettyGolden: "docker-info-with-devices",
+			jsonGolden:   "docker-info-with-devices",
+		},
 	} {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{})
 			err := prettyPrintInfo(cli, tc.dockerInfo)
@@ -438,7 +450,7 @@ func TestFormatInfo(t *testing.T) {
 		{
 			doc:           "syntax",
 			template:      "{{}",
-			expectedError: `Status: template parsing error: template: :1: unexpected "}" in command, Code: 64`,
+			expectedError: `template parsing error: template: :1: unexpected "}" in command`,
 		},
 		{
 			doc:           "syntax",
@@ -446,7 +458,6 @@ func TestFormatInfo(t *testing.T) {
 			expectedError: `template: :1:2: executing "" at <.badString>: can't evaluate field badString in type system.dockerInfo`,
 		},
 	} {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{})
 			info := dockerInfo{
@@ -512,7 +523,6 @@ func TestNeedsServerInfo(t *testing.T) {
 
 	inf := dockerInfo{ClientInfo: &clientInfo{}}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			assert.Equal(t, needsServerInfo(tc.template, inf), tc.expected)
 		})

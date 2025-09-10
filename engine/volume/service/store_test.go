@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"testing"
 
@@ -15,7 +14,6 @@ import (
 	volumetestutils "github.com/docker/docker/volume/testutils"
 	"github.com/google/go-cmp/cmp"
 	"gotest.tools/v3/assert"
-	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestCreate(t *testing.T) {
@@ -86,15 +84,12 @@ func TestRemove(t *testing.T) {
 func TestList(t *testing.T) {
 	t.Parallel()
 
-	dir, err := os.MkdirTemp("", "test-list")
-	assert.NilError(t, err)
-	defer os.RemoveAll(dir)
-
 	drivers := volumedrivers.NewStore(nil)
 	drivers.Register(volumetestutils.NewFakeDriver("fake"), "fake")
 	drivers.Register(volumetestutils.NewFakeDriver("fake2"), "fake2")
 
-	s, err := NewStore(dir, drivers)
+	tmpDir := t.TempDir()
+	s, err := NewStore(tmpDir, drivers)
 	assert.NilError(t, err)
 
 	ctx := context.Background()
@@ -117,7 +112,7 @@ func TestList(t *testing.T) {
 	}
 
 	// and again with a new store
-	s, err = NewStore(dir, drivers)
+	s, err = NewStore(tmpDir, drivers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +295,7 @@ func TestRefDerefRemove(t *testing.T) {
 	assert.NilError(t, err)
 
 	err = s.Remove(ctx, v)
-	assert.Assert(t, is.ErrorContains(err, ""))
+	assert.ErrorContains(t, err, "")
 	assert.Equal(t, errVolumeInUse, err.(*OpErr).Err)
 
 	s.Release(ctx, v.Name(), "test-ref")
@@ -318,7 +313,7 @@ func TestGet(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := s.Get(ctx, "not-exist")
-	assert.Assert(t, is.ErrorContains(err, ""))
+	assert.ErrorContains(t, err, "")
 	assert.Equal(t, errNoSuchVolume, err.(*OpErr).Err)
 
 	v1, err := s.Create(ctx, "test", driverName, opts.WithCreateLabels(map[string]string{"a": "1"}))
@@ -345,7 +340,7 @@ func TestGetWithReference(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := s.Get(ctx, "not-exist", opts.WithGetDriver(driverName), opts.WithGetReference("test-ref"))
-	assert.Assert(t, is.ErrorContains(err, ""))
+	assert.ErrorContains(t, err, "")
 
 	v1, err := s.Create(ctx, "test", driverName, opts.WithCreateLabels(map[string]string{"a": "1"}))
 	assert.NilError(t, err)
@@ -355,7 +350,7 @@ func TestGetWithReference(t *testing.T) {
 	assert.DeepEqual(t, v1, v2, cmpVolume)
 
 	err = s.Remove(ctx, v2)
-	assert.Assert(t, is.ErrorContains(err, ""))
+	assert.ErrorContains(t, err, "")
 	assert.Equal(t, errVolumeInUse, err.(*OpErr).Err)
 
 	s.Release(ctx, v2.Name(), "test-ref")
@@ -368,21 +363,12 @@ var cmpVolume = cmp.AllowUnexported(volumetestutils.FakeVolume{}, volumeWrapper{
 func setupTest(t *testing.T) (*VolumeStore, func()) {
 	t.Helper()
 
-	dirName := strings.ReplaceAll(t.Name(), string(os.PathSeparator), "_")
-	dir, err := os.MkdirTemp("", dirName)
-	assert.NilError(t, err)
-
-	cleanup := func() {
-		t.Helper()
-		err := os.RemoveAll(dir)
-		assert.Check(t, err)
-	}
+	dir := t.TempDir()
 
 	s, err := NewStore(dir, volumedrivers.NewStore(nil))
 	assert.NilError(t, err)
 	return s, func() {
-		s.Shutdown()
-		cleanup()
+		assert.Check(t, s.Shutdown())
 	}
 }
 

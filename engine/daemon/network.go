@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/libnetwork"
 	lncluster "github.com/docker/docker/libnetwork/cluster"
 	"github.com/docker/docker/libnetwork/driverapi"
@@ -32,6 +33,7 @@ import (
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/go-connections/nat"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 // PredefinedNetworkError is returned when user tries to create predefined network that already exists.
@@ -43,12 +45,6 @@ func (pnr PredefinedNetworkError) Error() string {
 
 // Forbidden denotes the type of this error
 func (pnr PredefinedNetworkError) Forbidden() {}
-
-// NetworkControllerEnabled checks if the networking stack is enabled.
-// This feature depends on OS primitives and it's disabled in systems like Windows.
-func (daemon *Daemon) NetworkControllerEnabled() bool {
-	return daemon.netController != nil
-}
 
 // NetworkController returns the network controller created by the daemon.
 func (daemon *Daemon) NetworkController() *libnetwork.Controller {
@@ -157,19 +153,15 @@ var (
 func (daemon *Daemon) startIngressWorker() {
 	ingressJobsChannel = make(chan *ingressJob, 100)
 	go func() {
-		//nolint: gosimple
-		for {
-			select {
-			case r := <-ingressJobsChannel:
-				if r.create != nil {
-					daemon.setupIngress(&daemon.config().Config, r.create, r.ip, ingressID)
-					ingressID = r.create.ID
-				} else {
-					daemon.releaseIngress(ingressID)
-					ingressID = ""
-				}
-				close(r.jobDone)
+		for r := range ingressJobsChannel {
+			if r.create != nil {
+				daemon.setupIngress(&daemon.config().Config, r.create, r.ip, ingressID)
+				ingressID = r.create.ID
+			} else {
+				daemon.releaseIngress(ingressID)
+				ingressID = ""
 			}
+			close(r.jobDone)
 		}
 	}()
 }
@@ -209,11 +201,14 @@ func (daemon *Daemon) setupIngress(cfg *config.Config, create *clustertypes.Netw
 		daemon.releaseIngress(staleID)
 	}
 
-	if _, err := daemon.createNetwork(cfg, create.CreateRequest, create.ID, true); err != nil {
+	ctx := baggage.ContextWithBaggage(context.TODO(), otelutil.MustNewBaggage(
+		otelutil.MustNewMemberRaw(otelutil.TriggerKey, "daemon.setupIngress"),
+	))
+	if _, err := daemon.createNetwork(ctx, cfg, create.CreateRequest, create.ID, true); err != nil {
 		// If it is any other error other than already
 		// exists error log error and return.
 		if _, ok := err.(libnetwork.NetworkNameError); !ok {
-			log.G(context.TODO()).Errorf("Failed creating ingress network: %v", err)
+			log.G(ctx).Errorf("Failed creating ingress network: %v", err)
 			return
 		}
 		// Otherwise continue down the call to create or recreate sandbox.
@@ -279,16 +274,16 @@ func (daemon *Daemon) WaitForDetachment(ctx context.Context, networkName, networ
 
 // CreateManagedNetwork creates an agent network.
 func (daemon *Daemon) CreateManagedNetwork(create clustertypes.NetworkCreateRequest) error {
-	_, err := daemon.createNetwork(&daemon.config().Config, create.CreateRequest, create.ID, true)
+	_, err := daemon.createNetwork(context.TODO(), &daemon.config().Config, create.CreateRequest, create.ID, true)
 	return err
 }
 
 // CreateNetwork creates a network with the given name, driver and other optional parameters
-func (daemon *Daemon) CreateNetwork(create networktypes.CreateRequest) (*networktypes.CreateResponse, error) {
-	return daemon.createNetwork(&daemon.config().Config, create, "", false)
+func (daemon *Daemon) CreateNetwork(ctx context.Context, create networktypes.CreateRequest) (*networktypes.CreateResponse, error) {
+	return daemon.createNetwork(ctx, &daemon.config().Config, create, "", false)
 }
 
-func (daemon *Daemon) createNetwork(cfg *config.Config, create networktypes.CreateRequest, id string, agent bool) (*networktypes.CreateResponse, error) {
+func (daemon *Daemon) createNetwork(ctx context.Context, cfg *config.Config, create networktypes.CreateRequest, id string, agent bool) (*networktypes.CreateResponse, error) {
 	if network.IsPredefined(create.Name) {
 		return nil, PredefinedNetworkError(create.Name)
 	}
@@ -310,24 +305,40 @@ func (daemon *Daemon) createNetwork(cfg *config.Config, create networktypes.Crea
 	if defaultOpts, ok := cfg.DefaultNetworkOpts[driver]; create.ConfigFrom == nil && ok {
 		for k, v := range defaultOpts {
 			if _, ok := networkOptions[k]; !ok {
-				log.G(context.TODO()).WithFields(log.Fields{"driver": driver, "network": id, k: v}).Debug("Applying network default option")
+				log.G(ctx).WithFields(log.Fields{"driver": driver, "network": id, k: v}).Debug("Applying network default option")
 				networkOptions[k] = v
 			}
+		}
+	}
+
+	enableIPv4 := true
+	if create.EnableIPv4 != nil {
+		enableIPv4 = *create.EnableIPv4
+		// Make sure there's no conflicting DefaultNetworkOpts value (it'd be ignored but
+		// would look wrong in inspect output).
+		delete(networkOptions, netlabel.EnableIPv4)
+	} else if v, ok := networkOptions[netlabel.EnableIPv4]; ok {
+		var err error
+		if enableIPv4, err = strconv.ParseBool(v); err != nil {
+			return nil, errdefs.InvalidParameter(fmt.Errorf("driver-opt %q is not a valid bool", netlabel.EnableIPv4))
 		}
 	}
 
 	var enableIPv6 bool
 	if create.EnableIPv6 != nil {
 		enableIPv6 = *create.EnableIPv6
-	} else {
+		// Make sure there's no conflicting DefaultNetworkOpts value (it'd be ignored but
+		// would look wrong in inspect output).
+		delete(networkOptions, netlabel.EnableIPv6)
+	} else if v, ok := networkOptions[netlabel.EnableIPv6]; ok {
 		var err error
-		v, ok := networkOptions[netlabel.EnableIPv6]
-		if enableIPv6, err = strconv.ParseBool(v); ok && err != nil {
+		if enableIPv6, err = strconv.ParseBool(v); err != nil {
 			return nil, errdefs.InvalidParameter(fmt.Errorf("driver-opt %q is not a valid bool", netlabel.EnableIPv6))
 		}
 	}
 
 	nwOptions := []libnetwork.NetworkOption{
+		libnetwork.NetworkOptionEnableIPv4(enableIPv4),
 		libnetwork.NetworkOptionEnableIPv6(enableIPv6),
 		libnetwork.NetworkOptionDriverOpts(networkOptions),
 		libnetwork.NetworkOptionLabels(create.Labels),
@@ -355,7 +366,7 @@ func (daemon *Daemon) createNetwork(cfg *config.Config, create networktypes.Crea
 			// By dropping errors for agent networks, existing swarm-scoped networks also
 			// continue to behave as they did before upgrade - but new networks are still
 			// validated.
-			log.G(context.TODO()).WithFields(log.Fields{
+			log.G(ctx).WithFields(log.Fields{
 				"error":   err,
 				"network": create.Name,
 			}).Warn("Continuing with validation errors in agent IPAM")
@@ -394,7 +405,7 @@ func (daemon *Daemon) createNetwork(cfg *config.Config, create networktypes.Crea
 		nwOptions = append(nwOptions, libnetwork.NetworkOptionLBEndpoint(nodeIP))
 	}
 
-	n, err := c.NewNetwork(driver, create.Name, id, nwOptions...)
+	n, err := c.NewNetwork(ctx, driver, create.Name, id, nwOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -411,10 +422,13 @@ func (daemon *Daemon) createNetwork(cfg *config.Config, create networktypes.Crea
 func (daemon *Daemon) pluginRefCount(driver, capability string, mode int) {
 	var builtinDrivers []string
 
-	if capability == driverapi.NetworkPluginEndpointType {
+	switch capability {
+	case driverapi.NetworkPluginEndpointType:
 		builtinDrivers = daemon.netController.BuiltinDrivers()
-	} else if capability == ipamapi.PluginEndpointType {
+	case ipamapi.PluginEndpointType:
 		builtinDrivers = daemon.netController.BuiltinIPAMDrivers()
+	default:
+		// other capabilities can be ignored for now
 	}
 
 	for _, d := range builtinDrivers {
@@ -491,7 +505,7 @@ func (daemon *Daemon) DisconnectContainerFromNetwork(containerName string, netwo
 // GetNetworkDriverList returns the list of plugins drivers
 // registered for network.
 func (daemon *Daemon) GetNetworkDriverList(ctx context.Context) []string {
-	if !daemon.NetworkControllerEnabled() {
+	if daemon.netController == nil {
 		return nil
 	}
 
@@ -574,14 +588,14 @@ func (daemon *Daemon) deleteNetwork(nw *libnetwork.Network, dynamic bool) error 
 }
 
 // GetNetworks returns a list of all networks
-func (daemon *Daemon) GetNetworks(filter filters.Args, config backend.NetworkListConfig) (networks []networktypes.Inspect, err error) {
+func (daemon *Daemon) GetNetworks(filter filters.Args, config backend.NetworkListConfig) ([]networktypes.Inspect, error) {
 	var idx map[string]*libnetwork.Network
 	if config.Detailed {
 		idx = make(map[string]*libnetwork.Network)
 	}
 
 	allNetworks := daemon.getAllNetworks()
-	networks = make([]networktypes.Inspect, 0, len(allNetworks))
+	networks := make([]networktypes.Inspect, 0, len(allNetworks))
 	for _, n := range allNetworks {
 		nr := buildNetworkResource(n)
 		networks = append(networks, nr)
@@ -590,6 +604,7 @@ func (daemon *Daemon) GetNetworks(filter filters.Args, config backend.NetworkLis
 		}
 	}
 
+	var err error
 	networks, err = network.FilterNetworks(networks, filter)
 	if err != nil {
 		return nil, err
@@ -620,6 +635,7 @@ func buildNetworkResource(nw *libnetwork.Network) networktypes.Inspect {
 		Created:    nw.Created(),
 		Scope:      nw.Scope(),
 		Driver:     nw.Type(),
+		EnableIPv4: nw.IPv4Enabled(),
 		EnableIPv6: nw.IPv6Enabled(),
 		IPAM:       buildIPAMResources(nw),
 		Internal:   nw.Internal(),
@@ -746,9 +762,13 @@ func buildIPAMResources(nw *libnetwork.Network) networktypes.IPAM {
 				if info.IPAMData.Pool == nil {
 					continue
 				}
+				var gw string
+				if info.IPAMData.Gateway != nil {
+					gw = info.IPAMData.Gateway.IP.String()
+				}
 				ipamConfig = append(ipamConfig, networktypes.IPAMConfig{
 					Subnet:  info.IPAMData.Pool.String(),
-					Gateway: info.IPAMData.Gateway.String(),
+					Gateway: gw,
 				})
 			}
 		}
@@ -900,6 +920,17 @@ func buildCreateEndpointOptions(c *container.Container, n *libnetwork.Network, e
 
 	createOptions = append(createOptions, libnetwork.EndpointOptionGeneric(genericOptions))
 
+	// IPv6 may be enabled on the network, but disabled in the container.
+	if n.IPv6Enabled() {
+		if sbIPv6, ok := sb.IPv6Enabled(); ok && !sbIPv6 {
+			createOptions = append(createOptions, libnetwork.CreateOptionDisableIPv6())
+		}
+	}
+
+	if path, ok := sb.NetnsPath(); ok {
+		createOptions = append(createOptions, libnetwork.WithNetnsPath(path))
+	}
+
 	return createOptions, nil
 }
 
@@ -985,24 +1016,16 @@ func getPortMapInfo(sb *libnetwork.Sandbox) nat.PortMap {
 	}
 
 	for _, ep := range sb.Endpoints() {
-		pm, _ = getEndpointPortMapInfo(ep)
-		if len(pm) > 0 {
-			break
-		}
+		getEndpointPortMapInfo(pm, ep)
 	}
 	return pm
 }
 
-func getEndpointPortMapInfo(ep *libnetwork.Endpoint) (nat.PortMap, error) {
-	pm := nat.PortMap{}
-	driverInfo, err := ep.DriverInfo()
-	if err != nil {
-		return pm, err
-	}
-
+func getEndpointPortMapInfo(pm nat.PortMap, ep *libnetwork.Endpoint) {
+	driverInfo, _ := ep.DriverInfo()
 	if driverInfo == nil {
 		// It is not an error for epInfo to be nil
-		return pm, nil
+		return
 	}
 
 	if expData, ok := driverInfo[netlabel.ExposedPorts]; ok {
@@ -1010,16 +1033,19 @@ func getEndpointPortMapInfo(ep *libnetwork.Endpoint) (nat.PortMap, error) {
 			for _, tp := range exposedPorts {
 				natPort, err := nat.NewPort(tp.Proto.String(), strconv.Itoa(int(tp.Port)))
 				if err != nil {
-					return pm, fmt.Errorf("Error parsing Port value(%v):%v", tp.Port, err)
+					log.G(context.TODO()).Errorf("invalid exposed port %s: %v", tp.String(), err)
+					continue
 				}
-				pm[natPort] = nil
+				if _, ok := pm[natPort]; !ok {
+					pm[natPort] = nil
+				}
 			}
 		}
 	}
 
 	mapData, ok := driverInfo[netlabel.PortMap]
 	if !ok {
-		return pm, nil
+		return
 	}
 
 	if portMapping, ok := mapData.([]lntypes.PortBinding); ok {
@@ -1027,7 +1053,8 @@ func getEndpointPortMapInfo(ep *libnetwork.Endpoint) (nat.PortMap, error) {
 			// Use an empty string for the host port if there's no port assigned.
 			natPort, err := nat.NewPort(pp.Proto.String(), strconv.Itoa(int(pp.Port)))
 			if err != nil {
-				return pm, err
+				log.G(context.TODO()).Errorf("invalid port binding %s: %v", pp, err)
+				continue
 			}
 			var hp string
 			if pp.HostPort > 0 {
@@ -1037,8 +1064,6 @@ func getEndpointPortMapInfo(ep *libnetwork.Endpoint) (nat.PortMap, error) {
 			pm[natPort] = append(pm[natPort], natBndg)
 		}
 	}
-
-	return pm, nil
 }
 
 // buildEndpointInfo sets endpoint-related fields on container.NetworkSettings based on the provided network and endpoint.
@@ -1092,18 +1117,24 @@ func buildEndpointInfo(networkSettings *network.Settings, n *libnetwork.Network,
 
 // buildJoinOptions builds endpoint Join options from a given network.
 func buildJoinOptions(settings *network.Settings, n interface{ Name() string }) ([]libnetwork.EndpointOption, error) {
-	var joinOptions []libnetwork.EndpointOption
-	if epConfig, ok := settings.Networks[n.Name()]; ok {
-		for _, str := range epConfig.Links {
-			name, alias, err := opts.ParseLink(str)
-			if err != nil {
-				return nil, err
-			}
-			joinOptions = append(joinOptions, libnetwork.CreateOptionAlias(name, alias))
+	epConfig, ok := settings.Networks[n.Name()]
+	if !ok {
+		return []libnetwork.EndpointOption{}, nil
+	}
+
+	joinOptions := []libnetwork.EndpointOption{
+		libnetwork.JoinOptionPriority(epConfig.GwPriority),
+	}
+
+	for _, str := range epConfig.Links {
+		name, alias, err := opts.ParseLink(str)
+		if err != nil {
+			return nil, err
 		}
-		for k, v := range epConfig.DriverOpts {
-			joinOptions = append(joinOptions, libnetwork.EndpointOptionGeneric(options.Generic{k: v}))
-		}
+		joinOptions = append(joinOptions, libnetwork.CreateOptionAlias(name, alias))
+	}
+	for k, v := range epConfig.DriverOpts {
+		joinOptions = append(joinOptions, libnetwork.EndpointOptionGeneric(options.Generic{k: v}))
 	}
 
 	return joinOptions, nil

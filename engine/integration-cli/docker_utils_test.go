@@ -15,14 +15,15 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/daemon"
 	"github.com/docker/docker/internal/testutils/specialimage"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/testutil"
+	"github.com/moby/go-archive"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/assert/cmp"
+	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
 	"gotest.tools/v3/poll"
 )
@@ -131,30 +132,24 @@ func inspectMountSourceField(name, destination string) (string, error) {
 var errMountNotFound = errors.New("mount point not found")
 
 // Deprecated: use cli.Docker
-func inspectMountPoint(name, destination string) (types.MountPoint, error) {
+func inspectMountPoint(name, destination string) (container.MountPoint, error) {
 	out, err := inspectFilter(name, "json .Mounts")
 	if err != nil {
-		return types.MountPoint{}, err
+		return container.MountPoint{}, err
 	}
 
-	var mp []types.MountPoint
+	var mp []container.MountPoint
 	if err := json.Unmarshal([]byte(out), &mp); err != nil {
-		return types.MountPoint{}, err
+		return container.MountPoint{}, err
 	}
 
-	var m *types.MountPoint
 	for _, c := range mp {
 		if c.Destination == destination {
-			m = &c
-			break
+			return c, nil
 		}
 	}
 
-	if m == nil {
-		return types.MountPoint{}, errMountNotFound
-	}
-
-	return *m, nil
+	return container.MountPoint{}, errMountNotFound
 }
 
 func getIDByName(c *testing.T, name string) string {
@@ -182,8 +177,8 @@ func buildImage(name string, cmdOperators ...cli.CmdOperator) *icmd.Result {
 func writeFile(dst, content string, c *testing.T) {
 	c.Helper()
 	// Create subdirectories if necessary
-	assert.Assert(c, os.MkdirAll(path.Dir(dst), 0o700) == nil)
-	f, err := os.OpenFile(dst, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o700)
+	assert.NilError(c, os.MkdirAll(path.Dir(dst), 0o700))
+	f, err := os.OpenFile(dst, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 	assert.NilError(c, err)
 	defer f.Close()
 	// Write content (truncate if it exists)
@@ -352,9 +347,9 @@ func getGoroutineNumber(ctx context.Context, apiClient client.APIClient) (int, e
 	return info.NGoroutines, nil
 }
 
-func waitForStableGourtineCount(ctx context.Context, t poll.TestingT, apiClient client.APIClient) int {
+func waitForStableGoroutineCount(ctx context.Context, t poll.TestingT, apiClient client.APIClient) int {
 	var out int
-	poll.WaitOn(t, stableGoroutineCount(ctx, apiClient, &out), poll.WithTimeout(30*time.Second))
+	poll.WaitOn(t, stableGoroutineCount(ctx, apiClient, &out), poll.WithDelay(time.Second), poll.WithTimeout(30*time.Second))
 	return out
 }
 
@@ -379,7 +374,7 @@ func stableGoroutineCount(ctx context.Context, apiClient client.APIClient, count
 			nRoutines = n
 		}
 
-		if numStable > 3 {
+		if numStable > 6 {
 			*count = n
 			return poll.Success()
 		}
@@ -413,7 +408,7 @@ func waitForGoroutines(ctx context.Context, t poll.TestingT, apiClient client.AP
 func getErrorMessage(c *testing.T, body []byte) string {
 	c.Helper()
 	var resp types.ErrorResponse
-	assert.Assert(c, json.Unmarshal(body, &resp) == nil)
+	assert.NilError(c, json.Unmarshal(body, &resp))
 	return strings.TrimSpace(resp.Message)
 }
 
@@ -432,7 +427,7 @@ func pollCheck(t *testing.T, f checkF, compare func(x interface{}) assert.BoolOr
 			if r {
 				return poll.Success()
 			}
-		case cmp.Comparison:
+		case is.Comparison:
 			if r().Success() {
 				return poll.Success()
 			}
@@ -494,7 +489,7 @@ func loadSpecialImage(c *testing.T, imageFunc specialimage.SpecialImageFunc) str
 	out := cli.DockerCmd(c, "load", "-i", imgTar).Stdout()
 
 	for _, line := range strings.Split(out, "\n") {
-		line := strings.TrimSpace(line)
+		line = strings.TrimSpace(line)
 
 		if _, imageID, hasID := strings.Cut(line, "Loaded image ID: "); hasID {
 			return imageID

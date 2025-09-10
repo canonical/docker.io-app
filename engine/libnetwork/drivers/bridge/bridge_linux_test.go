@@ -5,28 +5,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
+	"net/netip"
 	"os/exec"
-	"regexp"
+	"slices"
 	"strconv"
 	"testing"
 
 	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/internal/testutils/netnsutils"
+	"github.com/docker/docker/internal/testutils/storeutils"
 	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/drivers/bridge/internal/firewaller"
 	"github.com/docker/docker/libnetwork/internal/netiputil"
 	"github.com/docker/docker/libnetwork/ipamapi"
 	"github.com/docker/docker/libnetwork/ipams/defaultipam"
 	"github.com/docker/docker/libnetwork/ipamutils"
-	"github.com/docker/docker/libnetwork/iptables"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/options"
 	"github.com/docker/docker/libnetwork/portallocator"
 	"github.com/docker/docker/libnetwork/types"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/icmd"
 )
 
 func TestEndpointMarshalling(t *testing.T) {
@@ -48,16 +54,16 @@ func TestEndpointMarshalling(t *testing.T) {
 			ExposedPorts: []types.TransportPort{
 				{
 					Proto: 6,
-					Port:  uint16(18),
+					Port:  18,
 				},
 			},
 			PortBindings: []types.PortBinding{
 				{
 					Proto:       6,
 					IP:          net.ParseIP("17210.33.9.56"),
-					Port:        uint16(18),
-					HostPort:    uint16(3000),
-					HostPortEnd: uint16(14000),
+					Port:        18,
+					HostPort:    3000,
+					HostPortEnd: 14000,
 				},
 			},
 		},
@@ -66,20 +72,20 @@ func TestEndpointMarshalling(t *testing.T) {
 				PortBinding: types.PortBinding{
 					Proto:       17,
 					IP:          net.ParseIP("172.33.9.56"),
-					Port:        uint16(99),
+					Port:        99,
 					HostIP:      net.ParseIP("10.10.100.2"),
-					HostPort:    uint16(9900),
-					HostPortEnd: uint16(10000),
+					HostPort:    9900,
+					HostPortEnd: 10000,
 				},
 			},
 			{
 				PortBinding: types.PortBinding{
 					Proto:       6,
 					IP:          net.ParseIP("171.33.9.56"),
-					Port:        uint16(55),
+					Port:        55,
 					HostIP:      net.ParseIP("10.11.100.2"),
-					HostPort:    uint16(5500),
-					HostPortEnd: uint16(55000),
+					HostPort:    5500,
+					HostPortEnd: 55000,
 				},
 			},
 		},
@@ -215,6 +221,35 @@ func compareBindings(a, b []portBinding) bool {
 	return true
 }
 
+func TestNetworkConfigurationMarshalling(t *testing.T) {
+	nc := &networkConfiguration{
+		ID:                    "nid",
+		BridgeName:            "bridgename",
+		EnableIPv4:            true,
+		EnableIPv6:            true,
+		EnableIPMasquerade:    true,
+		GwModeIPv4:            gwModeRouted,
+		GwModeIPv6:            gwModeIsolated,
+		EnableICC:             true,
+		TrustedHostInterfaces: []string{"foo0", "bar1"},
+		InhibitIPv4:           true,
+		Mtu:                   1234,
+		DefaultBindingIP:      net.ParseIP("192.0.2.1"),
+		DefaultBridge:         true,
+		HostIPv4:              net.ParseIP("192.0.2.2"),
+		HostIPv6:              net.ParseIP("2001:db8::1"),
+		ContainerIfacePrefix:  "baz",
+	}
+
+	b, err := json.Marshal(nc)
+	assert.Assert(t, err)
+
+	nnc := &networkConfiguration{}
+	err = json.Unmarshal(b, nnc)
+	assert.Assert(t, err)
+	assert.Check(t, is.DeepEqual(nnc, nc, cmpopts.IgnoreUnexported(networkConfiguration{})))
+}
+
 func getIPv4Data(t *testing.T) []driverapi.IPAMData {
 	t.Helper()
 
@@ -242,7 +277,7 @@ func getIPv6Data(t *testing.T) []driverapi.IPAMData {
 
 func TestCreateFullOptions(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	config := &configuration{
 		EnableIPForwarding: true,
@@ -264,6 +299,7 @@ func TestCreateFullOptions(t *testing.T) {
 	}
 
 	netOption := make(map[string]interface{})
+	netOption[netlabel.EnableIPv4] = true
 	netOption[netlabel.EnableIPv6] = true
 	netOption[netlabel.GenericData] = &networkConfiguration{
 		BridgeName: DefaultBridgeName,
@@ -276,7 +312,7 @@ func TestCreateFullOptions(t *testing.T) {
 			AuxAddresses: map[string]*net.IPNet{DefaultGatewayV4AuxKey: defgw},
 		},
 	}
-	err := d.CreateNetwork("dummy", netOption, nil, ipdList, getIPv6Data(t))
+	err := d.CreateNetwork(context.Background(), "dummy", netOption, nil, ipdList, getIPv6Data(t))
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
@@ -296,20 +332,22 @@ func TestCreateFullOptions(t *testing.T) {
 
 func TestCreateNoConfig(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
+	err := d.configure(nil)
+	assert.NilError(t, err)
 
-	netconfig := &networkConfiguration{BridgeName: DefaultBridgeName}
+	netconfig := &networkConfiguration{BridgeName: DefaultBridgeName, EnableIPv4: true}
 	genericOption := make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
-	if err := d.CreateNetwork("dummy", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "dummy", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
 }
 
 func TestCreateFullOptionsLabels(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	config := &configuration{
 		EnableIPForwarding: true,
@@ -338,6 +376,7 @@ func TestCreateFullOptionsLabels(t *testing.T) {
 	}
 
 	netOption := make(map[string]interface{})
+	netOption[netlabel.EnableIPv4] = true
 	netOption[netlabel.EnableIPv6] = true
 	netOption[netlabel.GenericData] = labels
 
@@ -351,7 +390,7 @@ func TestCreateFullOptionsLabels(t *testing.T) {
 		},
 	}
 
-	err := d.CreateNetwork("dummy", netOption, nil, ipdList, ipd6List)
+	err := d.CreateNetwork(context.Background(), "dummy", netOption, nil, ipdList, ipd6List)
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
@@ -363,6 +402,10 @@ func TestCreateFullOptionsLabels(t *testing.T) {
 
 	if nw.config.BridgeName != DefaultBridgeName {
 		t.Fatal("incongruent name in bridge network")
+	}
+
+	if !nw.config.EnableIPv4 {
+		t.Fatal("incongruent EnableIPv4 in bridge network")
 	}
 
 	if !nw.config.EnableIPv6 {
@@ -395,41 +438,117 @@ func TestCreateFullOptionsLabels(t *testing.T) {
 		t.Fatalf("Unexpected: %v", nw.config.DefaultGatewayIPv6)
 	}
 
-	// In short here we are testing --fixed-cidr-v6 daemon option
-	// plus --mac-address run option
-	te := newTestEndpoint(ipdList[0].Pool, 20)
-	te.iface.mac = netutils.MustParseMAC("aa:bb:cc:dd:ee:ff")
-	err = d.CreateEndpoint(context.Background(), "dummy", "ep1", te.Interface(), map[string]interface{}{})
-	if err != nil {
-		t.Fatal(err)
+	// Check that a MAC address is generated if not already configured.
+	te1 := newTestEndpoint(ipdList[0].Pool, 20)
+	err = d.CreateEndpoint(context.Background(), "dummy", "ep1", te1.Interface(), map[string]interface{}{})
+	assert.NilError(t, err)
+	assert.Check(t, is.Len(te1.iface.mac, 6))
+
+	// Check that a configured --mac-address isn't overwritten by a generated address.
+	te2 := newTestEndpoint(ipdList[0].Pool, 20)
+	const macAddr = "aa:bb:cc:dd:ee:ff"
+	te2.iface.mac = netutils.MustParseMAC(macAddr)
+	err = d.CreateEndpoint(context.Background(), "dummy", "ep2", te2.Interface(), map[string]interface{}{})
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(te2.iface.mac.String(), macAddr))
+}
+
+func TestCreateVeth(t *testing.T) {
+	tests := []struct {
+		name                  string
+		netnsName             string
+		createNetns           bool
+		expCreatedInContainer bool
+	}{
+		{
+			name: "host netns",
+		},
+		{
+			name:                  "container netns",
+			netnsName:             "testnsctr",
+			createNetns:           true,
+			expCreatedInContainer: true,
+		},
+		{
+			name:      "netns not created",
+			netnsName: "testnsctr",
+		},
 	}
 
-	if !nwV6.Contains(te.Interface().AddressIPv6().IP) {
-		t.Fatalf("endpoint got assigned address outside of container network(%s): %s", nwV6.String(), te.Interface().AddressIPv6())
-	}
-	if te.Interface().AddressIPv6().IP.String() != "2001:db8:2600:2700:2800:aabb:ccdd:eeff" {
-		t.Fatalf("Unexpected endpoint IPv6 address: %v", te.Interface().AddressIPv6().IP)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a "host" network namespace with a netlink handle.
+			const hostNsName = "testnshost"
+			res := icmd.RunCommand("ip", "netns", "add", hostNsName)
+			assert.Assert(t, is.Equal(res.ExitCode, 0))
+			defer icmd.RunCommand("ip", "netns", "del", hostNsName)
+			nsh, err := netns.GetFromPath("/var/run/netns/" + hostNsName)
+			assert.NilError(t, err)
+			defer nsh.Close()
+			nlh, err := nlwrap.NewHandleAt(nsh)
+			assert.NilError(t, err)
+			defer nlh.Close()
+
+			netnsPath := ""
+			if tc.netnsName != "" {
+				netnsPath = "/var/run/netns/" + tc.netnsName
+			}
+			if tc.createNetns {
+				res := icmd.RunCommand("ip", "netns", "add", tc.netnsName)
+				assert.Assert(t, is.Equal(res.ExitCode, 0))
+				defer icmd.RunCommand("ip", "netns", "del", tc.netnsName)
+			}
+
+			const hostIfName = "vethtesth"
+			const containerIfName = "vethtestc"
+			defer func() {
+				// Just in case anything ends up in the host's netns, make sure it doesn't hang around ...
+				icmd.RunCommand("ip", "link", "del", hostIfName)
+				icmd.RunCommand("ip", "link", "del", containerIfName)
+			}()
+
+			iface := &testInterface{netnsPath: netnsPath}
+			nlhCtr, err := createVeth(context.Background(), hostIfName, containerIfName, iface, nlh)
+			assert.Check(t, err)
+
+			assert.Check(t, is.Equal(iface.createdInContainer, tc.expCreatedInContainer))
+			if tc.expCreatedInContainer {
+				assert.Check(t, nlhCtr != nil)
+				res := icmd.RunCommand("ip", "netns", "exec", hostNsName, "ip", "link", "show", hostIfName)
+				assert.Check(t, is.Equal(res.ExitCode, 0))
+				res = icmd.RunCommand("ip", "netns", "exec", hostNsName, "ip", "link", "show", containerIfName)
+				assert.Check(t, is.Equal(res.ExitCode, 1))
+				res = icmd.RunCommand("ip", "netns", "exec", tc.netnsName, "ip", "link", "show", containerIfName)
+				assert.Check(t, is.Equal(res.ExitCode, 0))
+			} else {
+				assert.Check(t, nlhCtr == nil)
+				res := icmd.RunCommand("ip", "netns", "exec", hostNsName, "ip", "link", "show", hostIfName)
+				assert.Check(t, is.Equal(res.ExitCode, 0))
+				res = icmd.RunCommand("ip", "netns", "exec", hostNsName, "ip", "link", "show", containerIfName)
+				assert.Check(t, is.Equal(res.ExitCode, 0))
+			}
+		})
 	}
 }
 
 func TestCreate(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	if err := d.configure(nil); err != nil {
 		t.Fatalf("Failed to setup driver config: %v", err)
 	}
 
-	netconfig := &networkConfiguration{BridgeName: DefaultBridgeName}
+	netconfig := &networkConfiguration{BridgeName: DefaultBridgeName, EnableIPv4: true}
 	genericOption := make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
-	if err := d.CreateNetwork("dummy", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "dummy", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
 
-	err := d.CreateNetwork("dummy", genericOption, nil, getIPv4Data(t), nil)
+	err := d.CreateNetwork(context.Background(), "dummy", genericOption, nil, getIPv4Data(t), nil)
 	if err == nil {
 		t.Fatal("Expected bridge driver to refuse creation of second network with default name")
 	}
@@ -441,7 +560,7 @@ func TestCreate(t *testing.T) {
 func TestCreateFail(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	if err := d.configure(nil); err != nil {
 		t.Fatalf("Failed to setup driver config: %v", err)
@@ -451,15 +570,28 @@ func TestCreateFail(t *testing.T) {
 	genericOption := make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
-	if err := d.CreateNetwork("dummy", genericOption, nil, getIPv4Data(t), nil); err == nil {
+	if err := d.CreateNetwork(context.Background(), "dummy", genericOption, nil, getIPv4Data(t), nil); err == nil {
 		t.Fatal("Bridge creation was expected to fail")
 	}
 }
 
 func TestCreateMultipleNetworks(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
+	useStubFirewaller(t)
 
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
+
+	checkFirewallerNetworks := func() {
+		t.Helper()
+		fw := d.firewaller.(*firewaller.StubFirewaller)
+		got := maps.Clone(fw.Networks)
+		for _, wantNw := range d.networks {
+			_, ok := got[wantNw.config.BridgeName]
+			assert.Check(t, ok, "Rules for bridge %s (nid:%s) have been deleted", wantNw.config.BridgeName, wantNw.id)
+			delete(got, wantNw.config.BridgeName)
+		}
+		assert.Check(t, is.Len(slices.Collect(maps.Keys(got)), 0), "Rules for bridges have not been deleted")
+	}
 
 	config := &configuration{
 		EnableIPTables: true,
@@ -471,92 +603,65 @@ func TestCreateMultipleNetworks(t *testing.T) {
 		t.Fatalf("Failed to setup driver config: %v", err)
 	}
 
-	config1 := &networkConfiguration{BridgeName: "net_test_1"}
+	config1 := &networkConfiguration{BridgeName: "net_test_1", EnableIPv4: true}
 	genericOption = make(map[string]interface{})
 	genericOption[netlabel.GenericData] = config1
-	if err := d.CreateNetwork("1", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "1", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
+	checkFirewallerNetworks()
 
-	verifyV4INCEntries(d.networks, t)
-
-	config2 := &networkConfiguration{BridgeName: "net_test_2"}
+	config2 := &networkConfiguration{BridgeName: "net_test_2", EnableIPv4: true}
 	genericOption[netlabel.GenericData] = config2
-	if err := d.CreateNetwork("2", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "2", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
+	checkFirewallerNetworks()
 
-	verifyV4INCEntries(d.networks, t)
-
-	config3 := &networkConfiguration{BridgeName: "net_test_3"}
+	config3 := &networkConfiguration{BridgeName: "net_test_3", EnableIPv4: true}
 	genericOption[netlabel.GenericData] = config3
-	if err := d.CreateNetwork("3", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "3", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
+	checkFirewallerNetworks()
 
-	verifyV4INCEntries(d.networks, t)
-
-	config4 := &networkConfiguration{BridgeName: "net_test_4"}
+	config4 := &networkConfiguration{BridgeName: "net_test_4", EnableIPv4: true}
 	genericOption[netlabel.GenericData] = config4
-	if err := d.CreateNetwork("4", genericOption, nil, getIPv4Data(t), nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), "4", genericOption, nil, getIPv4Data(t), nil); err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
-
-	verifyV4INCEntries(d.networks, t)
+	checkFirewallerNetworks()
 
 	if err := d.DeleteNetwork("1"); err != nil {
 		t.Log(err)
 	}
-	verifyV4INCEntries(d.networks, t)
+	checkFirewallerNetworks()
 
 	if err := d.DeleteNetwork("2"); err != nil {
 		t.Log(err)
 	}
-	verifyV4INCEntries(d.networks, t)
+	checkFirewallerNetworks()
 
 	if err := d.DeleteNetwork("3"); err != nil {
 		t.Log(err)
 	}
-	verifyV4INCEntries(d.networks, t)
+	checkFirewallerNetworks()
 
 	if err := d.DeleteNetwork("4"); err != nil {
 		t.Log(err)
 	}
-	verifyV4INCEntries(d.networks, t)
-}
-
-// Verify the network isolation rules are installed for each network
-func verifyV4INCEntries(networks map[string]*bridgeNetwork, t *testing.T) {
-	iptable := iptables.GetIptable(iptables.IPv4)
-	out1, err := iptable.Raw("-S", IsolationChain1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out2, err := iptable.Raw("-S", IsolationChain2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, n := range networks {
-		re := regexp.MustCompile(fmt.Sprintf("-i %s ! -o %s -j %s", n.config.BridgeName, n.config.BridgeName, IsolationChain2))
-		matches := re.FindAllString(string(out1[:]), -1)
-		if len(matches) != 1 {
-			t.Fatalf("Cannot find expected inter-network isolation rules in IP Tables for network %s:\n%s.", n.id, string(out1[:]))
-		}
-		re = regexp.MustCompile(fmt.Sprintf("-o %s -j DROP", n.config.BridgeName))
-		matches = re.FindAllString(string(out2[:]), -1)
-		if len(matches) != 1 {
-			t.Fatalf("Cannot find expected inter-network isolation rules in IP Tables for network %s:\n%s.", n.id, string(out2[:]))
-		}
-	}
+	checkFirewallerNetworks()
 }
 
 type testInterface struct {
-	mac     net.HardwareAddr
-	addr    *net.IPNet
-	addrv6  *net.IPNet
-	srcName string
-	dstName string
+	mac                net.HardwareAddr
+	addr               *net.IPNet
+	addrv6             *net.IPNet
+	srcName            string
+	dstPrefix          string
+	dstName            string
+	createdInContainer bool
+	netnsPath          string
 }
 
 type testEndpoint struct {
@@ -570,6 +675,20 @@ func newTestEndpoint(nw *net.IPNet, ordinal byte) *testEndpoint {
 	addr := types.GetIPNetCopy(nw)
 	addr.IP[len(addr.IP)-1] = ordinal
 	return &testEndpoint{iface: &testInterface{addr: addr}}
+}
+
+// newTestEndpoint46 is like newTestEndpoint, but assigns an IPv6 address as well as IPv4.
+func newTestEndpoint46(nw4, nw6 *net.IPNet, ordinal byte) *testEndpoint {
+	addr4 := types.GetIPNetCopy(nw4)
+	addr4.IP[len(addr4.IP)-1] = ordinal
+	addr6 := types.GetIPNetCopy(nw6)
+	addr6.IP[len(addr6.IP)-1] = ordinal
+	return &testEndpoint{
+		iface: &testInterface{
+			addr:   addr4,
+			addrv6: addr6,
+		},
+	}
 }
 
 func (te *testEndpoint) Interface() *testInterface {
@@ -617,8 +736,17 @@ func setAddress(ifaceAddr **net.IPNet, address *net.IPNet) error {
 	return nil
 }
 
-func (i *testInterface) SetNames(srcName string, dstName string) error {
+func (i *testInterface) NetnsPath() string {
+	return i.netnsPath
+}
+
+func (i *testInterface) SetCreatedInContainer(cic bool) {
+	i.createdInContainer = cic
+}
+
+func (i *testInterface) SetNames(srcName, dstPrefix, dstName string) error {
 	i.srcName = srcName
+	i.dstPrefix = dstPrefix
 	i.dstName = dstName
 	return nil
 }
@@ -662,7 +790,9 @@ func TestQueryEndpointInfoHairpin(t *testing.T) {
 
 func testQueryEndpointInfo(t *testing.T, ulPxyEnabled bool) {
 	defer netnsutils.SetupTestOSContext(t)()
-	d := newDriver()
+	useStubFirewaller(t)
+
+	d := newDriver(storeutils.NewTempStore(t))
 	portallocator.Get().ReleaseAll()
 
 	var proxyBinary string
@@ -687,13 +817,14 @@ func testQueryEndpointInfo(t *testing.T, ulPxyEnabled bool) {
 
 	netconfig := &networkConfiguration{
 		BridgeName: DefaultBridgeName,
+		EnableIPv4: true,
 		EnableICC:  false,
 	}
 	genericOption = make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
 	ipdList := getIPv4Data(t)
-	err = d.CreateNetwork("net1", genericOption, nil, ipdList, nil)
+	err = d.CreateNetwork(context.Background(), "net1", genericOption, nil, ipdList, nil)
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
@@ -707,7 +838,7 @@ func testQueryEndpointInfo(t *testing.T, ulPxyEnabled bool) {
 		t.Fatalf("Failed to create an endpoint : %s", err.Error())
 	}
 
-	err = d.Join(context.Background(), "net1", "ep1", "sbox", te, sbOptions)
+	err = d.Join(context.Background(), "net1", "ep1", "sbox", te, nil, sbOptions)
 	if err != nil {
 		t.Fatalf("Failed to join the endpoint: %v", err)
 	}
@@ -757,25 +888,25 @@ func testQueryEndpointInfo(t *testing.T, ulPxyEnabled bool) {
 
 func getExposedPorts() []types.TransportPort {
 	return []types.TransportPort{
-		{Proto: types.TCP, Port: uint16(5000)},
-		{Proto: types.UDP, Port: uint16(400)},
-		{Proto: types.TCP, Port: uint16(600)},
+		{Proto: types.TCP, Port: 5000},
+		{Proto: types.UDP, Port: 400},
+		{Proto: types.TCP, Port: 600},
 	}
 }
 
 func getPortMapping() []types.PortBinding {
 	return []types.PortBinding{
-		{Proto: types.TCP, Port: uint16(230), HostPort: uint16(23000)},
-		{Proto: types.UDP, Port: uint16(200), HostPort: uint16(22000)},
-		{Proto: types.TCP, Port: uint16(120), HostPort: uint16(12000)},
+		{Proto: types.TCP, Port: 230, HostPort: 23000},
+		{Proto: types.UDP, Port: 200, HostPort: 22000},
+		{Proto: types.TCP, Port: 120, HostPort: 12000},
 	}
 }
 
 func TestLinkContainers(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
+	useStubFirewaller(t)
 
-	d := newDriver()
-	iptable := iptables.GetIptable(iptables.IPv4)
+	d := newDriver(storeutils.NewTempStore(t))
 
 	config := &configuration{
 		EnableIPTables: true,
@@ -789,13 +920,14 @@ func TestLinkContainers(t *testing.T) {
 
 	netconfig := &networkConfiguration{
 		BridgeName: DefaultBridgeName,
+		EnableIPv4: true,
 		EnableICC:  false,
 	}
 	genericOption = make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
 	ipdList := getIPv4Data(t)
-	err := d.CreateNetwork("net1", genericOption, nil, ipdList, nil)
+	err := d.CreateNetwork(context.Background(), "net1", genericOption, nil, ipdList, nil)
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
@@ -810,7 +942,7 @@ func TestLinkContainers(t *testing.T) {
 	sbOptions := make(map[string]interface{})
 	sbOptions[netlabel.ExposedPorts] = exposedPorts
 
-	err = d.Join(context.Background(), "net1", "ep1", "sbox", te1, sbOptions)
+	err = d.Join(context.Background(), "net1", "ep1", "sbox", te1, nil, sbOptions)
 	if err != nil {
 		t.Fatalf("Failed to join the endpoint: %v", err)
 	}
@@ -841,7 +973,7 @@ func TestLinkContainers(t *testing.T) {
 		"ChildEndpoints": []string{"ep1"},
 	}
 
-	err = d.Join(context.Background(), "net1", "ep2", "", te2, sbOptions)
+	err = d.Join(context.Background(), "net1", "ep2", "", te2, nil, sbOptions)
 	if err != nil {
 		t.Fatal("Failed to link ep1 and ep2")
 	}
@@ -851,47 +983,29 @@ func TestLinkContainers(t *testing.T) {
 		t.Fatalf("Failed to program external connectivity: %v", err)
 	}
 
-	out, _ := iptable.Raw("-L", DockerChain)
-	for _, pm := range exposedPorts {
-		regex := fmt.Sprintf("%s dpt:%d", pm.Proto.String(), pm.Port)
-		re := regexp.MustCompile(regex)
-		matches := re.FindAllString(string(out[:]), -1)
-		if len(matches) != 1 {
-			t.Fatalf("IP Tables programming failed %s", string(out[:]))
-		}
-
-		regex = fmt.Sprintf("%s spt:%d", pm.Proto.String(), pm.Port)
-		matched, _ := regexp.MatchString(regex, string(out[:]))
-		if !matched {
-			t.Fatalf("IP Tables programming failed %s", string(out[:]))
-		}
+	checkLink := func(expExists bool) {
+		t.Helper()
+		dnw, ok := d.networks["net1"]
+		assert.Assert(t, ok)
+		fnw := dnw.firewallerNetwork.(*firewaller.StubFirewallerNetwork)
+		parentAddr, ok := netip.AddrFromSlice(te2.iface.addr.IP)
+		assert.Assert(t, ok)
+		childAddr, ok := netip.AddrFromSlice(te1.iface.addr.IP)
+		assert.Assert(t, ok)
+		exists := fnw.LinkExists(parentAddr, childAddr, exposedPorts)
+		assert.Check(t, is.Equal(exists, expExists))
 	}
+	checkLink(true)
 
 	err = d.RevokeExternalConnectivity("net1", "ep2")
 	if err != nil {
 		t.Fatalf("Failed to revoke external connectivity: %v", err)
 	}
-
 	err = d.Leave("net1", "ep2")
 	if err != nil {
 		t.Fatal("Failed to unlink ep1 and ep2")
 	}
-
-	out, _ = iptable.Raw("-L", DockerChain)
-	for _, pm := range exposedPorts {
-		regex := fmt.Sprintf("%s dpt:%d", pm.Proto.String(), pm.Port)
-		re := regexp.MustCompile(regex)
-		matches := re.FindAllString(string(out[:]), -1)
-		if len(matches) != 0 {
-			t.Fatalf("Leave should have deleted relevant IPTables rules  %s", string(out[:]))
-		}
-
-		regex = fmt.Sprintf("%s spt:%d", pm.Proto.String(), pm.Port)
-		matched, _ := regexp.MatchString(regex, string(out[:]))
-		if matched {
-			t.Fatalf("Leave should have deleted relevant IPTables rules  %s", string(out[:]))
-		}
-	}
+	checkLink(false)
 
 	// Error condition test with an invalid endpoint-id "ep4"
 	sbOptions = make(map[string]interface{})
@@ -899,52 +1013,39 @@ func TestLinkContainers(t *testing.T) {
 		"ChildEndpoints": []string{"ep1", "ep4"},
 	}
 
-	err = d.Join(context.Background(), "net1", "ep2", "", te2, sbOptions)
+	err = d.Join(context.Background(), "net1", "ep2", "", te2, nil, sbOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = d.ProgramExternalConnectivity(context.Background(), "net1", "ep2", sbOptions)
-	if err != nil {
-		out, _ = iptable.Raw("-L", DockerChain)
-		for _, pm := range exposedPorts {
-			regex := fmt.Sprintf("%s dpt:%d", pm.Proto.String(), pm.Port)
-			re := regexp.MustCompile(regex)
-			matches := re.FindAllString(string(out[:]), -1)
-			if len(matches) != 0 {
-				t.Fatalf("Error handling should rollback relevant IPTables rules  %s", string(out[:]))
-			}
-
-			regex = fmt.Sprintf("%s spt:%d", pm.Proto.String(), pm.Port)
-			matched, _ := regexp.MatchString(regex, string(out[:]))
-			if matched {
-				t.Fatalf("Error handling should rollback relevant IPTables rules  %s", string(out[:]))
-			}
-		}
-	} else {
-		t.Fatal("Expected Join to fail given link conditions are not satisfied")
-	}
+	assert.Check(t, err != nil, "Expected Join to fail given link conditions are not satisfied")
+	checkLink(false)
 }
 
 func TestValidateConfig(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	// Test mtu
-	c := networkConfiguration{Mtu: -2}
+	// Bridge network
+	_, network, _ := net.ParseCIDR("172.28.0.0/16")
+	c := networkConfiguration{
+		AddressIPv4: network,
+		EnableIPv4:  true,
+	}
 	err := c.Validate()
+	if err != nil {
+		t.Fatal("unexpected validation error:", err)
+	}
+
+	// Test mtu
+	c.Mtu = -2
+	err = c.Validate()
 	if err == nil {
 		t.Fatal("Failed to detect invalid MTU number")
 	}
-
 	c.Mtu = 9000
 	err = c.Validate()
 	if err != nil {
-		t.Fatal("unexpected validation error on MTU number")
-	}
-
-	// Bridge network
-	_, network, _ := net.ParseCIDR("172.28.0.0/16")
-	c = networkConfiguration{
-		AddressIPv4: network,
+		t.Fatal("unexpected validation error on MTU number:", err)
 	}
 
 	err = c.Validate()
@@ -1064,7 +1165,6 @@ func TestValidateFixedCIDRV6(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			err := ValidateFixedCIDRV6(tc.input)
 			if tc.expectedErr == "" {
@@ -1079,42 +1179,41 @@ func TestValidateFixedCIDRV6(t *testing.T) {
 func TestSetDefaultGw(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
 
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	if err := d.configure(nil); err != nil {
 		t.Fatalf("Failed to setup driver config: %v", err)
 	}
 
-	_, subnetv6, _ := net.ParseCIDR("2001:db8:ea9:9abc:b0c4::/80")
-
-	ipdList := getIPv4Data(t)
-	gw4 := types.GetIPCopy(ipdList[0].Pool.IP).To4()
+	ipam4 := getIPv4Data(t)
+	gw4 := types.GetIPCopy(ipam4[0].Pool.IP).To4()
 	gw4[3] = 254
-	gw6 := net.ParseIP("2001:db8:ea9:9abc:b0c4::254")
+	ipam6 := getIPv6Data(t)
+	gw6 := types.GetIPCopy(ipam6[0].Pool.IP)
+	gw6[15] = 0x42
 
-	config := &networkConfiguration{
-		BridgeName:         DefaultBridgeName,
-		AddressIPv6:        subnetv6,
-		DefaultGatewayIPv4: gw4,
-		DefaultGatewayIPv6: gw6,
+	option := map[string]interface{}{
+		netlabel.EnableIPv4: true,
+		netlabel.EnableIPv6: true,
+		netlabel.GenericData: &networkConfiguration{
+			BridgeName:         DefaultBridgeName,
+			DefaultGatewayIPv4: gw4,
+			DefaultGatewayIPv6: gw6,
+		},
 	}
 
-	genericOption := make(map[string]interface{})
-	genericOption[netlabel.EnableIPv6] = true
-	genericOption[netlabel.GenericData] = config
-
-	err := d.CreateNetwork("dummy", genericOption, nil, ipdList, nil)
+	err := d.CreateNetwork(context.Background(), "dummy", option, nil, ipam4, ipam6)
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)
 	}
 
-	te := newTestEndpoint(ipdList[0].Pool, 10)
+	te := newTestEndpoint(ipam4[0].Pool, 10)
 	err = d.CreateEndpoint(context.Background(), "dummy", "ep", te.Interface(), nil)
 	if err != nil {
 		t.Fatalf("Failed to create endpoint: %v", err)
 	}
 
-	err = d.Join(context.Background(), "dummy", "ep", "sbox", te, nil)
+	err = d.Join(context.Background(), "dummy", "ep", "sbox", te, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to join endpoint: %v", err)
 	}
@@ -1128,43 +1227,9 @@ func TestSetDefaultGw(t *testing.T) {
 	}
 }
 
-func TestCleanupIptableRules(t *testing.T) {
-	defer netnsutils.SetupTestOSContext(t)()
-	bridgeChain := []iptables.ChainInfo{
-		{Name: DockerChain, Table: iptables.Nat},
-		{Name: DockerChain, Table: iptables.Filter},
-		{Name: IsolationChain1, Table: iptables.Filter},
-	}
-
-	ipVersions := []iptables.IPVersion{iptables.IPv4, iptables.IPv6}
-	configs := map[iptables.IPVersion]configuration{
-		iptables.IPv4: {EnableIPTables: true},
-		iptables.IPv6: {EnableIP6Tables: true},
-	}
-
-	for _, version := range ipVersions {
-		if _, _, _, _, err := setupIPChains(configs[version], version); err != nil {
-			t.Fatalf("Error setting up ip chains for %s: %v", version, err)
-		}
-
-		iptable := iptables.GetIptable(version)
-		for _, chainInfo := range bridgeChain {
-			if !iptable.ExistChain(chainInfo.Name, chainInfo.Table) {
-				t.Fatalf("iptables version %s chain %s of %s table should have been created", version, chainInfo.Name, chainInfo.Table)
-			}
-		}
-		removeIPChains(version)
-		for _, chainInfo := range bridgeChain {
-			if iptable.ExistChain(chainInfo.Name, chainInfo.Table) {
-				t.Fatalf("iptables version %s chain %s of %s table should have been deleted", version, chainInfo.Name, chainInfo.Table)
-			}
-		}
-	}
-}
-
 func TestCreateWithExistingBridge(t *testing.T) {
 	defer netnsutils.SetupTestOSContext(t)()
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 
 	if err := d.configure(nil); err != nil {
 		t.Fatalf("Failed to setup driver config: %v", err)
@@ -1193,7 +1258,7 @@ func TestCreateWithExistingBridge(t *testing.T) {
 		t.Fatalf("Failed to add IP address to bridge: %v", err)
 	}
 
-	netconfig := &networkConfiguration{BridgeName: brName}
+	netconfig := &networkConfiguration{BridgeName: brName, EnableIPv4: true}
 	genericOption := make(map[string]interface{})
 	genericOption[netlabel.GenericData] = netconfig
 
@@ -1205,7 +1270,7 @@ func TestCreateWithExistingBridge(t *testing.T) {
 	// Set network gateway to X.X.X.1
 	ipv4Data[0].Gateway.IP[len(ipv4Data[0].Gateway.IP)-1] = 1
 
-	if err := d.CreateNetwork(brName, genericOption, nil, ipv4Data, nil); err != nil {
+	if err := d.CreateNetwork(context.Background(), brName, genericOption, nil, ipv4Data, nil); err != nil {
 		t.Fatalf("Failed to create bridge network: %v", err)
 	}
 
@@ -1236,7 +1301,7 @@ func TestCreateParallel(t *testing.T) {
 	c := netnsutils.SetupTestOSContextEx(t)
 	defer c.Cleanup(t)
 
-	d := newDriver()
+	d := newDriver(storeutils.NewTempStore(t))
 	portallocator.Get().ReleaseAll()
 
 	if err := d.configure(nil); err != nil {
@@ -1249,14 +1314,14 @@ func TestCreateParallel(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		name := "net" + strconv.Itoa(i)
 		c.Go(t, func() {
-			config := &networkConfiguration{BridgeName: name}
+			config := &networkConfiguration{BridgeName: name, EnableIPv4: true}
 			genericOption := make(map[string]interface{})
 			genericOption[netlabel.GenericData] = config
-			if err := d.CreateNetwork(name, genericOption, nil, ipV4Data, nil); err != nil {
+			if err := d.CreateNetwork(context.Background(), name, genericOption, nil, ipV4Data, nil); err != nil {
 				ch <- fmt.Errorf("failed to create %s", name)
 				return
 			}
-			if err := d.CreateNetwork(name, genericOption, nil, ipV4Data, nil); err == nil {
+			if err := d.CreateNetwork(context.Background(), name, genericOption, nil, ipV4Data, nil); err == nil {
 				ch <- fmt.Errorf("failed was able to create overlap %s", name)
 				return
 			}
@@ -1274,4 +1339,60 @@ func TestCreateParallel(t *testing.T) {
 	if success != 1 {
 		t.Fatalf("Success should be 1 instead: %d", success)
 	}
+}
+
+func useStubFirewaller(t *testing.T) {
+	origNewFirewaller := newFirewaller
+	newFirewaller = func(_ context.Context, config firewaller.Config) (firewaller.Firewaller, error) {
+		return firewaller.NewStubFirewaller(config), nil
+	}
+	t.Cleanup(func() { newFirewaller = origNewFirewaller })
+}
+
+// Regression test for https://github.com/moby/moby/issues/46445
+func TestSetupIP6TablesWithHostIPv4(t *testing.T) {
+	defer netnsutils.SetupTestOSContext(t)()
+	d := newDriver(storeutils.NewTempStore(t))
+	dc := &configuration{
+		EnableIPTables:  true,
+		EnableIP6Tables: true,
+	}
+	if err := d.configure(map[string]interface{}{netlabel.GenericData: dc}); err != nil {
+		t.Fatal(err)
+	}
+	nc := &networkConfiguration{
+		BridgeName:         DefaultBridgeName,
+		AddressIPv4:        &net.IPNet{IP: net.ParseIP("192.168.42.1"), Mask: net.CIDRMask(16, 32)},
+		EnableIPMasquerade: true,
+		EnableIPv4:         true,
+		EnableIPv6:         true,
+		AddressIPv6:        &net.IPNet{IP: net.ParseIP("2001:db8::1"), Mask: net.CIDRMask(64, 128)},
+		HostIPv4:           net.ParseIP("192.0.2.2"),
+	}
+
+	// Create test bridge.
+	nh, err := nlwrap.NewHandle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	br := &bridgeInterface{nlh: nh}
+	if err := setupDevice(nc, br); err != nil {
+		t.Fatalf("Failed to create the testing Bridge: %s", err.Error())
+	}
+	if err := setupBridgeIPv4(nc, br); err != nil {
+		t.Fatalf("Failed to bring up the testing Bridge: %s", err.Error())
+	}
+	if err := setupBridgeIPv6(nc, br); err != nil {
+		t.Fatalf("Failed to bring up the testing Bridge: %s", err.Error())
+	}
+
+	// Check firewall configuration succeeds.
+	nw := bridgeNetwork{
+		config: nc,
+		driver: d,
+		bridge: br,
+	}
+	fwn, err := nw.newFirewallerNetwork(context.Background())
+	assert.NilError(t, err)
+	assert.Check(t, fwn != nil, "no firewaller network")
 }

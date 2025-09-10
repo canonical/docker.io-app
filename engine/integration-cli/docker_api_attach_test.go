@@ -91,12 +91,12 @@ func (s *DockerAPISuite) TestPostContainersAttachContainerNotFound(c *testing.T)
 func (s *DockerAPISuite) TestGetContainersWsAttachContainerNotFound(c *testing.T) {
 	ctx := testutil.GetContext(c)
 	res, body, err := request.Get(ctx, "/containers/doesnotexist/attach/ws")
-	assert.Equal(c, res.StatusCode, http.StatusNotFound)
 	assert.NilError(c, err)
+	assert.Equal(c, res.StatusCode, http.StatusNotFound)
 	b, err := request.ReadBody(body)
 	assert.NilError(c, err)
 	expected := "No such container: doesnotexist"
-	assert.Assert(c, strings.Contains(getErrorMessage(c, b), expected))
+	assert.Assert(c, is.Contains(getErrorMessage(c, b), expected))
 }
 
 func (s *DockerAPISuite) TestPostContainersAttach(c *testing.T) {
@@ -207,7 +207,7 @@ func (s *DockerAPISuite) TestPostContainersAttach(c *testing.T) {
 	assert.NilError(c, err)
 
 	defer resp.Conn.Close()
-	resp.Conn.SetReadDeadline(time.Now().Add(time.Second))
+	assert.NilError(c, resp.Conn.SetReadDeadline(time.Now().Add(time.Second)))
 
 	_, err = resp.Conn.Write([]byte("success"))
 	assert.NilError(c, err)
@@ -296,7 +296,7 @@ func readTimeout(r io.Reader, buf []byte, timeout time.Duration) (n int, err err
 	}()
 	select {
 	case <-ch:
-		return
+		return n, err
 	case <-time.After(timeout):
 		return 0, errors.New("Timeout")
 	}

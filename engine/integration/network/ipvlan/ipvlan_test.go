@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -14,6 +15,7 @@ import (
 	"github.com/docker/docker/integration/internal/container"
 	net "github.com/docker/docker/integration/internal/network"
 	n "github.com/docker/docker/integration/network"
+	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/testutil"
 	"github.com/docker/docker/testutil/daemon"
 	"gotest.tools/v3/assert"
@@ -94,9 +96,6 @@ func TestDockerNetworkIpvlan(t *testing.T) {
 		}, {
 			name: "L3Addressing",
 			test: testIpvlanL3Addressing,
-		}, {
-			name: "NoIPv6",
-			test: testIpvlanNoIPv6,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,7 +179,7 @@ func testIpvlanL2InternalMode(t *testing.T, ctx context.Context, client dclient.
 	id2 := container.Run(ctx, t, client, container.WithNetworkMode(netName))
 
 	result, _ := container.Exec(ctx, client, id1, []string{"ping", "-c", "1", "8.8.8.8"})
-	assert.Check(t, strings.Contains(result.Combined(), "Network is unreachable"))
+	assert.Check(t, is.Contains(result.Combined(), "Network is unreachable"))
 
 	_, err := container.Exec(ctx, client, id2, []string{"ping", "-c", "1", id1})
 	assert.NilError(t, err)
@@ -228,7 +227,7 @@ func testIpvlanL3InternalMode(t *testing.T, ctx context.Context, client dclient.
 	)
 
 	result, _ := container.Exec(ctx, client, id1, []string{"ping", "-c", "1", "8.8.8.8"})
-	assert.Check(t, strings.Contains(result.Combined(), "Network is unreachable"))
+	assert.Check(t, is.Contains(result.Combined(), "Network is unreachable"))
 
 	_, err := container.Exec(ctx, client, id2, []string{"ping", "-c", "1", id1})
 	assert.NilError(t, err)
@@ -445,24 +444,96 @@ func testIpvlanL3Addressing(t *testing.T, ctx context.Context, client dclient.AP
 
 // Check that an ipvlan interface with '--ipv6=false' doesn't get kernel-assigned
 // IPv6 addresses, but the loopback interface does still have an IPv6 address ('::1').
-func testIpvlanNoIPv6(t *testing.T, ctx context.Context, client dclient.APIClient) {
-	const netName = "ipvlannet"
-	net.CreateNoError(ctx, t, client, netName, net.WithIPvlan("", "l3"))
-	assert.Check(t, n.IsNetworkAvailable(ctx, client, netName))
+// Also check that with '--ipv4=false', there's no IPAM-assigned IPv4 address.
+func TestIpvlanIPAM(t *testing.T) {
+	skip.If(t, testEnv.IsRemoteDaemon)
+	skip.If(t, testEnv.IsRootless, "rootless mode has different view of network")
 
-	id := container.Run(ctx, t, client, container.WithNetworkMode(netName))
+	ctx := testutil.StartSpan(baseContext, t)
+	d := daemon.New(t)
+	d.StartWithBusybox(ctx, t)
+	defer d.Stop(t)
 
-	loRes := container.ExecT(ctx, t, client, id, []string{"ip", "a", "show", "dev", "lo"})
-	assert.Check(t, is.Contains(loRes.Combined(), " inet "))
-	assert.Check(t, is.Contains(loRes.Combined(), " inet6 "))
+	tests := []struct {
+		name       string
+		apiVersion string
+		enableIPv4 bool
+		enableIPv6 bool
+		expIPv4    bool
+	}{
+		{
+			name:       "dual stack",
+			enableIPv4: true,
+			enableIPv6: true,
+		},
+		{
+			name:       "v4 only",
+			enableIPv4: true,
+		},
+		{
+			name:       "v6 only",
+			enableIPv6: true,
+		},
+		{
+			name: "no ipam",
+		},
+		{
+			name:       "enableIPv4 ignored",
+			apiVersion: "1.46",
+			enableIPv4: false,
+			expIPv4:    true,
+		},
+	}
 
-	eth0Res := container.ExecT(ctx, t, client, id, []string{"ip", "a", "show", "dev", "eth0"})
-	assert.Check(t, is.Contains(eth0Res.Combined(), " inet "))
-	assert.Check(t, !strings.Contains(eth0Res.Combined(), " inet6 "),
-		"result.Combined(): %s", eth0Res.Combined())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutil.StartSpan(ctx, t)
+			c := d.NewClientT(t, dclient.WithVersion(tc.apiVersion))
 
-	sysctlRes := container.ExecT(ctx, t, client, id, []string{"sysctl", "-n", "net.ipv6.conf.eth0.disable_ipv6"})
-	assert.Check(t, is.Equal(strings.TrimSpace(sysctlRes.Combined()), "1"))
+			netOpts := []func(*network.CreateOptions){
+				net.WithIPvlan("", "l3"),
+				net.WithIPv4(tc.enableIPv4),
+			}
+			if tc.enableIPv6 {
+				netOpts = append(netOpts, net.WithIPv6())
+			}
+
+			const netName = "ipvlannet"
+			net.CreateNoError(ctx, t, c, netName, netOpts...)
+			defer c.NetworkRemove(ctx, netName)
+			assert.Check(t, n.IsNetworkAvailable(ctx, c, netName))
+
+			id := container.Run(ctx, t, c, container.WithNetworkMode(netName))
+			defer c.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+
+			loRes := container.ExecT(ctx, t, c, id, []string{"ip", "a", "show", "dev", "lo"})
+			assert.Check(t, is.Contains(loRes.Combined(), " inet "))
+			assert.Check(t, is.Contains(loRes.Combined(), " inet6 "))
+
+			eth0Res := container.ExecT(ctx, t, c, id, []string{"ip", "a", "show", "dev", "eth0"})
+			if tc.enableIPv4 || tc.expIPv4 {
+				assert.Check(t, is.Contains(eth0Res.Combined(), " inet "),
+					"Expected IPv4 in: %s", eth0Res.Combined())
+			} else {
+				assert.Check(t, !strings.Contains(eth0Res.Combined(), " inet "),
+					"Expected no IPv4 in: %s", eth0Res.Combined())
+			}
+			if tc.enableIPv6 {
+				assert.Check(t, is.Contains(eth0Res.Combined(), " inet6 "),
+					"Expected IPv6 in: %s", eth0Res.Combined())
+			} else {
+				assert.Check(t, !strings.Contains(eth0Res.Combined(), " inet6 "),
+					"Expected no IPv6 in: %s", eth0Res.Combined())
+			}
+
+			sysctlRes := container.ExecT(ctx, t, c, id, []string{"sysctl", "-n", "net.ipv6.conf.eth0.disable_ipv6"})
+			expDisableIPv6 := "1"
+			if tc.enableIPv6 {
+				expDisableIPv6 = "0"
+			}
+			assert.Check(t, is.Equal(strings.TrimSpace(sysctlRes.Combined()), expDisableIPv6))
+		})
+	}
 }
 
 // TestIPVlanDNS checks whether DNS is forwarded, for combinations of l2/l3 mode,
@@ -480,8 +551,7 @@ func TestIPVlanDNS(t *testing.T) {
 
 	net.StartDaftDNS(t, "127.0.0.1")
 
-	tmpFileName := net.WriteTempResolvConf(t, "127.0.0.1")
-	d := daemon.New(t, daemon.WithEnvVars("DOCKER_TEST_RESOLV_CONF_PATH="+tmpFileName))
+	d := daemon.New(t, daemon.WithResolvConf(net.GenResolvConf("127.0.0.1")))
 	d.StartWithBusybox(ctx, t)
 	t.Cleanup(func() { d.Stop(t) })
 	c := d.NewClientT(t)
@@ -492,7 +562,7 @@ func TestIPVlanDNS(t *testing.T) {
 
 	const netName = "ipvlan-dns-net"
 
-	testcases := []struct {
+	tests := []struct {
 		name     string
 		parent   string
 		internal bool
@@ -517,7 +587,7 @@ func TestIPVlanDNS(t *testing.T) {
 	}
 
 	for _, mode := range []string{"l2", "l3"} {
-		for _, tc := range testcases {
+		for _, tc := range tests {
 			name := fmt.Sprintf("Mode=%v/HasParent=%v/Internal=%v", mode, tc.parent != "", tc.internal)
 			t.Run(name, func(t *testing.T) {
 				ctx := testutil.StartSpan(ctx, t)
@@ -544,4 +614,102 @@ func TestIPVlanDNS(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestPointToPoint checks that no gateway is reserved for an ipvlan network unless needed.
+func TestPointToPoint(t *testing.T) {
+	skip.If(t, testEnv.IsRootless, "can't see dummy parent interface from rootless netns")
+
+	ctx := testutil.StartSpan(baseContext, t)
+	apiClient := testEnv.APIClient()
+
+	const parentIfname = "di-dummy0"
+	n.CreateMasterDummy(ctx, t, parentIfname)
+	defer n.DeleteInterface(ctx, t, parentIfname)
+
+	tests := []struct {
+		name   string
+		parent string
+		mode   string
+	}{
+		{
+			// An ipvlan network with no parent interface is "internal".
+			name: "internal",
+			mode: "l2",
+		},
+		{
+			// An L3 ipvlan does not need a gateway, because it's L3 (so, can't
+			// resolve a next-hop address). A "/31" ipvlan with two containers
+			// may not be particularly useful, but the check is that no address is
+			// reserved for a gateway in an L3 network.
+			name:   "l3",
+			parent: parentIfname,
+			mode:   "l3",
+		},
+		{
+			name:   "l3s",
+			parent: parentIfname,
+			mode:   "l3s",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutil.StartSpan(ctx, t)
+			const netName = "p2pipvlan"
+			net.CreateNoError(ctx, t, apiClient, netName,
+				net.WithIPvlan(tc.parent, tc.mode),
+				net.WithIPAM("192.168.135.0/31", ""),
+			)
+			defer net.RemoveNoError(ctx, t, apiClient, netName)
+
+			const ctrName = "ctr1"
+			id := container.Run(ctx, t, apiClient,
+				container.WithNetworkMode(netName),
+				container.WithName(ctrName),
+			)
+			defer apiClient.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+
+			attachCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			res := container.RunAttach(attachCtx, t, apiClient,
+				container.WithCmd([]string{"ping", "-c1", "-W3", ctrName}...),
+				container.WithNetworkMode(netName),
+			)
+			defer apiClient.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+			assert.Check(t, is.Equal(res.ExitCode, 0))
+			assert.Check(t, is.Equal(res.Stderr.Len(), 0))
+			assert.Check(t, is.Contains(res.Stdout.String(), "1 packets transmitted, 1 packets received"))
+		})
+	}
+}
+
+func TestEndpointWithCustomIfname(t *testing.T) {
+	skip.If(t, testEnv.IsRemoteDaemon)
+	skip.If(t, testEnv.IsRootless, "rootless mode has different view of network")
+
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	// master dummy interface 'di' notation represent 'docker ipvlan'
+	const master = "di-dummy0"
+	n.CreateMasterDummy(ctx, t, master)
+	defer n.DeleteInterface(ctx, t, master)
+
+	// create a network specifying the desired sub-interface name
+	const netName = "ipvlan-custom-ifname"
+	net.CreateNoError(ctx, t, apiClient, netName, net.WithIPvlan("di-dummy0.70", ""))
+
+	ctrID := container.Run(ctx, t, apiClient,
+		container.WithCmd("ip", "-o", "link", "show", "foobar"),
+		container.WithEndpointSettings(netName, &network.EndpointSettings{
+			DriverOpts: map[string]string{
+				netlabel.Ifname: "foobar",
+			},
+		}))
+	defer container.Remove(ctx, t, apiClient, ctrID, containertypes.RemoveOptions{Force: true})
+
+	out, err := container.Output(ctx, apiClient, ctrID)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out.Stdout, ": foobar@if"), "expected ': foobar@if' in 'ip link show':\n%s", out.Stdout)
 }

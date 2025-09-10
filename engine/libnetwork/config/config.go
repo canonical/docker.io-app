@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package config
 
@@ -39,15 +39,16 @@ type Config struct {
 	ClusterProvider        cluster.Provider
 	NetworkControlPlaneMTU int
 	DefaultAddressPool     []*ipamutils.NetworkToSplit
-	Scope                  datastore.ScopeCfg
-	ActiveSandboxes        map[string]interface{}
+	DatastoreBucket        string
+	ActiveSandboxes        map[string]any
 	PluginGetter           plugingetter.PluginGetter
 }
 
 // New creates a new Config and initializes it with the given Options.
 func New(opts ...Option) *Config {
 	cfg := &Config{
-		driverCfg: make(map[string]map[string]any),
+		driverCfg:       make(map[string]map[string]any),
+		DatastoreBucket: datastore.DefaultBucket,
 	}
 
 	for _, opt := range opts {
@@ -56,10 +57,6 @@ func New(opts ...Option) *Config {
 		}
 	}
 
-	// load default scope configs which don't have explicit user specified configs.
-	if cfg.Scope == (datastore.ScopeCfg{}) {
-		cfg.Scope = datastore.DefaultScope(cfg.DataDir)
-	}
 	return cfg
 }
 
@@ -152,7 +149,7 @@ func OptionNetworkControlPlaneMTU(exp int) Option {
 
 // OptionActiveSandboxes function returns an option setter for passing the sandboxes
 // which were active during previous daemon life
-func OptionActiveSandboxes(sandboxes map[string]interface{}) Option {
+func OptionActiveSandboxes(sandboxes map[string]any) Option {
 	return func(c *Config) {
 		c.ActiveSandboxes = sandboxes
 	}

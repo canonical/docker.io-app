@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-image-inspect - Display detailed information on one or more images
@@ -21,8 +21,10 @@ Display detailed information on one or more images
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
-\fB-h\fP, \fB--help\fP[=false]
-	help for inspect
+\fB--platform\fP=""
+	Inspect a specific platform of the multi-platform image.
+If the image or the server is not multi-platform capable, the command will error out if the platform does not match.
+\&'os[/arch[/variant]]': Explicit platform (eg. linux/amd64)
 
 
 .SH SEE ALSO

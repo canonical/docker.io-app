@@ -4,37 +4,34 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/layer"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestCreate(t *testing.T) {
-	imgStore, cleanup := defaultImageStore(t)
-	defer cleanup()
-
+	imgStore := defaultImageStore(t)
 	_, err := imgStore.Create([]byte(`{}`))
 	assert.Check(t, is.Error(err, "invalid image JSON, no RootFS key"))
 }
 
 func TestRestore(t *testing.T) {
-	fs, cleanup := defaultFSStoreBackend(t)
-	defer cleanup()
+	fsStore := defaultFSStoreBackend(t)
 
-	id1, err := fs.Set([]byte(`{"comment": "abc", "rootfs": {"type": "layers"}}`))
+	id1, err := fsStore.Set([]byte(`{"comment": "abc", "rootfs": {"type": "layers"}}`))
 	assert.NilError(t, err)
 
-	_, err = fs.Set([]byte(`invalid`))
+	_, err = fsStore.Set([]byte(`invalid`))
 	assert.NilError(t, err)
 
-	id2, err := fs.Set([]byte(`{"comment": "def", "rootfs": {"type": "layers", "diff_ids": ["2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"]}}`))
+	id2, err := fsStore.Set([]byte(`{"comment": "def", "rootfs": {"type": "layers", "diff_ids": ["2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"]}}`))
 	assert.NilError(t, err)
 
-	err = fs.SetMetadata(id2, "parent", []byte(id1))
+	err = fsStore.SetMetadata(id2, "parent", []byte(id1))
 	assert.NilError(t, err)
 
-	imgStore, err := NewImageStore(fs, &mockLayerGetReleaser{})
+	imgStore, err := NewImageStore(fsStore, &mockLayerGetReleaser{})
 	assert.NilError(t, err)
 
 	assert.Check(t, is.Len(imgStore.Map(), 2))
@@ -50,7 +47,7 @@ func TestRestore(t *testing.T) {
 	assert.Check(t, is.Equal("def", img2.Comment))
 
 	_, err = imgStore.GetParent(ID(id1))
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.ErrorContains(t, err, "failed to read metadata")
 
 	p, err := imgStore.GetParent(ID(id2))
@@ -72,13 +69,12 @@ func TestRestore(t *testing.T) {
 
 	invalidPattern := id1.Encoded()[1:6]
 	_, err = imgStore.Search(invalidPattern)
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.Check(t, is.ErrorContains(err, invalidPattern))
 }
 
 func TestAddDelete(t *testing.T) {
-	imgStore, cleanup := defaultImageStore(t)
-	defer cleanup()
+	imgStore := defaultImageStore(t)
 
 	id1, err := imgStore.Create([]byte(`{"comment": "abc", "rootfs": {"type": "layers", "diff_ids": ["2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"]}}`))
 	assert.NilError(t, err)
@@ -102,20 +98,19 @@ func TestAddDelete(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, err = imgStore.Get(id1)
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.ErrorContains(t, err, "failed to get digest")
 
 	_, err = imgStore.Get(id2)
 	assert.NilError(t, err)
 
 	_, err = imgStore.GetParent(id2)
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.ErrorContains(t, err, "failed to read metadata")
 }
 
 func TestSearchAfterDelete(t *testing.T) {
-	imgStore, cleanup := defaultImageStore(t)
-	defer cleanup()
+	imgStore := defaultImageStore(t)
 
 	id, err := imgStore.Create([]byte(`{"comment": "abc", "rootfs": {"type": "layers"}}`))
 	assert.NilError(t, err)
@@ -128,21 +123,18 @@ func TestSearchAfterDelete(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, err = imgStore.Search(string(id)[:15])
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.ErrorContains(t, err, "No such image")
 }
 
 func TestDeleteNotExisting(t *testing.T) {
-	imgStore, cleanup := defaultImageStore(t)
-	defer cleanup()
-
+	imgStore := defaultImageStore(t)
 	_, err := imgStore.Delete(ID("i_dont_exists"))
-	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 }
 
 func TestParentReset(t *testing.T) {
-	imgStore, cleanup := defaultImageStore(t)
-	defer cleanup()
+	imgStore := defaultImageStore(t)
 
 	id, err := imgStore.Create([]byte(`{"comment": "abc1", "rootfs": {"type": "layers"}}`))
 	assert.NilError(t, err)
@@ -161,45 +153,45 @@ func TestParentReset(t *testing.T) {
 	assert.Check(t, is.Len(imgStore.Children(id3), 1))
 }
 
-func defaultImageStore(t *testing.T) (Store, func()) {
-	fsBackend, cleanup := defaultFSStoreBackend(t)
+func defaultImageStore(t *testing.T) Store {
+	t.Helper()
+	fsBackend, err := NewFSStoreBackend(t.TempDir())
+	assert.Check(t, err)
 
-	store, err := NewImageStore(fsBackend, &mockLayerGetReleaser{})
+	imgStore, err := NewImageStore(fsBackend, &mockLayerGetReleaser{})
 	assert.NilError(t, err)
 
-	return store, cleanup
+	return imgStore
 }
 
 func TestGetAndSetLastUpdated(t *testing.T) {
-	store, cleanup := defaultImageStore(t)
-	defer cleanup()
+	imgStore := defaultImageStore(t)
 
-	id, err := store.Create([]byte(`{"comment": "abc1", "rootfs": {"type": "layers"}}`))
+	id, err := imgStore.Create([]byte(`{"comment": "abc1", "rootfs": {"type": "layers"}}`))
 	assert.NilError(t, err)
 
-	updated, err := store.GetLastUpdated(id)
+	updated, err := imgStore.GetLastUpdated(id)
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(updated.IsZero(), true))
 
-	assert.Check(t, store.SetLastUpdated(id))
+	assert.Check(t, imgStore.SetLastUpdated(id))
 
-	updated, err = store.GetLastUpdated(id)
+	updated, err = imgStore.GetLastUpdated(id)
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(updated.IsZero(), false))
 }
 
 func TestStoreLen(t *testing.T) {
-	store, cleanup := defaultImageStore(t)
-	defer cleanup()
+	imgStore := defaultImageStore(t)
 
 	expected := 10
-	for i := 0; i < expected; i++ {
-		_, err := store.Create([]byte(fmt.Sprintf(`{"comment": "abc%d", "rootfs": {"type": "layers"}}`, i)))
+	for i := range expected {
+		_, err := imgStore.Create([]byte(fmt.Sprintf(`{"comment": "abc%d", "rootfs": {"type": "layers"}}`, i)))
 		assert.NilError(t, err)
 	}
-	numImages := store.Len()
+	numImages := imgStore.Len()
 	assert.Equal(t, expected, numImages)
-	assert.Equal(t, len(store.Map()), numImages)
+	assert.Equal(t, len(imgStore.Map()), numImages)
 }
 
 type mockLayerGetReleaser struct{}

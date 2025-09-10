@@ -3,11 +3,15 @@ package container
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"math/rand"
+	"os/exec"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/docker/cli/e2e/internal/fixtures"
 	"github.com/docker/cli/internal/test/environment"
 	"github.com/docker/docker/api/types/versions"
@@ -36,6 +40,38 @@ func TestRunAttachedFromRemoteImageAndRemove(t *testing.T) {
 	result.Assert(t, icmd.Success)
 	assert.Check(t, is.Equal("this is output\n", result.Stdout()))
 	golden.Assert(t, result.Stderr(), "run-attached-from-remote-and-remove.golden")
+}
+
+func TestRunAttach(t *testing.T) {
+	skip.If(t, environment.RemoteDaemon())
+	t.Parallel()
+
+	streams := []string{"stdin", "stdout", "stderr"}
+	for _, stream := range streams {
+		t.Run(stream, func(t *testing.T) {
+			t.Parallel()
+			c := exec.Command("docker", "run", "-a", stream, "--rm", "alpine",
+				"sh", "-c", "sleep 1 && exit 7")
+			d := bytes.Buffer{}
+			c.Stdout = &d
+			c.Stderr = &d
+			_, err := pty.Start(c)
+			assert.NilError(t, err)
+
+			done := make(chan error)
+			go func() {
+				done <- c.Wait()
+			}()
+
+			select {
+			case <-time.After(20 * time.Second):
+				t.Fatal("docker run took too long, likely hang", d.String())
+			case <-done:
+			}
+
+			assert.Equal(t, c.ProcessState.ExitCode(), 7)
+		})
+	}
 }
 
 // Regression test for https://github.com/docker/cli/issues/5053
@@ -214,7 +250,6 @@ func TestMountSubvolume(t *testing.T) {
 		{name: "subdirectory mount", cmd: "ls", subpath: "subdir", expectedOut: "hello.txt"},
 		{name: "file mount", cmd: "cat", subpath: "bar.txt", expectedOut: "foo"},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			runMount(tc.cmd, "volume-subpath="+tc.subpath).Assert(t, icmd.Expected{
 				Err:      tc.expectedErr,
@@ -246,4 +281,58 @@ func TestProcessTermination(t *testing.T) {
 	icmd.WaitOnCmd(time.Second*10, result).Assert(t, icmd.Expected{
 		ExitCode: 0,
 	})
+}
+
+// Adapted from https://github.com/docker/for-mac/issues/7632#issue-2932169772
+// Thanks [@almet](https://github.com/almet)!
+func TestRunReadAfterContainerExit(t *testing.T) {
+	skip.If(t, environment.RemoteDaemon())
+
+	r := rand.New(rand.NewSource(0x123456))
+
+	const size = 18933764
+	cmd := exec.Command("docker", "run",
+		"--rm", "-i",
+		"alpine",
+		"sh", "-c", "cat -",
+	)
+
+	cmd.Stdin = io.LimitReader(r, size)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	stdout, err := cmd.StdoutPipe()
+	assert.NilError(t, err)
+
+	err = cmd.Start()
+	assert.NilError(t, err)
+
+	buffer := make([]byte, 1000)
+	counter := 0
+	totalRead := 0
+
+	for {
+		n, err := stdout.Read(buffer)
+		if n > 0 {
+			totalRead += n
+		}
+
+		// Wait 0.1s every megabyte (approx.)
+		if counter%1000 == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if err != nil || n == 0 {
+			break
+		}
+
+		counter++
+	}
+
+	err = cmd.Wait()
+	t.Logf("Error: %v", err)
+	t.Logf("Stderr: %s", stderr.String())
+	assert.Check(t, err == nil)
+	assert.Check(t, is.Equal(totalRead, size))
 }
