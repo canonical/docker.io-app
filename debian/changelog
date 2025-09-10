@@ -1,3 +1,19 @@
+docker.io-app (28.2.2-0ubuntu1~24.04.1) noble; urgency=medium
+
+  * Merge from questing to noble (LP: #2112523). Remaining changes:
+    - d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
+    - d/docker.io.postinst: notify when a reboot is required to reload the
+      AppArmor profile (LP #2065423)
+  * Dropped changes:
+    - d/control: build with golang 1.22 for consistency across the supported
+      release
+    - d/rules: add golang 1.22 to PATH
+  * New changes:
+    - d/control: build with golang 1.23
+    - d/rules: add golang 1.23 to PATH
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Wed, 10 Sep 2025 11:16:39 -0300
+
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
   * New upstream version 28.2.2
