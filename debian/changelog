@@ -1,3 +1,11 @@
+docker.io-app (28.2.2-0ubuntu1~22.04.1) jammy; urgency=medium
+
+  * Backport from questing to jammy (LP: #2112523)
+  * d/control: b-d on golang-1.23-go instead of golang-1.24-go
+  * d/rules: add Go 1.23 to $PATH
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Wed, 10 Sep 2025 11:50:16 -0300
+
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
   * New upstream version 28.2.2
