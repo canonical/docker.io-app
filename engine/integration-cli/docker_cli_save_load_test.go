@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/cli/build"
 	"github.com/docker/docker/internal/testutils/specialimage"
@@ -171,7 +171,7 @@ func (s *DockerCLISaveLoadSuite) TestSaveAndLoadRepoFlags(c *testing.T) {
 
 	afterStr := cli.DockerCmd(c, "inspect", imgRepoName).Stdout()
 
-	var before, after []types.ImageInspect
+	var before, after []image.InspectResponse
 	err = json.Unmarshal([]byte(beforeStr), &before)
 	assert.NilError(c, err, "failed to parse inspect 'before' output")
 	err = json.Unmarshal([]byte(afterStr), &after)
@@ -202,7 +202,7 @@ func (s *DockerCLISaveLoadSuite) TestSaveWithNoExistImage(c *testing.T) {
 
 	out, _, err := dockerCmdWithError("save", "-o", "test-img.tar", imgName)
 	assert.ErrorContains(c, err, "", "save image should fail for non-existing image")
-	assert.Assert(c, strings.Contains(out, fmt.Sprintf("No such image: %s", imgName)))
+	assert.Assert(c, is.Contains(out, fmt.Sprintf("No such image: %s", imgName)))
 }
 
 func (s *DockerCLISaveLoadSuite) TestSaveMultipleNames(c *testing.T) {
@@ -295,14 +295,14 @@ func (s *DockerCLISaveLoadSuite) TestSaveLoadNoTag(c *testing.T) {
 
 	// Should not show 'name' but should show the image ID during the load
 	assert.Assert(c, !strings.Contains(out, "Loaded image: "))
-	assert.Assert(c, strings.Contains(out, "Loaded image ID:"))
-	assert.Assert(c, strings.Contains(out, id))
+	assert.Assert(c, is.Contains(out, "Loaded image ID:"))
+	assert.Assert(c, is.Contains(out, id))
 	// Test to make sure that save by name shows that name during load
 	out, err = RunCommandPipelineWithOutput(
 		exec.Command(dockerBinary, "save", name),
 		exec.Command(dockerBinary, "load"))
 	assert.NilError(c, err, "failed to save and load repo: %s, %v", out, err)
 
-	assert.Assert(c, strings.Contains(out, "Loaded image: "+name+":latest"))
+	assert.Assert(c, is.Contains(out, "Loaded image: "+name+":latest"))
 	assert.Assert(c, !strings.Contains(out, "Loaded image ID:"))
 }

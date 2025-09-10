@@ -23,10 +23,10 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: "1.22.11"
+  GO_VERSION: "1.24.3"
   GIT_PAGER: "cat"
   PAGER: "cat"
-  SETUP_BUILDX_VERSION: latest
+  SETUP_BUILDX_VERSION: edge
   SETUP_BUILDKIT_IMAGE: moby/buildkit:latest
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
     uses: ./.github/workflows/.dco.yml
 
   build-dev:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
     needs:
       - validate-dco
@@ -83,8 +83,15 @@ jobs:
     with:
       storage: ${{ matrix.storage }}
 
+  test-unit:
+    needs:
+      - build-dev
+      - validate-dco
+    uses: ./.github/workflows/.test-unit.yml
+    secrets: inherit
+
   validate-prepare:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10 # guardrails timeout for the whole job
     needs:
       - validate-dco
@@ -106,7 +113,7 @@ jobs:
           echo ${{ steps.scripts.outputs.matrix }}
 
   validate:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30 # guardrails timeout for the whole job
     needs:
       - validate-prepare
@@ -144,7 +151,7 @@ jobs:
           make -o build validate-${{ matrix.script }}
 
   smoke-prepare:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10 # guardrails timeout for the whole job
     needs:
       - validate-dco
@@ -166,7 +173,7 @@ jobs:
           echo ${{ steps.platforms.outputs.matrix }}
 
   smoke:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 20 # guardrails timeout for the whole job
     needs:
       - smoke-prepare

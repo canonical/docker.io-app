@@ -16,8 +16,12 @@ import (
 
 // BoolValue transforms a form value in different formats into a boolean type.
 func BoolValue(r *http.Request, k string) bool {
-	s := strings.ToLower(strings.TrimSpace(r.FormValue(k)))
-	return !(s == "" || s == "0" || s == "no" || s == "false" || s == "none")
+	switch strings.ToLower(strings.TrimSpace(r.FormValue(k))) {
+	case "", "0", "no", "false", "none":
+		return false
+	default:
+		return true
+	}
 }
 
 // BoolValueOrDefault returns the default bool passed if the query param is
@@ -27,6 +31,29 @@ func BoolValueOrDefault(r *http.Request, k string, d bool) bool {
 		return d
 	}
 	return BoolValue(r, k)
+}
+
+// Uint32Value parses a form value into an uint32 type. It returns an error
+// if the field is not set, empty, incorrectly formatted, or out of range.
+func Uint32Value(r *http.Request, field string) (uint32, error) {
+	// strconv.ParseUint returns an "strconv.ErrSyntax" for negative values,
+	// not an "out of range". Strip the prefix before parsing, and use it
+	// later to detect valid, but negative values.
+	v, isNeg := strings.CutPrefix(r.Form.Get(field), "-")
+	if v == "" || v[0] == '+' {
+		// Fast-path for invalid values.
+		return 0, strconv.ErrSyntax
+	}
+
+	i, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		// Unwrap to remove the 'strconv.ParseUint: parsing "some-invalid-value":' prefix.
+		return 0, errors.Unwrap(err)
+	}
+	if isNeg {
+		return 0, strconv.ErrRange
+	}
+	return uint32(i), nil
 }
 
 // Int64ValueOrZero parses a form value into an int64 type.
@@ -134,4 +161,23 @@ func DecodePlatform(platformJSON string) (*ocispec.Platform, error) {
 	}
 
 	return &p, nil
+}
+
+// DecodePlatforms decodes the OCI platform JSON string into a Platform struct.
+//
+// Typically, the argument is a value of: r.Form["platform"]
+func DecodePlatforms(platformJSONs []string) ([]ocispec.Platform, error) {
+	if len(platformJSONs) == 0 {
+		return nil, nil
+	}
+
+	var output []ocispec.Platform
+	for _, platform := range platformJSONs {
+		p, err := DecodePlatform(platform)
+		if err != nil {
+			return nil, err
+		}
+		output = append(output, *p)
+	}
+	return output, nil
 }

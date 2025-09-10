@@ -1,10 +1,6 @@
 DOCKER ?= docker
 BUILDX ?= $(DOCKER) buildx
 
-# set the graph driver as the current graphdriver if not set
-DOCKER_GRAPHDRIVER := $(if $(DOCKER_GRAPHDRIVER),$(DOCKER_GRAPHDRIVER),$(shell docker info -f '{{ .Driver }}' 2>&1))
-export DOCKER_GRAPHDRIVER
-
 DOCKER_GITCOMMIT := $(shell git rev-parse HEAD)
 export DOCKER_GITCOMMIT
 
@@ -35,7 +31,6 @@ DOCKER_ENVS := \
 	-e DOCKER_BUILD_OPTS \
 	-e DOCKER_BUILD_PKGS \
 	-e DOCKER_BUILDKIT \
-	-e DOCKER_BASH_COMPLETION_PATH \
 	-e DOCKER_CLI_PATH \
 	-e DOCKERCLI_VERSION \
 	-e DOCKERCLI_REPOSITORY \
@@ -54,6 +49,7 @@ DOCKER_ENVS := \
 	-e DOCKER_USERLANDPROXY \
 	-e DOCKERD_ARGS \
 	-e DELVE_PORT \
+	-e FIREWALLD \
 	-e GITHUB_ACTIONS \
 	-e TEST_FORCE_VALIDATE \
 	-e TEST_INTEGRATION_DIR \
@@ -61,7 +57,6 @@ DOCKER_ENVS := \
 	-e TEST_INTEGRATION_FAIL_FAST \
 	-e TEST_SKIP_INTEGRATION \
 	-e TEST_SKIP_INTEGRATION_CLI \
-	-e TEST_IGNORE_CGROUP_CHECK \
 	-e TESTCOVERAGE \
 	-e TESTDEBUG \
 	-e TESTDIRS \
@@ -88,11 +83,11 @@ DOCKER_ENVS := \
 # to allow `make BIND_DIR=. shell` or `make BIND_DIR= test`
 # (default to no bind mount if DOCKER_HOST is set)
 # note: BINDDIR is supported for backwards-compatibility here
-BIND_DIR := $(if $(BINDDIR),$(BINDDIR),$(if $(DOCKER_HOST),,bundles))
+BIND_DIR := $(if $(BINDDIR),$(BINDDIR),$(if $(DOCKER_HOST),,.))
 
 # DOCKER_MOUNT can be overridden, but use at your own risk!
 ifndef DOCKER_MOUNT
-DOCKER_MOUNT := $(if $(BIND_DIR),-v "$(CURDIR)/$(BIND_DIR):/go/src/github.com/docker/docker/$(BIND_DIR)")
+DOCKER_MOUNT := $(if $(BIND_DIR),-v "$(BIND_DIR):/go/src/github.com/docker/docker/$(BIND_DIR)")
 DOCKER_MOUNT := $(if $(DOCKER_BINDDIR_MOUNT_OPTS),$(DOCKER_MOUNT):$(DOCKER_BINDDIR_MOUNT_OPTS),$(DOCKER_MOUNT))
 
 # This allows the test suite to be able to run without worrying about the underlying fs used by the container running the daemon (e.g. aufs-on-aufs), so long as the host running the container is running a supported fs.
@@ -102,8 +97,14 @@ DOCKER_MOUNT := $(if $(DOCKER_MOUNT),$(DOCKER_MOUNT),-v /go/src/github.com/docke
 
 DOCKER_MOUNT_CACHE := -v docker-dev-cache:/root/.cache -v docker-mod-cache:/go/pkg/mod/
 DOCKER_MOUNT_CLI := $(if $(DOCKER_CLI_PATH),-v $(shell dirname $(DOCKER_CLI_PATH)):/usr/local/cli,)
-DOCKER_MOUNT_BASH_COMPLETION := $(if $(DOCKER_BASH_COMPLETION_PATH),-v $(shell dirname $(DOCKER_BASH_COMPLETION_PATH)):/usr/local/completion/bash,)
-DOCKER_MOUNT := $(DOCKER_MOUNT) $(DOCKER_MOUNT_CACHE) $(DOCKER_MOUNT_CLI) $(DOCKER_MOUNT_BASH_COMPLETION)
+
+ifdef BIND_GIT
+	# Gets the common .git directory (even from inside a git worktree)
+	GITDIR := $(shell realpath $(shell git rev-parse --git-common-dir))
+	MOUNT_GITDIR := $(if $(GITDIR),-v "$(GITDIR):$(GITDIR)")
+endif
+
+DOCKER_MOUNT := $(DOCKER_MOUNT) $(DOCKER_MOUNT_CACHE) $(DOCKER_MOUNT_CLI) $(DOCKER_MOUNT_BASH_COMPLETION) $(MOUNT_GITDIR)
 endif # ifndef DOCKER_MOUNT
 
 # This allows to set the docker-dev container name
@@ -147,6 +148,9 @@ DOCKER_BUILD_ARGS += --build-arg=DOCKERCLI_INTEGRATION_VERSION
 DOCKER_BUILD_ARGS += --build-arg=DOCKERCLI_INTEGRATION_REPOSITORY
 ifdef DOCKER_SYSTEMD
 DOCKER_BUILD_ARGS += --build-arg=SYSTEMD=true
+endif
+ifdef FIREWALLD
+DOCKER_BUILD_ARGS += --build-arg=FIREWALLD=true
 endif
 
 BUILD_OPTS := ${DOCKER_BUILD_ARGS} ${DOCKER_BUILD_OPTS}

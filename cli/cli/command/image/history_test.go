@@ -1,6 +1,7 @@
 package image
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/image"
-	"github.com/pkg/errors"
+	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -18,24 +19,28 @@ func TestNewHistoryCommandErrors(t *testing.T) {
 		name             string
 		args             []string
 		expectedError    string
-		imageHistoryFunc func(img string) ([]image.HistoryResponseItem, error)
+		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error)
 	}{
 		{
 			name:          "wrong-args",
 			args:          []string{},
-			expectedError: "requires exactly 1 argument.",
+			expectedError: "requires 1 argument",
 		},
 		{
 			name:          "client-error",
 			args:          []string{"image:tag"},
 			expectedError: "something went wrong",
-			imageHistoryFunc: func(img string) ([]image.HistoryResponseItem, error) {
-				return []image.HistoryResponseItem{{}}, errors.Errorf("something went wrong")
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
+				return []image.HistoryResponseItem{{}}, errors.New("something went wrong")
 			},
+		},
+		{
+			name:          "invalid platform",
+			args:          []string{"--platform", "<invalid>", "arg1"},
+			expectedError: `invalid platform`,
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewHistoryCommand(test.NewFakeCli(&fakeClient{imageHistoryFunc: tc.imageHistoryFunc}))
 			cmd.SetOut(io.Discard)
@@ -50,12 +55,12 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 	testCases := []struct {
 		name             string
 		args             []string
-		imageHistoryFunc func(img string) ([]image.HistoryResponseItem, error)
+		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error)
 	}{
 		{
 			name: "simple",
 			args: []string{"image:tag"},
-			imageHistoryFunc: func(img string) ([]image.HistoryResponseItem, error) {
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
 				return []image.HistoryResponseItem{{
 					ID:      "1234567890123456789",
 					Created: time.Now().Unix(),
@@ -70,7 +75,7 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 		{
 			name: "non-human",
 			args: []string{"--human=false", "image:tag"},
-			imageHistoryFunc: func(img string) ([]image.HistoryResponseItem, error) {
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
 				return []image.HistoryResponseItem{{
 					ID:        "abcdef",
 					Created:   time.Date(2017, 1, 1, 12, 0, 3, 0, time.UTC).Unix(),
@@ -82,7 +87,20 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 		{
 			name: "quiet-no-trunc",
 			args: []string{"--quiet", "--no-trunc", "image:tag"},
-			imageHistoryFunc: func(img string) ([]image.HistoryResponseItem, error) {
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
+				return []image.HistoryResponseItem{{
+					ID:      "1234567890123456789",
+					Created: time.Now().Unix(),
+				}}, nil
+			},
+		},
+		{
+			name: "platform",
+			args: []string{"--platform", "linux/amd64", "image:tag"},
+			imageHistoryFunc: func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
+				// FIXME(thaJeztah): need to find appropriate way to test the result of "ImageHistoryWithPlatform" being applied
+				assert.Check(t, len(options) > 0) // can be 1 or two depending on whether a terminal is attached :/
+				// assert.Check(t, is.Contains(options, client.ImageHistoryWithPlatform(ocispec.Platform{OS: "linux", Architecture: "amd64"})))
 				return []image.HistoryResponseItem{{
 					ID:      "1234567890123456789",
 					Created: time.Now().Unix(),
@@ -91,7 +109,6 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			// Set to UTC timezone as timestamps in output are
 			// printed in the current timezone

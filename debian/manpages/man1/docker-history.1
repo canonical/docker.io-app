@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-history - Show the history of an image
@@ -23,16 +23,16 @@ Alias for \fBdocker image history\fR\&.
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
-\fB-h\fP, \fB--help\fP[=false]
-	help for history
-
-.PP
 \fB-H\fP, \fB--human\fP[=true]
 	Print sizes and dates in human readable format
 
 .PP
 \fB--no-trunc\fP[=false]
 	Don't truncate output
+
+.PP
+\fB--platform\fP=""
+	Show history for the given platform. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")
 
 .PP
 \fB-q\fP, \fB--quiet\fP[=false]

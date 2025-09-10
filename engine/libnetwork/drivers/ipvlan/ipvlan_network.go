@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libnetwork/driverapi"
 	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/ns"
@@ -16,7 +17,7 @@ import (
 )
 
 // CreateNetwork the network for the specified driver type
-func (d *driver) CreateNetwork(nid string, option map[string]interface{}, nInfo driverapi.NetworkInfo, ipV4Data, ipV6Data []driverapi.IPAMData) error {
+func (d *driver) CreateNetwork(ctx context.Context, nid string, option map[string]interface{}, nInfo driverapi.NetworkInfo, ipV4Data, ipV6Data []driverapi.IPAMData) error {
 	kv, err := kernel.GetKernelVersion()
 	if err != nil {
 		return fmt.Errorf("failed to check kernel version for ipvlan driver support: %v", err)
@@ -26,9 +27,17 @@ func (d *driver) CreateNetwork(nid string, option map[string]interface{}, nInfo 
 		return fmt.Errorf("kernel version failed to meet the minimum ipvlan kernel requirement of %d.%d, found %d.%d.%d",
 			ipvlanKernelVer, ipvlanMajorVer, kv.Kernel, kv.Major, kv.Minor)
 	}
-	// reject a null v4 network
-	if len(ipV4Data) == 0 || ipV4Data[0].Pool.String() == "0.0.0.0/0" {
-		return fmt.Errorf("ipv4 pool is empty")
+	// reject a null v4 network if ipv4 is required
+	if v, ok := option[netlabel.EnableIPv4]; ok && v.(bool) {
+		if len(ipV4Data) == 0 || ipV4Data[0].Pool.String() == "0.0.0.0/0" {
+			return errdefs.InvalidParameter(fmt.Errorf("ipv4 pool is empty"))
+		}
+	}
+	// reject a null v6 network if ipv6 is required
+	if v, ok := option[netlabel.EnableIPv6]; ok && v.(bool) {
+		if len(ipV6Data) == 0 || ipV6Data[0].Pool.String() == "::/0" {
+			return errdefs.InvalidParameter(fmt.Errorf("ipv6 pool is empty"))
+		}
 	}
 	// parse and validate the config and bind to networkConfiguration
 	config, err := parseNetworkOptions(nid, option)
@@ -40,7 +49,6 @@ func (d *driver) CreateNetwork(nid string, option map[string]interface{}, nInfo 
 	// if parent interface not specified, create a dummy type link to use named dummy+net_id
 	if config.Parent == "" {
 		config.Parent = getDummyName(config.ID)
-		config.Internal = true
 	}
 	foundExisting, err := d.createNetwork(config)
 	if err != nil {
@@ -112,6 +120,20 @@ func (d *driver) createNetwork(config *configuration) (bool, error) {
 	}
 
 	return foundExisting, nil
+}
+
+func (d *driver) GetSkipGwAlloc(opts options.Generic) (ipv4, ipv6 bool, _ error) {
+	cfg, err := parseNetworkOptions("dummy", opts)
+	if err != nil {
+		return false, false, err
+	}
+	// L3 ipvlans connect the default route to an interface, no gateway address is set up.
+	switch cfg.IpvlanMode {
+	case modeL3, modeL3S:
+		return true, true, nil
+	}
+	// "--internal" networks don't need a gateway address.
+	return cfg.Internal, cfg.Internal, nil
 }
 
 // DeleteNetwork deletes the network for the specified driver type
@@ -207,6 +229,11 @@ func parseNetworkOptions(id string, option options.Generic) (*configuration, err
 		return nil, fmt.Errorf("loopback interface is not a valid ipvlan parent link")
 	}
 
+	// With no parent interface, the network is "internal".
+	if config.Parent == "" {
+		config.Internal = true
+	}
+
 	config.ID = id
 	return config, nil
 }
@@ -218,13 +245,6 @@ func parseNetworkGenericOptions(data interface{}) (*configuration, error) {
 		return opt, nil
 	case map[string]string:
 		return newConfigFromLabels(opt), nil
-	case options.Generic:
-		var config *configuration
-		opaqueConfig, err := options.GenerateFromModel(opt, config)
-		if err != nil {
-			return nil, err
-		}
-		return opaqueConfig.(*configuration), nil
 	default:
 		return nil, types.InvalidParameterErrorf("unrecognized network configuration format: %v", opt)
 	}

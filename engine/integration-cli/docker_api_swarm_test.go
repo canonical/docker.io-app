@@ -18,11 +18,10 @@ import (
 	"github.com/cloudflare/cfssl/csr"
 	"github.com/cloudflare/cfssl/helpers"
 	"github.com/cloudflare/cfssl/initca"
-	"github.com/docker/docker/api/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/integration-cli/checker"
 	"github.com/docker/docker/integration-cli/daemon"
 	"github.com/docker/docker/testutil"
@@ -258,7 +257,7 @@ func (s *DockerSwarmSuite) TestAPISwarmPromoteDemote(c *testing.T) {
 	// it anchors the regexp contrary to the documentation, and this makes
 	// it impossible to match something that includes a line break.
 	if !strings.Contains(string(b), "last manager of the swarm") {
-		assert.Assert(c, strings.Contains(string(b), "this would result in a loss of quorum"))
+		assert.Assert(c, is.Contains(string(b), "this would result in a loss of quorum"))
 	}
 	info = d1.SwarmInfo(ctx, c)
 	assert.Equal(c, info.LocalNodeState, swarm.LocalNodeStateActive)
@@ -414,7 +413,7 @@ func (s *DockerSwarmSuite) TestAPISwarmRaftQuorum(c *testing.T) {
 
 	// d1 will eventually step down from leader because there is no longer an active quorum, wait for that to happen
 	poll.WaitOn(c, pollCheck(c, func(c *testing.T) (interface{}, string) {
-		_, err := cli.ServiceCreate(testutil.GetContext(c), service.Spec, types.ServiceCreateOptions{})
+		_, err := cli.ServiceCreate(testutil.GetContext(c), service.Spec, swarm.ServiceCreateOptions{})
 		return err.Error(), ""
 	}, checker.Contains("Make sure more than half of the managers are online.")), poll.WithTimeout(defaultReconciliationTimeout*2))
 
@@ -890,7 +889,7 @@ func (s *DockerSwarmSuite) TestAPISwarmServicesUpdateWithName(c *testing.T) {
 	setInstances(instances)(service)
 	cli := d.NewClientT(c)
 	defer cli.Close()
-	_, err := cli.ServiceUpdate(ctx, service.Spec.Name, service.Version, service.Spec, types.ServiceUpdateOptions{})
+	_, err := cli.ServiceUpdate(ctx, service.Spec.Name, service.Version, service.Spec, swarm.ServiceUpdateOptions{})
 	assert.NilError(c, err)
 	poll.WaitOn(c, pollCheck(c, d.CheckActiveContainerCount(ctx), checker.Equals(instances)), poll.WithTimeout(defaultReconciliationTimeout))
 }
@@ -1032,5 +1031,5 @@ func (s *DockerSwarmSuite) TestAPINetworkInspectWithScope(c *testing.T) {
 	assert.Check(c, is.Equal(resp.ID, nw.ID))
 
 	_, err = apiclient.NetworkInspect(ctx, name, network.InspectOptions{Scope: "local"})
-	assert.Check(c, is.ErrorType(err, errdefs.IsNotFound))
+	assert.Check(c, is.ErrorType(err, cerrdefs.IsNotFound))
 }

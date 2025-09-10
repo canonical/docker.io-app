@@ -7,13 +7,14 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/cio"
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/libcontainerd"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 )
 
@@ -61,12 +62,12 @@ type c8dPlugin struct {
 // deleteTaskAndContainer deletes plugin task and then plugin container from containerd
 func (p c8dPlugin) deleteTaskAndContainer(ctx context.Context) {
 	if p.tsk != nil {
-		if err := p.tsk.ForceDelete(ctx); err != nil && !errdefs.IsNotFound(err) {
+		if err := p.tsk.ForceDelete(ctx); err != nil && !cerrdefs.IsNotFound(err) {
 			p.log.WithError(err).Error("failed to delete plugin task from containerd")
 		}
 	}
 	if p.ctr != nil {
-		if err := p.ctr.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
+		if err := p.ctr.Delete(ctx); err != nil && !cerrdefs.IsNotFound(err) {
 			p.log.WithError(err).Error("failed to delete plugin container from containerd")
 		}
 	}
@@ -102,14 +103,14 @@ func (e *Executor) Restore(id string, stdout, stderr io.WriteCloser) (bool, erro
 	p := c8dPlugin{log: log.G(ctx).WithField("plugin", id)}
 	ctr, err := e.client.LoadContainer(ctx, id)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}
 		return false, err
 	}
 	p.tsk, err = ctr.AttachTask(ctx, attachStreamsFunc(stdout, stderr))
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			p.deleteTaskAndContainer(ctx)
 			return false, nil
 		}
@@ -117,7 +118,7 @@ func (e *Executor) Restore(id string, stdout, stderr io.WriteCloser) (bool, erro
 	}
 	s, err := p.tsk.Status(ctx)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			// Task vanished after attaching?
 			p.tsk = nil
 			p.deleteTaskAndContainer(ctx)
@@ -172,8 +173,9 @@ func (e *Executor) ProcessEvent(id string, et libcontainerdtypes.EventType, ei l
 			p.deleteTaskAndContainer(context.Background())
 		}
 		return e.exitHandler.HandleExitEvent(ei.ContainerID)
+	default:
+		return nil
 	}
-	return nil
 }
 
 type rio struct {

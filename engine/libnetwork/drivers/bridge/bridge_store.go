@@ -7,13 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/internal/otelutil"
 	"github.com/docker/docker/libnetwork/datastore"
-	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/types"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -25,23 +27,15 @@ const (
 	bridgeEndpointPrefix = "bridge-endpoint"
 )
 
-func (d *driver) initStore(option map[string]interface{}) error {
-	if data, ok := option[netlabel.LocalKVClient]; ok {
-		var ok bool
-		d.store, ok = data.(*datastore.Store)
-		if !ok {
-			return types.InternalErrorf("incorrect data in datastore configuration: %v", data)
-		}
+func (d *driver) initStore() error {
+	err := d.populateNetworks()
+	if err != nil {
+		return err
+	}
 
-		err := d.populateNetworks()
-		if err != nil {
-			return err
-		}
-
-		err = d.populateEndpoints()
-		if err != nil {
-			return err
-		}
+	err = d.populateEndpoints()
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -58,9 +52,12 @@ func (d *driver) populateNetworks() error {
 		return nil
 	}
 
+	ctx := baggage.ContextWithBaggage(context.TODO(), otelutil.MustNewBaggage(
+		otelutil.MustNewMemberRaw(otelutil.TriggerKey, spanPrefix+".initStore"),
+	))
 	for _, kvo := range kvol {
 		ncfg := kvo.(*networkConfiguration)
-		if err = d.createNetwork(ncfg); err != nil {
+		if err = d.createNetwork(ctx, ncfg); err != nil {
 			log.G(context.TODO()).Warnf("could not create bridge network for id %s bridge name %s while booting up from persistent state: %v", ncfg.ID, ncfg.BridgeName, err)
 		}
 		log.G(context.TODO()).Debugf("Network (%.7s) restored", ncfg.ID)
@@ -91,6 +88,13 @@ func (d *driver) populateEndpoints() error {
 			continue
 		}
 		n.endpoints[ep.id] = ep
+		netip4, netip6 := ep.netipAddrs()
+		if err := n.firewallerNetwork.AddEndpoint(context.TODO(), netip4, netip6); err != nil {
+			log.G(context.TODO()).WithFields(log.Fields{
+				"error": err,
+				"ep.id": ep.id,
+			}).Warn("Failed to restore per-endpoint firewall rules")
+		}
 		n.restorePortAllocations(ep)
 		log.G(context.TODO()).Debugf("Endpoint (%.7s) restored to network (%.7s)", ep.id, ep.nid)
 	}
@@ -99,7 +103,7 @@ func (d *driver) populateEndpoints() error {
 }
 
 func (d *driver) storeUpdate(ctx context.Context, kvObject datastore.KVObject) error {
-	ctx, span := otel.Tracer("").Start(ctx, "libnetwork.drivers.bridge.storeUpdate", trace.WithAttributes(
+	ctx, span := otel.Tracer("").Start(ctx, spanPrefix+".storeUpdate", trace.WithAttributes(
 		attribute.String("kvObject", fmt.Sprintf("%+v", kvObject.Key()))))
 	defer span.End()
 
@@ -128,11 +132,13 @@ func (ncfg *networkConfiguration) MarshalJSON() ([]byte, error) {
 	nMap := make(map[string]interface{})
 	nMap["ID"] = ncfg.ID
 	nMap["BridgeName"] = ncfg.BridgeName
+	nMap["EnableIPv4"] = ncfg.EnableIPv4
 	nMap["EnableIPv6"] = ncfg.EnableIPv6
 	nMap["EnableIPMasquerade"] = ncfg.EnableIPMasquerade
 	nMap["GwModeIPv4"] = ncfg.GwModeIPv4
 	nMap["GwModeIPv6"] = ncfg.GwModeIPv6
 	nMap["EnableICC"] = ncfg.EnableICC
+	nMap["TrustedHostInterfaces"] = strings.Join(ncfg.TrustedHostInterfaces, ":")
 	nMap["InhibitIPv4"] = ncfg.InhibitIPv4
 	nMap["Mtu"] = ncfg.Mtu
 	nMap["Internal"] = ncfg.Internal
@@ -171,6 +177,8 @@ func (ncfg *networkConfiguration) UnmarshalJSON(b []byte) error {
 		if ncfg.AddressIPv4, err = types.ParseCIDR(v.(string)); err != nil {
 			return types.InternalErrorf("failed to decode bridge network address IPv4 after json unmarshal: %s", v.(string))
 		}
+		// For networks created before EnableIPv4 was added ...
+		ncfg.EnableIPv4 = true
 	}
 
 	if v, ok := nMap["AddressIPv6"]; ok {
@@ -197,6 +205,9 @@ func (ncfg *networkConfiguration) UnmarshalJSON(b []byte) error {
 	ncfg.DefaultGatewayIPv6 = net.ParseIP(nMap["DefaultGatewayIPv6"].(string))
 	ncfg.ID = nMap["ID"].(string)
 	ncfg.BridgeName = nMap["BridgeName"].(string)
+	if v, ok := nMap["EnableIPv4"]; ok {
+		ncfg.EnableIPv4 = v.(bool)
+	}
 	ncfg.EnableIPv6 = nMap["EnableIPv6"].(bool)
 	ncfg.EnableIPMasquerade = nMap["EnableIPMasquerade"].(bool)
 	if v, ok := nMap["GwModeIPv4"]; ok {
@@ -206,6 +217,10 @@ func (ncfg *networkConfiguration) UnmarshalJSON(b []byte) error {
 		ncfg.GwModeIPv6, _ = newGwMode(v.(string))
 	}
 	ncfg.EnableICC = nMap["EnableICC"].(bool)
+	if v, ok := nMap["TrustedHostInterfaces"]; ok {
+		s, _ := v.(string)
+		ncfg.TrustedHostInterfaces = strings.FieldsFunc(s, func(r rune) bool { return r == ':' })
+	}
 	if v, ok := nMap["InhibitIPv4"]; ok {
 		ncfg.InhibitIPv4 = v.(bool)
 	}
@@ -275,7 +290,9 @@ func (ep *bridgeEndpoint) MarshalJSON() ([]byte, error) {
 	epMap["nid"] = ep.nid
 	epMap["SrcName"] = ep.srcName
 	epMap["MacAddress"] = ep.macAddress.String()
-	epMap["Addr"] = ep.addr.String()
+	if ep.addr != nil {
+		epMap["Addr"] = ep.addr.String()
+	}
 	if ep.addrv6 != nil {
 		epMap["Addrv6"] = ep.addrv6.String()
 	}
@@ -314,18 +331,48 @@ func (ep *bridgeEndpoint) UnmarshalJSON(b []byte) error {
 	ep.id = epMap["id"].(string)
 	ep.nid = epMap["nid"].(string)
 	ep.srcName = epMap["SrcName"].(string)
-	d, _ := json.Marshal(epMap["ContainerConfig"])
+
+	// TODO(thaJeztah): these nullify ep.containerConfig, ep.extConnConfig, and ep.portMapping
+	//  if "ContainerConfig", "ExternalConnConfig", or "PortMapping" are not present or invalid
+	//  is this the intent? Or should this leave values untouched if present but invalid?
+	//
+	// Alternatively, it could be checking if the value is set (and not nil), otherwise
+	// explicitly nullify like (or variants of);
+	//
+	//  if c, ok := epMap["ContainerConfig"]; ok && c != nil {
+	//  	if d, err := json.Marshal(c); err != nil {
+	//  		log.G(context.TODO()).Warnf("Failed to encode endpoint container config %v", err)
+	//  	} else if err := json.Unmarshal(d, &ep.containerConfig); err != nil {
+	//  		log.G(context.TODO()).Warnf("Failed to decode endpoint container config %v", err)
+	//  	}
+	//  } else {
+	//  	ep.containerConfig = nil
+	//  }
+
+	d, err := json.Marshal(epMap["ContainerConfig"])
+	if err != nil {
+		log.G(context.TODO()).Warnf("Failed to encode endpoint container config %v", err)
+	}
 	if err := json.Unmarshal(d, &ep.containerConfig); err != nil {
 		log.G(context.TODO()).Warnf("Failed to decode endpoint container config %v", err)
 	}
-	d, _ = json.Marshal(epMap["ExternalConnConfig"])
+
+	d, err = json.Marshal(epMap["ExternalConnConfig"])
+	if err != nil {
+		log.G(context.TODO()).Warnf("Failed to encode endpoint external connectivity configuration %v", err)
+	}
 	if err := json.Unmarshal(d, &ep.extConnConfig); err != nil {
 		log.G(context.TODO()).Warnf("Failed to decode endpoint external connectivity configuration %v", err)
 	}
-	d, _ = json.Marshal(epMap["PortMapping"])
+
+	d, err = json.Marshal(epMap["PortMapping"])
+	if err != nil {
+		log.G(context.TODO()).Warnf("Failed to encode endpoint port mapping %v", err)
+	}
 	if err := json.Unmarshal(d, &ep.portMapping); err != nil {
 		log.G(context.TODO()).Warnf("Failed to decode endpoint port mapping %v", err)
 	}
+
 	// Until release 27.0, HostPortEnd in PortMapping (operational data) was left at
 	// the value it had in ExternalConnConfig.PortBindings (configuration). So, for
 	// example, if the configured host port range was 8000-8009 and the allocated
@@ -411,7 +458,7 @@ func (n *bridgeNetwork) restorePortAllocations(ep *bridgeEndpoint) {
 	}
 
 	var err error
-	ep.portMapping, err = n.addPortMappings(ep.addr, ep.addrv6, cfg, n.config.DefaultBindingIP)
+	ep.portMapping, err = n.addPortMappings(context.TODO(), ep.addr, ep.addrv6, cfg, n.config.DefaultBindingIP, ep.extConnConfig.NoProxy6To4)
 	if err != nil {
 		log.G(context.TODO()).Warnf("Failed to reserve existing port mapping for endpoint %.7s:%v", ep.id, err)
 	}

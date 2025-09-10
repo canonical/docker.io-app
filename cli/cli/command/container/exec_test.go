@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"testing"
@@ -10,9 +11,7 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
@@ -178,8 +177,8 @@ func TestRunExec(t *testing.T) {
 			doc:     "inspect error",
 			options: NewExecOptions(),
 			client: &fakeClient{
-				inspectFunc: func(string) (types.ContainerJSON, error) {
-					return types.ContainerJSON{}, errors.New("failed inspect")
+				inspectFunc: func(string) (container.InspectResponse, error) {
+					return container.InspectResponse{}, errors.New("failed inspect")
 				},
 			},
 			expectedError: "failed inspect",
@@ -208,8 +207,8 @@ func TestRunExec(t *testing.T) {
 	}
 }
 
-func execCreateWithID(_ string, _ container.ExecOptions) (types.IDResponse, error) {
-	return types.IDResponse{ID: "execid"}, nil
+func execCreateWithID(_ string, _ container.ExecOptions) (container.ExecCreateResponse, error) {
+	return container.ExecCreateResponse{ID: "execid"}, nil
 }
 
 func TestGetExecExitStatus(t *testing.T) {
@@ -252,14 +251,14 @@ func TestNewExecCommandErrors(t *testing.T) {
 		name                 string
 		args                 []string
 		expectedError        string
-		containerInspectFunc func(img string) (types.ContainerJSON, error)
+		containerInspectFunc func(img string) (container.InspectResponse, error)
 	}{
 		{
 			name:          "client-error",
 			args:          []string{"5cb5bb5e4a3b", "-t", "-i", "bash"},
 			expectedError: "something went wrong",
-			containerInspectFunc: func(containerID string) (types.ContainerJSON, error) {
-				return types.ContainerJSON{}, errors.Errorf("something went wrong")
+			containerInspectFunc: func(containerID string) (container.InspectResponse, error) {
+				return container.InspectResponse{}, errors.New("something went wrong")
 			},
 		},
 	}

@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -27,19 +27,18 @@ func TestNewPruneCommandErrors(t *testing.T) {
 		{
 			name:          "wrong-args",
 			args:          []string{"something"},
-			expectedError: "accepts no arguments.",
+			expectedError: "accepts no arguments",
 		},
 		{
 			name:          "prune-error",
 			args:          []string{"--force"},
 			expectedError: "something went wrong",
 			imagesPruneFunc: func(pruneFilter filters.Args) (image.PruneReport, error) {
-				return image.PruneReport{}, errors.Errorf("something went wrong")
+				return image.PruneReport{}, errors.New("something went wrong")
 			},
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := NewPruneCommand(test.NewFakeCli(&fakeClient{
 				imagesPruneFunc: tc.imagesPruneFunc,
@@ -98,7 +97,6 @@ func TestNewPruneCommandSuccess(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imagesPruneFunc: tc.imagesPruneFunc})
 			// when prompted, answer "Y" to confirm the prune.

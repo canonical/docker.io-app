@@ -15,9 +15,9 @@ import (
 
 func TestInfoAPI(t *testing.T) {
 	ctx := setupTest(t)
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	info, err := client.Info(ctx)
+	info, err := apiClient.Info(ctx)
 	assert.NilError(t, err)
 
 	// TODO(thaJeztah): make sure we have other tests that run a local daemon and check other fields based on known state.
@@ -101,12 +101,14 @@ func TestInfoInsecureRegistries(t *testing.T) {
 	defer d.Stop(t)
 
 	info := d.Info(t)
-	assert.Assert(t, is.Len(info.RegistryConfig.InsecureRegistryCIDRs, 2))
+	assert.Assert(t, is.Len(info.RegistryConfig.InsecureRegistryCIDRs, 3))
 	cidrs := []string{
 		info.RegistryConfig.InsecureRegistryCIDRs[0].String(),
 		info.RegistryConfig.InsecureRegistryCIDRs[1].String(),
+		info.RegistryConfig.InsecureRegistryCIDRs[2].String(),
 	}
 	assert.Assert(t, is.Contains(cidrs, registryCIDR))
+	assert.Assert(t, is.Contains(cidrs, "::1/128"))
 	assert.Assert(t, is.Contains(cidrs, "127.0.0.0/8"))
 	assert.DeepEqual(t, *info.RegistryConfig.IndexConfigs["docker.io"], registry.IndexInfo{Name: "docker.io", Mirrors: []string{}, Secure: true, Official: true})
 	assert.DeepEqual(t, *info.RegistryConfig.IndexConfigs[registryHost], registry.IndexInfo{Name: registryHost, Mirrors: []string{}, Secure: false, Official: false})

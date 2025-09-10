@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/quota"
 	"gotest.tools/v3/assert"
@@ -229,7 +229,6 @@ func TestVolCreateValidation(t *testing.T) {
 	}
 
 	for i, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			if tc.name == "" {
 				tc.name = "vol-" + strconv.Itoa(i)
@@ -241,7 +240,7 @@ func TestVolCreateValidation(t *testing.T) {
 			if tc.expectedErr == "" {
 				assert.NilError(t, err)
 			} else {
-				assert.Check(t, errdefs.IsInvalidParameter(err), "got: %T", err)
+				assert.Check(t, cerrdefs.IsInvalidArgument(err), "got: %T", err)
 				assert.ErrorContains(t, err, tc.expectedErr)
 			}
 		})
@@ -313,7 +312,6 @@ func TestVolMountOpts(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			dev, opts, err := getMountOptions(&tc.opts, resolveIP)
 

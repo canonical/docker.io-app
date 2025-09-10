@@ -25,24 +25,22 @@ on:
   pull_request:
 
 jobs:
-  e2e:
+  tests:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         target:
-          - non-experimental
-          - experimental
+          - local
           - connhelper-ssh
         base:
           - alpine
           - debian
         engine-version:
-          - 27.0  # latest
-          - 26.1  # latest - 1
-          - 23.0  # mirantis lts
-          # TODO(krissetto) 19.03 needs a look, doesn't work ubuntu 22.04 (cgroup errors). 
-          # we could have a separate job that tests it against ubuntu 20.04
+          - 28  # latest
+          - 27  # latest - 1
+          - 26  # github actions default
+          - 23  # mirantis lts
     steps:
       -
         name: Checkout
@@ -76,7 +74,7 @@ jobs:
           TESTFLAGS: -coverprofile=/tmp/coverage/coverage.txt
       -
         name: Send to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
-          file: ./build/coverage/coverage.txt
+          files: ./build/coverage/coverage.txt
           token: ${{ secrets.CODECOV_TOKEN }}

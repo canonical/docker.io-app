@@ -3,7 +3,6 @@ package container // import "github.com/docker/docker/integration/container"
 import (
 	"runtime"
 	"testing"
-	"time"
 
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/integration/internal/container"
@@ -23,12 +22,12 @@ func TestKillContainerInvalidSignal(t *testing.T) {
 	err := apiClient.ContainerKill(ctx, id, "0")
 	assert.ErrorContains(t, err, "Error response from daemon:")
 	assert.ErrorContains(t, err, "nvalid signal: 0") // match "(I|i)nvalid" case-insensitive to allow testing against older daemons.
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, "running"), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateRunning))
 
 	err = apiClient.ContainerKill(ctx, id, "SIG42")
 	assert.ErrorContains(t, err, "Error response from daemon:")
 	assert.ErrorContains(t, err, "nvalid signal: SIG42") // match "(I|i)nvalid" case-insensitive to allow testing against older daemons.
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, "running"), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateRunning))
 }
 
 func TestKillContainer(t *testing.T) {
@@ -38,25 +37,25 @@ func TestKillContainer(t *testing.T) {
 	testCases := []struct {
 		doc    string
 		signal string
-		status string
+		status containertypes.ContainerState
 		skipOs string
 	}{
 		{
 			doc:    "no signal",
 			signal: "",
-			status: "exited",
+			status: containertypes.StateExited,
 			skipOs: "",
 		},
 		{
 			doc:    "non killing signal",
 			signal: "SIGWINCH",
-			status: "running",
+			status: containertypes.StateRunning,
 			skipOs: "windows",
 		},
 		{
 			doc:    "killing signal",
 			signal: "SIGTERM",
-			status: "exited",
+			status: containertypes.StateExited,
 			skipOs: "",
 		},
 	}
@@ -67,7 +66,6 @@ func TestKillContainer(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			skip.If(t, testEnv.DaemonInfo.OSType == tc.skipOs, "Windows does not support SIGWINCH")
 			ctx := testutil.StartSpan(ctx, t)
@@ -107,7 +105,6 @@ func TestKillWithStopSignalAndRestartPolicies(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			id := container.Run(ctx, t, apiClient,
@@ -128,8 +125,8 @@ func TestKillStoppedContainer(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	id := container.Create(ctx, t, apiClient)
 	err := apiClient.ContainerKill(ctx, id, "SIGKILL")
-	assert.Assert(t, is.ErrorContains(err, ""))
-	assert.Assert(t, is.Contains(err.Error(), "is not running"))
+	assert.ErrorContains(t, err, "")
+	assert.ErrorContains(t, err, "is not running")
 }
 
 func TestKillDifferentUserContainer(t *testing.T) {
@@ -145,7 +142,7 @@ func TestKillDifferentUserContainer(t *testing.T) {
 
 	err := apiClient.ContainerKill(ctx, id, "SIGKILL")
 	assert.NilError(t, err)
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, "exited"), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateExited))
 }
 
 func TestInspectOomKilledTrue(t *testing.T) {
@@ -161,7 +158,7 @@ func TestInspectOomKilledTrue(t *testing.T) {
 		c.HostConfig.Resources.Memory = 32 * 1024 * 1024
 	})
 
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, "exited"), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
 
 	inspect, err := apiClient.ContainerInspect(ctx, cID)
 	assert.NilError(t, err)
@@ -176,7 +173,7 @@ func TestInspectOomKilledFalse(t *testing.T) {
 
 	cID := container.Run(ctx, t, apiClient, container.WithCmd("sh", "-c", "echo hello world"))
 
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, "exited"), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
 
 	inspect, err := apiClient.ContainerInspect(ctx, cID)
 	assert.NilError(t, err)

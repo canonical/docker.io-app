@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/errdefs"
@@ -11,20 +12,20 @@ import (
 )
 
 // ContainerUpdate updates configuration of the container
-func (daemon *Daemon) ContainerUpdate(name string, hostConfig *container.HostConfig) (container.ContainerUpdateOKBody, error) {
+func (daemon *Daemon) ContainerUpdate(name string, hostConfig *container.HostConfig) (container.UpdateResponse, error) {
 	var warnings []string
 
 	daemonCfg := daemon.config()
 	warnings, err := daemon.verifyContainerSettings(daemonCfg, hostConfig, nil, true)
 	if err != nil {
-		return container.ContainerUpdateOKBody{Warnings: warnings}, errdefs.InvalidParameter(err)
+		return container.UpdateResponse{Warnings: warnings}, errdefs.InvalidParameter(err)
 	}
 
 	if err := daemon.update(name, hostConfig); err != nil {
-		return container.ContainerUpdateOKBody{Warnings: warnings}, err
+		return container.UpdateResponse{Warnings: warnings}, err
 	}
 
-	return container.ContainerUpdateOKBody{Warnings: warnings}, nil
+	return container.UpdateResponse{Warnings: warnings}, nil
 }
 
 func (daemon *Daemon) update(name string, hostConfig *container.HostConfig) error {
@@ -86,7 +87,7 @@ func (daemon *Daemon) update(name string, hostConfig *container.HostConfig) erro
 	isRestarting := ctr.Restarting
 	tsk, err := ctr.GetRunningTask()
 	ctr.Unlock()
-	if errdefs.IsConflict(err) || isRestarting {
+	if cerrdefs.IsConflict(err) || isRestarting {
 		return nil
 	}
 	if err != nil {

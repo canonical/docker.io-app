@@ -4,34 +4,43 @@ import (
 	"context"
 	"time"
 
-	containerdimages "github.com/containerd/containerd/images"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	imagetype "github.com/docker/docker/api/types/image"
-	dimages "github.com/docker/docker/daemon/images"
+	"github.com/docker/docker/internal/metrics"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
 // ImageHistory returns a slice of HistoryResponseItem structures for the
 // specified image name by walking the image lineage.
-func (i *ImageService) ImageHistory(ctx context.Context, name string) ([]*imagetype.HistoryResponseItem, error) {
+func (i *ImageService) ImageHistory(ctx context.Context, name string, platform *ocispec.Platform) ([]*imagetype.HistoryResponseItem, error) {
 	start := time.Now()
 	img, err := i.resolveImage(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: pass platform in from the CLI
-	platform := matchAllWithPreference(platforms.Default())
+	pm := i.matchRequestedOrDefault(platforms.Only, platform)
 
-	presentImages, err := i.presentImages(ctx, img, name, platform)
+	im, err := i.getBestPresentImageManifest(ctx, img, pm)
 	if err != nil {
 		return nil, err
 	}
-	ociImage := presentImages[0]
+
+	// Subset of ocispec.Image
+	var ociImage struct {
+		RootFS  ocispec.RootFS    `json:"rootfs"`
+		History []ocispec.History `json:"history,omitempty"`
+	}
+	err = im.ReadConfig(ctx, &ociImage)
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		history []*imagetype.HistoryResponseItem
@@ -75,7 +84,7 @@ func (i *ImageService) ImageHistory(ctx context.Context, name string) ([]*imaget
 		}}, history...)
 	}
 
-	findParents := func(img containerdimages.Image) []containerdimages.Image {
+	findParents := func(img c8dimages.Image) []c8dimages.Image {
 		imgs, err := i.getParentsByBuilderLabel(ctx, img)
 		if err != nil {
 			log.G(ctx).WithFields(log.Fields{
@@ -116,11 +125,11 @@ func (i *ImageService) ImageHistory(ctx context.Context, name string) ([]*imaget
 		}
 	}
 
-	dimages.ImageActions.WithValues("history").UpdateSince(start)
+	metrics.ImageActions.WithValues("history").UpdateSince(start)
 	return history, nil
 }
 
-func getImageTags(ctx context.Context, imgs []containerdimages.Image) []string {
+func getImageTags(ctx context.Context, imgs []c8dimages.Image) []string {
 	var tags []string
 	for _, img := range imgs {
 		if isDanglingImage(img) {
@@ -145,7 +154,7 @@ func getImageTags(ctx context.Context, imgs []containerdimages.Image) []string {
 // getParentsByBuilderLabel finds images that were a base for the given image
 // by an image label set by the legacy builder.
 // NOTE: This only works for images built with legacy builder (not Buildkit).
-func (i *ImageService) getParentsByBuilderLabel(ctx context.Context, img containerdimages.Image) ([]containerdimages.Image, error) {
+func (i *ImageService) getParentsByBuilderLabel(ctx context.Context, img c8dimages.Image) ([]c8dimages.Image, error) {
 	parent, ok := img.Labels[imageLabelClassicBuilderParent]
 	if !ok || parent == "" {
 		return nil, nil

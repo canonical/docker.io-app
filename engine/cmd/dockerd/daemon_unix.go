@@ -11,36 +11,34 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/containerd/log"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/libcontainerd/supervisor"
 	"github.com/docker/docker/libnetwork/portallocator"
 	"github.com/docker/docker/pkg/homedir"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
-func getDefaultDaemonConfigDir() (string, error) {
+func getDefaultDaemonConfigDir() string {
 	if !honorXDG {
-		return "/etc/docker", nil
+		return "/etc/docker"
 	}
 	// NOTE: CLI uses ~/.docker while the daemon uses ~/.config/docker, because
 	// ~/.docker was not designed to store daemon configurations.
 	// In future, the daemon directory may be renamed to ~/.config/moby-engine (?).
 	configHome, err := homedir.GetConfigHome()
 	if err != nil {
-		return "", nil
+		return ""
 	}
-	return filepath.Join(configHome, "docker"), nil
+	return filepath.Join(configHome, "docker")
 }
 
-func getDefaultDaemonConfigFile() (string, error) {
-	dir, err := getDefaultDaemonConfigDir()
-	if err != nil {
-		return "", err
+func getDefaultDaemonConfigFile() string {
+	dir := getDefaultDaemonConfigDir()
+	if dir == "" {
+		return ""
 	}
-	return filepath.Join(dir, "daemon.json"), nil
+	return filepath.Join(dir, "daemon.json")
 }
 
 // setDefaultUmask sets the umask to 0022 to avoid problems
@@ -56,7 +54,7 @@ func setDefaultUmask() error {
 }
 
 // setupConfigReloadTrap configures the SIGHUP signal to reload the configuration.
-func (cli *DaemonCli) setupConfigReloadTrap() {
+func (cli *daemonCLI) setupConfigReloadTrap() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, unix.SIGHUP)
 	go func() {
@@ -68,8 +66,8 @@ func (cli *DaemonCli) setupConfigReloadTrap() {
 
 // getSwarmRunRoot gets the root directory for swarm to store runtime state
 // For example, the control socket
-func (cli *DaemonCli) getSwarmRunRoot() string {
-	return filepath.Join(cli.Config.ExecRoot, "swarm")
+func getSwarmRunRoot(cfg *config.Config) string {
+	return filepath.Join(cfg.ExecRoot, "swarm")
 }
 
 // allocateDaemonPort ensures that there are no containers
@@ -101,14 +99,14 @@ func allocateDaemonPort(addr string) error {
 	return nil
 }
 
-func newCgroupParent(config *config.Config) string {
+func newCgroupParent(cfg *config.Config) string {
 	cgroupParent := "docker"
-	useSystemd := daemon.UsingSystemd(config)
+	useSystemd := daemon.UsingSystemd(cfg)
 	if useSystemd {
 		cgroupParent = "system.slice"
 	}
-	if config.CgroupParent != "" {
-		cgroupParent = config.CgroupParent
+	if cfg.CgroupParent != "" {
+		cgroupParent = cfg.CgroupParent
 	}
 	if useSystemd {
 		cgroupParent = cgroupParent + ":" + "docker" + ":"
@@ -116,34 +114,11 @@ func newCgroupParent(config *config.Config) string {
 	return cgroupParent
 }
 
-func (cli *DaemonCli) initContainerd(ctx context.Context) (func(time.Duration) error, error) {
-	if cli.ContainerdAddr != "" {
+func (cli *daemonCLI) initContainerd(ctx context.Context) (func(time.Duration) error, error) {
+	if cli.Config.ContainerdAddr != "" {
 		// use system containerd at the given address.
 		return nil, nil
 	}
 
-	systemContainerdAddr, ok, err := systemContainerdRunning(honorXDG)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not determine whether the system containerd is running")
-	}
-	if ok {
-		// detected a system containerd at the given address.
-		cli.ContainerdAddr = systemContainerdAddr
-		return nil, nil
-	}
-
-	log.G(ctx).Info("containerd not running, starting managed containerd")
-	opts, err := cli.getContainerdDaemonOpts()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to generate containerd options")
-	}
-
-	r, err := supervisor.Start(ctx, filepath.Join(cli.Root, "containerd"), filepath.Join(cli.ExecRoot, "containerd"), opts...)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to start containerd")
-	}
-	cli.ContainerdAddr = r.Address()
-
-	// Try to wait for containerd to shutdown
-	return r.WaitTimeout, nil
+	return cli.initializeContainerd(ctx)
 }

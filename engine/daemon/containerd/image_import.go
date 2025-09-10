@@ -9,8 +9,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -20,10 +20,10 @@ import (
 	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/pools"
 	"github.com/google/uuid"
 	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/go-archive/compression"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -136,7 +136,7 @@ func (i *ImageService) ImportImage(ctx context.Context, ref reference.Named, pla
 	}
 
 	id := image.ID(manifestDesc.Digest.String())
-	img := images.Image{
+	img := c8dimages.Image{
 		Name:      refString,
 		Target:    manifestDesc,
 		CreatedAt: createdAt,
@@ -145,8 +145,7 @@ func (i *ImageService) ImportImage(ctx context.Context, ref reference.Named, pla
 		img.Name = danglingImageName(manifestDesc.Digest)
 	}
 
-	err = i.saveImage(ctx, img)
-	if err != nil {
+	if err = i.createOrReplaceImage(ctx, img); err != nil {
 		logger.WithError(err).Debug("failed to save image")
 		return "", err
 	}
@@ -155,7 +154,7 @@ func (i *ImageService) ImportImage(ctx context.Context, ref reference.Named, pla
 	if err != nil {
 		logger.WithError(err).Debug("failed to unpack image")
 	} else {
-		i.LogImageEvent(id.String(), id.String(), events.ActionImport)
+		i.LogImageEvent(ctx, id.String(), id.String(), events.ActionImport)
 	}
 
 	return id, err
@@ -169,17 +168,17 @@ func saveArchive(ctx context.Context, cs content.Store, layerReader io.Reader) (
 	bufRd := p.Get(layerReader)
 	defer p.Put(bufRd)
 
-	compression, err := detectCompression(bufRd)
+	comp, err := detectCompression(bufRd)
 	if err != nil {
 		return "", "", "", err
 	}
 
 	var uncompressedReader io.Reader = bufRd
-	switch compression {
-	case archive.Gzip, archive.Zstd:
+	switch comp {
+	case compression.Gzip, compression.Zstd:
 		// If the input is already a compressed layer, just save it as is.
 		mediaType := ocispec.MediaTypeImageLayerGzip
-		if compression == archive.Zstd {
+		if comp == compression.Zstd {
 			mediaType = ocispec.MediaTypeImageLayerZstd
 		}
 
@@ -189,19 +188,17 @@ func saveArchive(ctx context.Context, cs content.Store, layerReader io.Reader) (
 		}
 
 		return compressedDigest, uncompressedDigest, mediaType, nil
-	case archive.Bzip2, archive.Xz:
-		r, err := archive.DecompressStream(bufRd)
+	case compression.Bzip2, compression.Xz:
+		r, err := compression.DecompressStream(bufRd)
 		if err != nil {
 			return "", "", "", errdefs.InvalidParameter(err)
 		}
 		defer r.Close()
 		uncompressedReader = r
 		fallthrough
-	case archive.Uncompressed:
+	case compression.None:
 		mediaType := ocispec.MediaTypeImageLayerGzip
-		compression := archive.Gzip
-
-		compressedDigest, uncompressedDigest, err := compressAndWriteBlob(ctx, cs, compression, mediaType, uncompressedReader)
+		compressedDigest, uncompressedDigest, err := compressAndWriteBlob(ctx, cs, compression.Gzip, mediaType, uncompressedReader)
 		if err != nil {
 			return "", "", "", err
 		}
@@ -229,7 +226,7 @@ func writeCompressedBlob(ctx context.Context, cs content.Store, mediaType string
 	digester := digest.Canonical.Digester()
 
 	// Decompress the piped blob.
-	decompressedStream, err := archive.DecompressStream(pr)
+	decompressedStream, err := compression.DecompressStream(pr)
 	if err == nil {
 		// Feed the digester with decompressed data.
 		_, err = io.Copy(digester.Hash(), decompressedStream)
@@ -250,12 +247,12 @@ func writeCompressedBlob(ctx context.Context, cs content.Store, mediaType string
 }
 
 // compressAndWriteBlob compresses the uncompressedReader and stores it in the content store.
-func compressAndWriteBlob(ctx context.Context, cs content.Store, compression archive.Compression, mediaType string, uncompressedLayerReader io.Reader) (digest.Digest, digest.Digest, error) {
+func compressAndWriteBlob(ctx context.Context, cs content.Store, comp compression.Compression, mediaType string, uncompressedLayerReader io.Reader) (digest.Digest, digest.Digest, error) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
 
-	compressor, err := archive.CompressStream(pw, compression)
+	compressor, err := compression.CompressStream(pw, comp)
 	if err != nil {
 		return "", "", errdefs.InvalidParameter(err)
 	}
@@ -296,23 +293,8 @@ func writeBlobAndReturnDigest(ctx context.Context, cs content.Store, mt string, 
 	return digester.Digest(), nil
 }
 
-// saveImage creates an image in the ImageService or updates it if it exists.
-func (i *ImageService) saveImage(ctx context.Context, img images.Image) error {
-	if _, err := i.images.Update(ctx, img); err != nil {
-		if cerrdefs.IsNotFound(err) {
-			if _, err := i.images.Create(ctx, img); err != nil {
-				return errdefs.Unknown(err)
-			}
-		} else {
-			return errdefs.Unknown(err)
-		}
-	}
-
-	return nil
-}
-
 // unpackImage unpacks the platform-specific manifest of a image into the snapshotter.
-func (i *ImageService) unpackImage(ctx context.Context, snapshotter string, img images.Image, manifestDesc ocispec.Descriptor) error {
+func (i *ImageService) unpackImage(ctx context.Context, snapshotter string, img c8dimages.Image, manifestDesc ocispec.Descriptor) error {
 	c8dImg, err := i.NewImageManifest(ctx, img, manifestDesc)
 	if err != nil {
 		return err
@@ -328,7 +310,7 @@ func (i *ImageService) unpackImage(ctx context.Context, snapshotter string, img 
 }
 
 // detectCompression detects the reader compression type.
-func detectCompression(bufRd *bufio.Reader) (archive.Compression, error) {
+func detectCompression(bufRd *bufio.Reader) (compression.Compression, error) {
 	bs, err := bufRd.Peek(10)
 	if err != nil && err != io.EOF {
 		// Note: we'll ignore any io.EOF error because there are some odd
@@ -337,10 +319,10 @@ func detectCompression(bufRd *bufio.Reader) (archive.Compression, error) {
 		// cases we'll just treat it as a non-compressed stream and
 		// that means just create an empty layer.
 		// See Issue 18170
-		return archive.Uncompressed, errdefs.Unknown(err)
+		return compression.None, errdefs.Unknown(err)
 	}
 
-	return archive.DetectCompression(bs), nil
+	return compression.Detect(bs), nil
 }
 
 // fillUncompressedLabel sets the uncompressed digest label on the compressed blob metadata
@@ -367,9 +349,6 @@ func storeJson(ctx context.Context, cs content.Ingester, mt string, obj interfac
 		return ocispec.Descriptor{}, errdefs.InvalidParameter(err)
 	}
 	configDigest := digest.FromBytes(configData)
-	if err != nil {
-		return ocispec.Descriptor{}, errdefs.InvalidParameter(err)
-	}
 	desc := ocispec.Descriptor{
 		MediaType: mt,
 		Digest:    configDigest,

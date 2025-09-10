@@ -1,17 +1,18 @@
-docker.io-app (27.5.1-0ubuntu3~22.04.2) jammy-security; urgency=medium
+docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
-  * No-change rebuild to copy previous update to the security pocket.
+  * New upstream version 28.2.2
+  * d/h/build-manpages.sh: adjust manpage build script to upstream changes
+  * d/manpages/*: update manpages for version 28.2.2
+  * d/docker.io.docs: update NOTICE files
+  * d/copyright: update copyright data
 
- -- Hlib Korzhynskyy <hlib.korzhynskyy@canonical.com>  Mon, 02 Jun 2025 09:48:38 -0230
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 17 Jun 2025 14:51:15 -0300
 
-docker.io-app (27.5.1-0ubuntu3~22.04.1) jammy; urgency=medium
+docker.io-app (27.5.1-0ubuntu4) questing; urgency=medium
 
-  * Backport from plucky to jammy (LP: #2085187)
-  * d/control: build with golang 1.22 for consistency across the supported
-    release
-  * d/rules: add golang 1.22 to PATH
+  * d/control: conflicts/replaces podman-docker (LP: #2037905)
 
- -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:15:14 -0300
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 03 Jun 2025 13:35:31 -0300
 
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 

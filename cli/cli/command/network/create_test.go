@@ -2,13 +2,13 @@ package network
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types/network"
-	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -21,12 +21,12 @@ func TestNetworkCreateErrors(t *testing.T) {
 		expectedError     string
 	}{
 		{
-			expectedError: "exactly 1 argument",
+			expectedError: "1 argument",
 		},
 		{
 			args: []string{"toto"},
 			networkCreateFunc: func(ctx context.Context, name string, createBody network.CreateOptions) (network.CreateResponse, error) {
-				return network.CreateResponse{}, errors.Errorf("error creating network")
+				return network.CreateResponse{}, errors.New("error creating network")
 			},
 			expectedError: "error creating network",
 		},
@@ -124,6 +124,15 @@ func TestNetworkCreateErrors(t *testing.T) {
 			},
 			expectedError: "no matching subnet for aux-address",
 		},
+		{
+			args: []string{"toto"},
+			flags: map[string]string{
+				"ip-range": "192.168.83.1-192.168.83.254",
+				"gateway":  "192.168.80.1",
+				"subnet":   "192.168.80.0/20",
+			},
+			expectedError: "invalid CIDR address: 192.168.83.1-192.168.83.254",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -173,6 +182,60 @@ func TestNetworkCreateWithFlags(t *testing.T) {
 	assert.Check(t, is.Equal("banana", strings.TrimSpace(cli.OutBuffer().String())))
 }
 
+// TestNetworkCreateIPv4 verifies behavior of the "--ipv4" option. This option
+// is an optional bool, and must default to "nil", not "true" or "false".
+func TestNetworkCreateIPv4(t *testing.T) {
+	boolPtr := func(val bool) *bool { return &val }
+
+	tests := []struct {
+		doc, name string
+		flags     []string
+		expected  *bool
+	}{
+		{
+			doc:      "IPv4 default",
+			name:     "ipv4-default",
+			expected: nil,
+		},
+		{
+			doc:      "IPv4 enabled",
+			name:     "ipv4-enabled",
+			flags:    []string{"--ipv4=true"},
+			expected: boolPtr(true),
+		},
+		{
+			doc:      "IPv4 enabled (shorthand)",
+			name:     "ipv4-enabled-shorthand",
+			flags:    []string{"--ipv4"},
+			expected: boolPtr(true),
+		},
+		{
+			doc:      "IPv4 disabled",
+			name:     "ipv4-disabled",
+			flags:    []string{"--ipv4=false"},
+			expected: boolPtr(false),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
+			cli := test.NewFakeCli(&fakeClient{
+				networkCreateFunc: func(ctx context.Context, name string, createBody network.CreateOptions) (network.CreateResponse, error) {
+					assert.Check(t, is.DeepEqual(createBody.EnableIPv4, tc.expected))
+					return network.CreateResponse{ID: name}, nil
+				},
+			})
+			cmd := newCreateCommand(cli)
+			cmd.SetArgs([]string{tc.name})
+			if tc.expected != nil {
+				assert.Check(t, cmd.ParseFlags(tc.flags))
+			}
+			assert.NilError(t, cmd.Execute())
+			assert.Check(t, is.Equal(tc.name, strings.TrimSpace(cli.OutBuffer().String())))
+		})
+	}
+}
+
 // TestNetworkCreateIPv6 verifies behavior of the "--ipv6" option. This option
 // is an optional bool, and must default to "nil", not "true" or "false".
 func TestNetworkCreateIPv6(t *testing.T) {
@@ -209,7 +272,6 @@ func TestNetworkCreateIPv6(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.doc, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				networkCreateFunc: func(ctx context.Context, name string, createBody network.CreateOptions) (network.CreateResponse, error) {

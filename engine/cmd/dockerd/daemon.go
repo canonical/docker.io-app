@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	containerddefaults "github.com/containerd/containerd/defaults"
-	"github.com/containerd/containerd/tracing"
+	containerddefaults "github.com/containerd/containerd/v2/defaults"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/log"
 	"github.com/docker/docker/api"
 	apiserver "github.com/docker/docker/api/server"
@@ -25,6 +26,7 @@ import (
 	"github.com/docker/docker/api/server/router/build"
 	checkpointrouter "github.com/docker/docker/api/server/router/checkpoint"
 	"github.com/docker/docker/api/server/router/container"
+	debugrouter "github.com/docker/docker/api/server/router/debug"
 	distributionrouter "github.com/docker/docker/api/server/router/distribution"
 	grpcrouter "github.com/docker/docker/api/server/router/grpc"
 	"github.com/docker/docker/api/server/router/image"
@@ -53,13 +55,11 @@ import (
 	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/docker/pkg/rootless"
 	"github.com/docker/docker/pkg/sysinfo"
-	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/plugin"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/util/tracing/detect"
-	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -68,8 +68,8 @@ import (
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 )
 
-// DaemonCli represents the daemon CLI.
-type DaemonCli struct {
+// daemonCLI represents the daemon CLI.
+type daemonCLI struct {
 	*config.Config
 	configFile *string
 	flags      *pflag.FlagSet
@@ -77,59 +77,44 @@ type DaemonCli struct {
 	d               *daemon.Daemon
 	authzMiddleware *authorization.Middleware // authzMiddleware enables to dynamically reload the authorization plugins
 
-	stopOnce    sync.Once
-	apiShutdown chan struct{}
+	stopOnce     sync.Once
+	apiShutdown  chan struct{}
+	apiTLSConfig *tls.Config
 }
 
-// NewDaemonCli returns a daemon CLI
-func NewDaemonCli() *DaemonCli {
-	return &DaemonCli{
-		apiShutdown: make(chan struct{}),
-	}
-}
-
-func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
-	ctx := context.TODO()
-
-	if cli.Config, err = loadDaemonCliConfig(opts); err != nil {
-		return err
-	}
-
-	tlsConfig, err := newAPIServerTLSConfig(cli.Config)
+// newDaemonCLI returns a daemon CLI with the given options.
+func newDaemonCLI(opts *daemonOptions) (*daemonCLI, error) {
+	cfg, err := loadDaemonCliConfig(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if opts.Validate {
-		// If config wasn't OK we wouldn't have made it this far.
-		_, _ = fmt.Fprintln(os.Stderr, "configuration OK")
-		return nil
+	tlsConfig, err := newAPIServerTLSConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
+	return &daemonCLI{
+		Config:       cfg,
+		configFile:   &opts.configFile,
+		flags:        opts.flags,
+		apiShutdown:  make(chan struct{}),
+		apiTLSConfig: tlsConfig,
+	}, nil
+}
+
+func (cli *daemonCLI) start(ctx context.Context) (err error) {
 	configureProxyEnv(cli.Config)
 	configureDaemonLogs(cli.Config)
 
 	log.G(ctx).Info("Starting up")
 
-	cli.configFile = &opts.configFile
-	cli.flags = opts.flags
-
 	if cli.Config.Debug {
 		debug.Enable()
 	}
 
-	if cli.Config.Experimental {
-		log.G(ctx).Warn("Running experimental build")
-	}
-
-	if cli.Config.IsRootless() {
-		log.G(ctx).Warn("Running in rootless mode. This mode has feature limitations.")
-	}
-	if rootless.RunningWithRootlessKit() {
-		log.G(ctx).Info("Running with RootlessKit integration")
-		if !cli.Config.IsRootless() {
-			return fmt.Errorf("rootless mode needs to be enabled for running with RootlessKit")
-		}
+	if rootless.RunningWithRootlessKit() && !cli.Config.IsRootless() {
+		return fmt.Errorf("rootless mode needs to be enabled for running with RootlessKit")
 	}
 
 	// return human-friendly error before creating files
@@ -147,14 +132,14 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 		return err
 	}
 
-	if err := system.MkdirAll(cli.Config.ExecRoot, 0o700); err != nil {
+	if err := os.MkdirAll(cli.Config.ExecRoot, 0o700); err != nil {
 		return err
 	}
 
 	potentiallyUnderRuntimeDir := []string{cli.Config.ExecRoot}
 
 	if cli.Pidfile != "" {
-		if err = system.MkdirAll(filepath.Dir(cli.Pidfile), 0o755); err != nil {
+		if err = os.MkdirAll(filepath.Dir(cli.Pidfile), 0o755); err != nil {
 			return errors.Wrap(err, "failed to create pidfile directory")
 		}
 		if err = pidfile.Write(cli.Pidfile, os.Getpid()); err != nil {
@@ -169,19 +154,27 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	}
 
 	if cli.Config.IsRootless() {
+		log.G(ctx).Warn("Running in rootless mode. This mode has feature limitations.")
+		if rootless.RunningWithRootlessKit() {
+			log.G(ctx).Info("Running with RootlessKit integration")
+		}
+
 		// Set sticky bit if XDG_RUNTIME_DIR is set && the file is actually under XDG_RUNTIME_DIR
 		if _, err := homedir.StickRuntimeDirContents(potentiallyUnderRuntimeDir); err != nil {
 			// StickRuntimeDirContents returns nil error if XDG_RUNTIME_DIR is just unset
 			log.G(ctx).WithError(err).Warn("cannot set sticky bit on files under XDG_RUNTIME_DIR")
 		}
 	}
+	if cli.Config.Experimental {
+		log.G(ctx).Warn("Running with experimental features enabled")
+	}
 
-	lss, hosts, err := loadListeners(cli.Config, tlsConfig)
+	lss, hosts, err := loadListeners(cli.Config, cli.apiTLSConfig)
 	if err != nil {
 		return errors.Wrap(err, "failed to load listeners")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	waitForContainerDShutdown, err := cli.initContainerd(ctx)
 	if waitForContainerDShutdown != nil {
 		defer waitForContainerDShutdown(10 * time.Second)
@@ -195,7 +188,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
 	}
-	apiShutdownCtx, apiShutdownCancel := context.WithCancel(context.Background())
+	apiShutdownCtx, apiShutdownCancel := context.WithCancel(context.WithoutCancel(ctx))
 	apiShutdownDone := make(chan struct{})
 	trap.Trap(cli.stop)
 	go func() {
@@ -205,8 +198,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 		// httpServer.Shutdown() will return immediately,
 		// which is what we want.
 		<-cli.apiShutdown
-		err := httpServer.Shutdown(apiShutdownCtx)
-		if err != nil {
+		if err := httpServer.Shutdown(apiShutdownCtx); err != nil {
 			log.G(ctx).WithError(err).Error("Error shutting down http server")
 		}
 		close(apiShutdownDone)
@@ -224,18 +216,20 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 			// cli.start() has returned without cli.stop() being called,
 			// e.g. because the daemon failed to start.
 			// Stop the HTTP server with no grace period.
-			if closeErr := httpServer.Close(); closeErr != nil {
-				log.G(ctx).WithError(closeErr).Error("Error closing http server")
+			if err := httpServer.Close(); err != nil {
+				log.G(ctx).WithError(err).Error("Error closing http server")
 			}
 		}
 	}()
 
 	// Notify that the API is active, but before daemon is set up.
-	preNotifyReady()
+	if err := preNotifyReady(); err != nil {
+		return err
+	}
 
 	const otelServiceNameEnv = "OTEL_SERVICE_NAME"
 	if _, ok := os.LookupEnv(otelServiceNameEnv); !ok {
-		os.Setenv(otelServiceNameEnv, filepath.Base(os.Args[0]))
+		_ = os.Setenv(otelServiceNameEnv, filepath.Base(os.Args[0]))
 	}
 
 	setOTLPProtoDefault()
@@ -249,6 +243,17 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	log.G(ctx).Logger.AddHook(tracing.NewLogrusHook())
 
 	pluginStore := plugin.NewStore()
+
+	// Register the CDI driver before the daemon starts, as it might try to restore containers that depend on the CDI driver.
+	// Note that CDI is not inherently linux-specific, there are some linux-specific assumptions / implementations in the code that
+	// queries the properties of device on the host as well as performs the injection of device nodes and their access permissions into the OCI spec.
+	//
+	// In order to lift this restriction the following would have to be addressed:
+	// - Support needs to be added to the cdi package for injecting Windows devices: https://tags.cncf.io/container-device-interface/issues/28
+	// - The DeviceRequests API must be extended to non-linux platforms.
+	if cdiEnabled(cli.Config) {
+		daemon.RegisterCDIDriver(cli.Config.CDISpecDirs...)
+	}
 
 	var apiServer apiserver.Server
 	cli.authzMiddleware, err = initMiddlewares(ctx, &apiServer, cli.Config, pluginStore)
@@ -268,25 +273,15 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 		return errors.Wrap(err, "failed to validate authorization plugin")
 	}
 
-	// Note that CDI is not inherently linux-specific, there are some linux-specific assumptions / implementations in the code that
-	// queries the properties of device on the host as well as performs the injection of device nodes and their access permissions into the OCI spec.
-	//
-	// In order to lift this restriction the following would have to be addressed:
-	// - Support needs to be added to the cdi package for injecting Windows devices: https://tags.cncf.io/container-device-interface/issues/28
-	// - The DeviceRequests API must be extended to non-linux platforms.
-	if runtime.GOOS == "linux" && cli.Config.Features["cdi"] {
-		daemon.RegisterCDIDriver(cli.Config.CDISpecDirs...)
-	}
-
 	cli.d = d
 
 	if err := startMetricsServer(cli.Config.MetricsAddress); err != nil {
 		return errors.Wrap(err, "failed to start metrics server")
 	}
 
-	c, err := createAndStartCluster(cli, d)
+	c, err := createAndStartCluster(d, cli.Config)
 	if err != nil {
-		log.G(ctx).Fatalf("Error starting cluster component: %v", err)
+		return fmt.Errorf("failed to start cluster component: %w", err)
 	}
 
 	// Restart all autostart containers which has a swarm endpoint
@@ -294,20 +289,24 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	// initialized the cluster.
 	d.RestartSwarmContainers()
 
-	log.G(ctx).Info("Daemon has completed initialization")
-
-	// Get a the current daemon config, because the daemon sets up config
-	// during initialization. We cannot user the cli.Config for that reason,
-	// as that only holds the config that was set by the user.
-	//
-	// FIXME(thaJeztah): better separate runtime and config data?
-	daemonCfg := d.Config()
-	routerOpts, err := newRouterOptions(ctx, &daemonCfg, d, c)
+	b, shutdownBuildKit, err := initBuildkit(ctx, d)
 	if err != nil {
-		return err
+		return fmt.Errorf("error initializing buildkit: %w", err)
 	}
 
-	httpServer.Handler = apiServer.CreateMux(routerOpts.Build()...)
+	if runtime.GOOS == "windows" {
+		if enabled, ok := d.Features()["buildkit"]; ok && enabled {
+			log.G(ctx).Warn("Buildkit feature is enabled in the daemon.json configuration file. Support for BuildKit on Windows is experimental, and enabling this feature may not work. Use at your own risk!")
+		}
+	}
+
+	routers := buildRouters(routerOptions{
+		features: d.Features,
+		daemon:   d,
+		cluster:  c,
+		builder:  b,
+	})
+	httpServer.Handler = apiServer.CreateMux(ctx, routers...)
 
 	go d.ProcessClusterNotifications(ctx, c.GetWatchStream())
 
@@ -315,6 +314,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 
 	// after the daemon is done setting up we can notify systemd api
 	notifyReady()
+	log.G(ctx).Info("Daemon has completed initialization")
 
 	// Daemon is fully initialized. Start handling API traffic
 	// and wait for serve API to complete.
@@ -349,9 +349,8 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	notifyStopping()
 	shutdownDaemon(ctx, d)
 
-	if err := routerOpts.buildkit.Close(); err != nil {
-		log.G(ctx).WithError(err).Error("Failed to close buildkit")
-	}
+	// shutdown / close BuildKit backend
+	shutdownBuildKit()
 
 	// Stop notification processing and any background processes
 	cancel()
@@ -383,112 +382,142 @@ func setOTLPProtoDefault() {
 
 	if os.Getenv(protoEnv) == "" {
 		if os.Getenv(tracesEnv) == "" {
-			os.Setenv(tracesEnv, defaultProto)
+			_ = os.Setenv(tracesEnv, defaultProto)
 		}
 		if os.Getenv(metricsEnv) == "" {
-			os.Setenv(metricsEnv, defaultProto)
+			_ = os.Setenv(metricsEnv, defaultProto)
 		}
 	}
 }
 
-type routerOptions struct {
-	sessionManager *session.Manager
-	buildBackend   *buildbackend.Backend
-	features       func() map[string]bool
-	buildkit       *buildkit.Builder
-	daemon         *daemon.Daemon
-	cluster        *cluster.Cluster
-}
+func initBuildkit(ctx context.Context, d *daemon.Daemon) (_ builderOptions, closeFn func(), _ error) {
+	log.G(ctx).Info("Initializing buildkit")
+	closeFn = func() {}
 
-func newRouterOptions(ctx context.Context, config *config.Config, d *daemon.Daemon, c *cluster.Cluster) (routerOptions, error) {
 	sm, err := session.NewManager()
 	if err != nil {
-		return routerOptions{}, errors.Wrap(err, "failed to create sessionmanager")
+		return builderOptions{}, closeFn, errors.Wrap(err, "failed to create sessionmanager")
 	}
 
 	manager, err := dockerfile.NewBuildManager(d.BuilderBackend(), d.IdentityMapping())
 	if err != nil {
-		return routerOptions{}, err
+		return builderOptions{}, closeFn, err
 	}
-	cgroupParent := newCgroupParent(config)
+
+	cfg := d.Config()
+
+	var cdiSpecDirs []string
+	if cdiEnabled(&cfg) {
+		cdiSpecDirs = cfg.CDISpecDirs
+	}
 
 	bk, err := buildkit.New(ctx, buildkit.Opt{
 		SessionManager:      sm,
-		Root:                filepath.Join(config.Root, "buildkit"),
+		Root:                filepath.Join(cfg.Root, "buildkit"),
 		EngineID:            d.ID(),
 		Dist:                d.DistributionServices(),
 		ImageTagger:         d.ImageService(),
 		NetworkController:   d.NetworkController(),
-		DefaultCgroupParent: cgroupParent,
+		DefaultCgroupParent: newCgroupParent(&cfg),
 		RegistryHosts:       d.RegistryHosts,
-		BuilderConfig:       config.Builder,
-		Rootless:            daemon.Rootless(config),
+		BuilderConfig:       cfg.Builder,
+		Rootless:            daemon.Rootless(&cfg),
 		IdentityMapping:     d.IdentityMapping(),
-		DNSConfig:           config.DNSConfig,
+		DNSConfig:           cfg.DNSConfig,
 		ApparmorProfile:     daemon.DefaultApparmorProfile(),
 		UseSnapshotter:      d.UsesSnapshotter(),
 		Snapshotter:         d.ImageService().StorageDriver(),
-		ContainerdAddress:   config.ContainerdAddr,
-		ContainerdNamespace: config.ContainerdNamespace,
+		ContainerdAddress:   cfg.ContainerdAddr,
+		ContainerdNamespace: cfg.ContainerdNamespace,
 		Callbacks: exporter.BuildkitCallbacks{
 			Exported: d.ImageExportedByBuildkit,
 			Named:    d.ImageNamedByBuildkit,
 		},
+		CDISpecDirs: cdiSpecDirs,
 	})
 	if err != nil {
-		return routerOptions{}, err
+		return builderOptions{}, closeFn, errors.Wrap(err, "error creating buildkit instance")
 	}
 
 	bb, err := buildbackend.NewBackend(d.ImageService(), manager, bk, d.EventsService)
 	if err != nil {
-		return routerOptions{}, errors.Wrap(err, "failed to create buildmanager")
+		return builderOptions{}, closeFn, errors.Wrap(err, "failed to create builder backend")
 	}
 
-	return routerOptions{
-		sessionManager: sm,
-		buildBackend:   bb,
-		features:       d.Features,
+	log.G(ctx).Info("Completed buildkit initialization")
+
+	closeFn = func() {
+		if err := bk.Close(); err != nil {
+			log.G(ctx).WithError(err).Error("Failed to close buildkit")
+		}
+	}
+
+	return builderOptions{
+		backend:        bb,
 		buildkit:       bk,
-		daemon:         d,
-		cluster:        c,
-	}, nil
+		sessionManager: sm,
+	}, closeFn, nil
 }
 
-func (cli *DaemonCli) reloadConfig() {
+type routerOptions struct {
+	features func() map[string]bool
+	daemon   *daemon.Daemon
+	cluster  *cluster.Cluster
+	builder  builderOptions
+}
+
+type builderOptions struct {
+	backend        *buildbackend.Backend
+	buildkit       *buildkit.Builder
+	sessionManager *session.Manager
+}
+
+func (cli *daemonCLI) reloadConfig() {
 	ctx := context.TODO()
-	reload := func(c *config.Config) {
-		if err := validateAuthzPlugins(c.AuthorizationPlugins, cli.d.PluginStore); err != nil {
-			log.G(ctx).Fatalf("Error validating authorization plugin: %v", err)
+	log.G(ctx).WithField("config-file", *cli.configFile).Info("Got signal to reload configuration")
+	reload := func(cfg *config.Config) {
+		if err := validateAuthzPlugins(cfg.AuthorizationPlugins, cli.d.PluginStore); err != nil {
+			log.G(ctx).WithError(err).Fatal("Error validating authorization plugin")
 			return
 		}
 
-		if err := cli.d.Reload(c); err != nil {
-			log.G(ctx).Errorf("Error reconfiguring the daemon: %v", err)
+		if err := cli.d.Reload(cfg); err != nil {
+			log.G(ctx).WithError(err).Error("Error reconfiguring the daemon")
 			return
 		}
 
 		// Apply our own configuration only after the daemon reload has succeeded. We
 		// don't want to partially apply the config if the daemon is unhappy with it.
 
-		cli.authzMiddleware.SetPlugins(c.AuthorizationPlugins)
+		cli.authzMiddleware.SetPlugins(cfg.AuthorizationPlugins)
 
-		if c.IsValueSet("debug") {
+		if cfg.IsValueSet("debug") {
 			debugEnabled := debug.IsEnabled()
 			switch {
-			case debugEnabled && !c.Debug: // disable debug
+			case debugEnabled && !cfg.Debug: // disable debug
 				debug.Disable()
-			case c.Debug && !debugEnabled: // enable debug
+			case cfg.Debug && !debugEnabled: // enable debug
 				debug.Enable()
 			}
 		}
 	}
 
 	if err := config.Reload(*cli.configFile, cli.flags, reload); err != nil {
-		log.G(ctx).Error(err)
+		log.G(ctx).WithError(err).Error("Error reloading configuration")
+		return
+	}
+
+	sanitizedConfig := config.Sanitize(cli.d.Config())
+	jsonData, err := json.Marshal(sanitizedConfig)
+	if err != nil {
+		log.G(context.TODO()).WithError(err).Warn("Error when marshaling configuration for printing")
+		log.G(context.TODO()).Info("Reloaded configuration")
+	} else {
+		log.G(context.TODO()).WithField("config", string(jsonData)).Info("Reloaded configuration")
 	}
 }
 
-func (cli *DaemonCli) stop() {
+func (cli *daemonCLI) stop() {
 	// Signal that the API server should shut down as soon as possible.
 	// This construct is used rather than directly shutting down the HTTP
 	// server to avoid any issues if this method is called before the server
@@ -569,6 +598,15 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 		conf.TLSOptions = config.TLSOptions{}
 	}
 
+	if runtime.GOOS == "windows" && opts.configFile == "" {
+		// On Windows, the location of the config-file is relative to the
+		// daemon's data-root, which is configurable, so we cannot use a
+		// fixed default location. Instead, we set the location here.
+		//
+		// FIXME(thaJeztah): find a better default on Windows that does not depend on "daemon.json" or the --data-root option.
+		opts.configFile = filepath.Join(conf.Root, "config", "daemon.json")
+	}
+
 	if opts.configFile != "" {
 		c, err := config.MergeDaemonConfigurations(conf, flags, opts.configFile)
 		if err != nil {
@@ -622,12 +660,13 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 		// If CDISpecDirs is set to an empty string, we clear it to ensure that CDI is disabled.
 		conf.CDISpecDirs = nil
 	}
-	if !conf.Features["cdi"] {
-		// If the CDI feature is not enabled, we clear the CDISpecDirs to ensure that CDI is disabled.
+	// Only clear CDISpecDirs if CDI is explicitly disabled
+	if val, exists := conf.Features["cdi"]; exists && !val {
+		// If the CDI feature is explicitly disabled, we clear the CDISpecDirs to ensure that CDI is disabled.
 		conf.CDISpecDirs = nil
 	}
 
-	if err := loadCLIPlatformConfig(conf); err != nil {
+	if err := setPlatformOptions(conf); err != nil {
 		return nil, err
 	}
 
@@ -636,24 +675,24 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 
 // normalizeHosts normalizes the configured config.Hosts and remove duplicates.
 // It returns an error if it fails to parse a host.
-func normalizeHosts(config *config.Config) error {
-	if len(config.Hosts) == 0 {
+func normalizeHosts(cfg *config.Config) error {
+	if len(cfg.Hosts) == 0 {
 		// if no hosts are configured, create a single entry slice, so that the
 		// default is used.
 		//
 		// TODO(thaJeztah) implement a cleaner way for this; this depends on a
 		//                 side-effect of how we parse empty/partial hosts.
-		config.Hosts = make([]string, 1)
+		cfg.Hosts = make([]string, 1)
 	}
-	hosts := make([]string, 0, len(config.Hosts))
-	seen := make(map[string]struct{}, len(config.Hosts))
+	hosts := make([]string, 0, len(cfg.Hosts))
+	seen := make(map[string]struct{}, len(cfg.Hosts))
 
 	useTLS := DefaultTLSValue
-	if config.TLS != nil {
-		useTLS = *config.TLS
+	if cfg.TLS != nil {
+		useTLS = *cfg.TLS
 	}
 
-	for _, h := range config.Hosts {
+	for _, h := range cfg.Hosts {
 		host, err := dopts.ParseHost(useTLS, honorXDG, h)
 		if err != nil {
 			return err
@@ -665,11 +704,11 @@ func normalizeHosts(config *config.Config) error {
 		hosts = append(hosts, host)
 	}
 	sort.Strings(hosts)
-	config.Hosts = hosts
+	cfg.Hosts = hosts
 	return nil
 }
 
-func (opts routerOptions) Build() []router.Router {
+func buildRouters(opts routerOptions) []router.Router {
 	decoder := runconfig.ContainerDecoder{
 		GetSysInfo: func() *sysinfo.SysInfo {
 			return opts.daemon.RawSysInfo()
@@ -683,25 +722,20 @@ func (opts routerOptions) Build() []router.Router {
 		image.NewRouter(
 			opts.daemon.ImageService(),
 			opts.daemon.RegistryService(),
-			opts.daemon.ReferenceStore,
-			opts.daemon.ImageService().DistributionServices().ImageStore,
-			opts.daemon.ImageService().DistributionServices().LayerStore,
 		),
-		systemrouter.NewRouter(opts.daemon, opts.cluster, opts.buildkit, opts.daemon.Features),
+		systemrouter.NewRouter(opts.daemon, opts.cluster, opts.builder.buildkit, opts.daemon.Features),
 		volume.NewRouter(opts.daemon.VolumesService(), opts.cluster),
-		build.NewRouter(opts.buildBackend, opts.daemon),
-		sessionrouter.NewRouter(opts.sessionManager),
+		build.NewRouter(opts.builder.backend, opts.daemon),
+		sessionrouter.NewRouter(opts.builder.sessionManager),
 		swarmrouter.NewRouter(opts.cluster),
 		pluginrouter.NewRouter(opts.daemon.PluginManager()),
 		distributionrouter.NewRouter(opts.daemon.ImageBackend()),
+		network.NewRouter(opts.daemon, opts.cluster),
+		debugrouter.NewRouter(),
 	}
 
-	if opts.buildBackend != nil {
-		routers = append(routers, grpcrouter.NewRouter(opts.buildBackend))
-	}
-
-	if opts.daemon.NetworkControllerEnabled() {
-		routers = append(routers, network.NewRouter(opts.daemon, opts.cluster))
+	if opts.builder.backend != nil {
+		routers = append(routers, grpcrouter.NewRouter(opts.builder.backend))
 	}
 
 	if opts.daemon.HasExperimental() {
@@ -717,7 +751,7 @@ func (opts routerOptions) Build() []router.Router {
 	return routers
 }
 
-func initMiddlewares(ctx context.Context, s *apiserver.Server, cfg *config.Config, pluginStore plugingetter.PluginGetter) (*authorization.Middleware, error) {
+func initMiddlewares(_ context.Context, s *apiserver.Server, cfg *config.Config, pluginStore plugingetter.PluginGetter) (*authorization.Middleware, error) {
 	exp := middleware.NewExperimentalMiddleware(cfg.Experimental)
 	s.UseMiddleware(exp)
 
@@ -727,30 +761,24 @@ func initMiddlewares(ctx context.Context, s *apiserver.Server, cfg *config.Confi
 	}
 	s.UseMiddleware(*vm)
 
-	if cfg.CorsHeaders != "" && os.Getenv("DOCKERD_DEPRECATED_CORS_HEADER") != "" {
-		log.G(ctx).Warn(`DEPRECATED: The "api-cors-header" config parameter and the dockerd "--api-cors-header" option will be removed in the next release. Use a reverse proxy if you need CORS headers.`)
-		c := middleware.NewCORSMiddleware(cfg.CorsHeaders) //nolint:staticcheck // ignore SA1019 (NewCORSMiddleware is deprecated); will be removed in the next release.
-		s.UseMiddleware(c)
-	}
-
 	authzMiddleware := authorization.NewMiddleware(cfg.AuthorizationPlugins, pluginStore)
 	s.UseMiddleware(authzMiddleware)
 	return authzMiddleware, nil
 }
 
-func (cli *DaemonCli) getContainerdDaemonOpts() ([]supervisor.DaemonOpt, error) {
+func getContainerdDaemonOpts(cfg *config.Config) ([]supervisor.DaemonOpt, error) {
 	var opts []supervisor.DaemonOpt
-	if cli.Debug {
+	if cfg.Debug {
 		opts = append(opts, supervisor.WithLogLevel("debug"))
 	} else {
-		opts = append(opts, supervisor.WithLogLevel(cli.LogLevel))
+		opts = append(opts, supervisor.WithLogLevel(cfg.LogLevel))
 	}
 
-	if logFormat := cli.Config.LogFormat; logFormat != "" {
+	if logFormat := cfg.LogFormat; logFormat != "" {
 		opts = append(opts, supervisor.WithLogFormat(logFormat))
 	}
 
-	if !cli.CriContainerd {
+	if !cfg.CriContainerd {
 		// CRI support in the managed daemon is currently opt-in.
 		//
 		// It's disabled by default, originally because it was listening on
@@ -766,24 +794,28 @@ func (cli *DaemonCli) getContainerdDaemonOpts() ([]supervisor.DaemonOpt, error) 
 		opts = append(opts, supervisor.WithCRIDisabled())
 	}
 
+	if runtime.GOOS == "windows" {
+		opts = append(opts, supervisor.WithDetectLocalBinary())
+	}
+
 	return opts, nil
 }
 
-func newAPIServerTLSConfig(config *config.Config) (*tls.Config, error) {
+func newAPIServerTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	var tlsConfig *tls.Config
-	if config.TLS != nil && *config.TLS {
+	if cfg.TLS != nil && *cfg.TLS {
 		var (
 			clientAuth tls.ClientAuthType
 			err        error
 		)
-		if config.TLSVerify == nil || *config.TLSVerify {
+		if cfg.TLSVerify == nil || *cfg.TLSVerify {
 			// server requires and verifies client's certificate
 			clientAuth = tls.RequireAndVerifyClientCert
 		}
 		tlsConfig, err = tlsconfig.Server(tlsconfig.Options{
-			CAFile:             config.TLSOptions.CAFile,
-			CertFile:           config.TLSOptions.CertFile,
-			KeyFile:            config.TLSOptions.KeyFile,
+			CAFile:             cfg.TLSOptions.CAFile,
+			CertFile:           cfg.TLSOptions.CertFile,
+			KeyFile:            cfg.TLSOptions.KeyFile,
 			ExclusiveRootPools: true,
 			ClientAuth:         clientAuth,
 		})
@@ -798,19 +830,19 @@ func newAPIServerTLSConfig(config *config.Config) (*tls.Config, error) {
 // checkTLSAuthOK checks basically for an explicitly disabled TLS/TLSVerify
 // Going forward we do not want to support a scenario where dockerd listens
 // on TCP without either TLS client auth (or an explicit opt-in to disable it)
-func checkTLSAuthOK(c *config.Config) bool {
-	if c.TLS == nil {
+func checkTLSAuthOK(cfg *config.Config) bool {
+	if cfg.TLS == nil {
 		// Either TLS is enabled by default, in which case TLS verification should be enabled by default, or explicitly disabled
 		// Or TLS is disabled by default... in any of these cases, we can just take the default value as to how to proceed
 		return DefaultTLSValue
 	}
 
-	if !*c.TLS {
+	if !*cfg.TLS {
 		// TLS is explicitly disabled, which is supported
 		return true
 	}
 
-	if c.TLSVerify == nil {
+	if cfg.TLSVerify == nil {
 		// this actually shouldn't happen since we set TLSVerify on the config object anyway
 		// But in case it does get here, be cautious and assume this is not supported.
 		return false
@@ -896,26 +928,20 @@ func loadListeners(cfg *config.Config, tlsConfig *tls.Config) ([]net.Listener, [
 	return lss, hosts, nil
 }
 
-func createAndStartCluster(cli *DaemonCli, d *daemon.Daemon) (*cluster.Cluster, error) {
+func createAndStartCluster(d *daemon.Daemon, cfg *config.Config) (*cluster.Cluster, error) {
 	name, _ := os.Hostname()
-
-	// Use a buffered channel to pass changes from store watch API to daemon
-	// A buffer allows store watch API and daemon processing to not wait for each other
-	watchStream := make(chan *swarmapi.WatchMessage, 32)
-
 	c, err := cluster.New(cluster.Config{
-		Root:                   cli.Config.Root,
+		Root:                   cfg.Root,
 		Name:                   name,
 		Backend:                d,
 		VolumeBackend:          d.VolumesService(),
 		ImageBackend:           d.ImageBackend(),
 		PluginBackend:          d.PluginManager(),
 		NetworkSubnetsProvider: d,
-		DefaultAdvertiseAddr:   cli.Config.SwarmDefaultAdvertiseAddr,
-		RaftHeartbeatTick:      cli.Config.SwarmRaftHeartbeatTick,
-		RaftElectionTick:       cli.Config.SwarmRaftElectionTick,
-		RuntimeRoot:            cli.getSwarmRunRoot(),
-		WatchStream:            watchStream,
+		DefaultAdvertiseAddr:   cfg.SwarmDefaultAdvertiseAddr,
+		RaftHeartbeatTick:      cfg.SwarmRaftHeartbeatTick,
+		RaftElectionTick:       cfg.SwarmRaftElectionTick,
+		RuntimeRoot:            getSwarmRunRoot(cfg),
 	})
 	if err != nil {
 		return nil, err
@@ -981,16 +1007,16 @@ func configureDaemonLogs(conf *config.Config) {
 	}
 }
 
-func configureProxyEnv(conf *config.Config) {
-	if p := conf.HTTPProxy; p != "" {
+func configureProxyEnv(cfg *config.Config) {
+	if p := cfg.HTTPProxy; p != "" {
 		overrideProxyEnv("HTTP_PROXY", p)
 		overrideProxyEnv("http_proxy", p)
 	}
-	if p := conf.HTTPSProxy; p != "" {
+	if p := cfg.HTTPSProxy; p != "" {
 		overrideProxyEnv("HTTPS_PROXY", p)
 		overrideProxyEnv("https_proxy", p)
 	}
-	if p := conf.NoProxy; p != "" {
+	if p := cfg.NoProxy; p != "" {
 		overrideProxyEnv("NO_PROXY", p)
 		overrideProxyEnv("no_proxy", p)
 	}
@@ -1005,4 +1031,44 @@ func overrideProxyEnv(name, val string) {
 		}).Warn("overriding existing proxy variable with value from configuration")
 	}
 	_ = os.Setenv(name, val)
+}
+
+func (cli *daemonCLI) initializeContainerd(ctx context.Context) (func(time.Duration) error, error) {
+	systemContainerdAddr, ok, err := systemContainerdRunning(honorXDG)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not determine whether the system containerd is running")
+	}
+	if ok {
+		// detected a system containerd at the given address.
+		cli.Config.ContainerdAddr = systemContainerdAddr
+		return nil, nil
+	}
+
+	log.G(ctx).Info("containerd not running, starting managed containerd")
+	opts, err := getContainerdDaemonOpts(cli.Config)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to generate containerd options")
+	}
+
+	r, err := supervisor.Start(ctx, filepath.Join(cli.Config.Root, "containerd"), filepath.Join(cli.Config.ExecRoot, "containerd"), opts...)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to start containerd")
+	}
+	cli.Config.ContainerdAddr = r.Address()
+
+	// Try to wait for containerd to shutdown
+	return r.WaitTimeout, nil
+}
+
+// cdiEnabled returns true if CDI feature wasn't explicitly disabled via
+// features.
+func cdiEnabled(conf *config.Config) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	val, ok := conf.Features["cdi"]
+	if !ok {
+		return true
+	}
+	return val
 }

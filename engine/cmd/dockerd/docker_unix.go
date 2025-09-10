@@ -3,14 +3,14 @@
 package main
 
 import (
+	"context"
 	"io"
 
 	"github.com/containerd/log"
 )
 
-func runDaemon(opts *daemonOptions) error {
-	daemonCli := NewDaemonCli()
-	return daemonCli.start(opts)
+func runDaemon(ctx context.Context, cli *daemonCLI) error {
+	return cli.start(ctx)
 }
 
 func initLogging(_, stderr io.Writer) {

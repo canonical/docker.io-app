@@ -513,10 +513,19 @@ func TestPushReservation(t *testing.T) {
 	}
 
 	for n, i := range input {
-		mask := pushReservation(i.bytePos, i.bitPos, i.mask, false)
+		// The mask should only change if a bit is set/unset. Check whether a change is
+		// expected by comparing input and expected output before calling pushReservation,
+		// because the input (i.mask) is mutated.
+		expChanged := !i.mask.equal(i.newMask)
+
+		mask, changed := pushReservation(i.bytePos, i.bitPos, i.mask, false)
 		if !mask.equal(i.newMask) {
 			t.Fatalf("Error in (%d) pushReservation():\n%s + (%d,%d):\nExp: %s\nGot: %s,",
 				n, i.mask.toString(), i.bytePos, i.bitPos, i.newMask.toString(), mask.toString())
+		}
+		if expChanged != changed {
+			t.Errorf("Error in (%d) pushReservation():\n%s + (%d,%d):\nGot changed %v, expected %v",
+				n, i.mask.toString(), i.bytePos, i.bitPos, changed, expChanged)
 		}
 	}
 }
@@ -743,15 +752,18 @@ func TestSetInRange(t *testing.T) {
 		t.Fatalf("Unexpected ordinal: %d", o)
 	}
 
-	if o, err := hnd.SetAnyInRange(0, uint64(blockLen), false); err == nil {
+	o, err = hnd.SetAnyInRange(0, uint64(blockLen), false)
+	if err == nil {
 		t.Fatalf("Expected failure. Got success with ordinal:%d", o)
 	}
 
-	if o, err := hnd.SetAnyInRange(0, firstAv-1, false); err == nil {
+	o, err = hnd.SetAnyInRange(0, firstAv-1, false)
+	if err == nil {
 		t.Fatalf("Expected failure. Got success with ordinal:%d", o)
 	}
 
-	if o, err := hnd.SetAnyInRange(111*uint64(blockLen), 161*uint64(blockLen), false); err == nil {
+	o, err = hnd.SetAnyInRange(111*uint64(blockLen), 161*uint64(blockLen), false)
+	if err == nil {
 		t.Fatalf("Expected failure. Got success with ordinal:%d", o)
 	}
 
@@ -790,7 +802,8 @@ func TestSetInRange(t *testing.T) {
 
 	// set all bit in the first range
 	for hnd.Unselected() > 22 {
-		if o, err := hnd.SetAnyInRange(0, 7, false); err != nil {
+		o, err = hnd.SetAnyInRange(0, 7, false)
+		if err != nil {
 			t.Fatalf("Unexpected failure: (%d, %v)", o, err)
 		}
 	}
@@ -805,7 +818,8 @@ func TestSetInRange(t *testing.T) {
 
 	// set all bit in a second range
 	for hnd.Unselected() > 14 {
-		if o, err := hnd.SetAnyInRange(8, 15, false); err != nil {
+		o, err = hnd.SetAnyInRange(8, 15, false)
+		if err != nil {
 			t.Fatalf("Unexpected failure: (%d, %v)", o, err)
 		}
 	}
@@ -821,7 +835,8 @@ func TestSetInRange(t *testing.T) {
 
 	// set all bit in a range which includes the last bit
 	for hnd.Unselected() > 12 {
-		if o, err := hnd.SetAnyInRange(28, 29, false); err != nil {
+		o, err = hnd.SetAnyInRange(28, 29, false)
+		if err != nil {
 			t.Fatalf("Unexpected failure: (%d, %v)", o, err)
 		}
 	}
@@ -1194,17 +1209,16 @@ func TestMarshalJSON(t *testing.T) {
 		t.Errorf("MarshalJSON() output differs from golden. Please add a new golden case to this test.")
 	}
 
-	for _, tt := range []struct {
+	for _, tc := range []struct {
 		name string
 		data []byte
 	}{
 		{name: "Live", data: marshaled},
 		{name: "Golden-v0", data: []byte(goldenV0)},
 	} {
-		tt := tt
-		t.Run("UnmarshalJSON="+tt.name, func(t *testing.T) {
+		t.Run("UnmarshalJSON="+tc.name, func(t *testing.T) {
 			hnd2 := New(0)
-			if err := hnd2.UnmarshalJSON(tt.data); err != nil {
+			if err := hnd2.UnmarshalJSON(tc.data); err != nil {
 				t.Errorf("UnmarshalJSON() err = %v", err)
 			}
 

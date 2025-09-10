@@ -27,7 +27,7 @@ func filterManifests(manifests []manifestlist.ManifestDescriptor, p ocispec.Plat
 		if descP == nil || m.Match(*descP) {
 			matches = append(matches, desc)
 			if descP != nil {
-				log.G(context.TODO()).Debugf("found match for %s with media type %s, digest %s", platforms.Format(p), desc.MediaType, desc.Digest.String())
+				log.G(context.TODO()).Debugf("found match for %s with media type %s, digest %s", platforms.FormatAll(p), desc.MediaType, desc.Digest.String())
 			}
 		}
 	}
@@ -62,11 +62,4 @@ func withDefault(p ocispec.Platform) ocispec.Platform {
 		p.Variant = def.Variant
 	}
 	return p
-}
-
-func formatPlatform(platform ocispec.Platform) string {
-	if platform.OS == "" {
-		platform = platforms.DefaultSpec()
-	}
-	return platforms.Format(platform)
 }

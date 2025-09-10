@@ -9,8 +9,6 @@ import (
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/notary"
 	"github.com/theupdateframework/notary/client"
-	"github.com/theupdateframework/notary/passphrase"
-	"github.com/theupdateframework/notary/trustpinning"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -24,12 +22,12 @@ func TestTrustRevokeCommandErrors(t *testing.T) {
 	}{
 		{
 			name:          "not-enough-args",
-			expectedError: "requires exactly 1 argument",
+			expectedError: "requires 1 argument",
 		},
 		{
 			name:          "too-many-args",
 			args:          []string{"remote1", "remote2"},
-			expectedError: "requires exactly 1 argument",
+			expectedError: "requires 1 argument",
 		},
 		{
 			name:          "sha-reference",
@@ -149,14 +147,6 @@ func TestTrustRevokeCommand(t *testing.T) {
 			assert.Check(t, is.Contains(cli.OutBuffer().String(), tc.expectedMessage))
 		})
 	}
-}
-
-func TestGetSignableRolesForTargetAndRemoveError(t *testing.T) {
-	notaryRepo, err := client.NewFileCachedRepository(t.TempDir(), "gun", "https://localhost", nil, passphrase.ConstantRetriever("password"), trustpinning.TrustPinConfig{})
-	assert.NilError(t, err)
-	target := client.Target{}
-	err = getSignableRolesForTargetAndRemove(target, notaryRepo)
-	assert.Error(t, err, "client is offline")
 }
 
 func TestRevokeTrustPromptTermination(t *testing.T) {

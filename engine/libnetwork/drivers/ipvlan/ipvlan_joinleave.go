@@ -9,6 +9,7 @@ import (
 
 	"github.com/containerd/log"
 	"github.com/docker/docker/libnetwork/driverapi"
+	"github.com/docker/docker/libnetwork/netlabel"
 	"github.com/docker/docker/libnetwork/netutils"
 	"github.com/docker/docker/libnetwork/ns"
 	"github.com/docker/docker/libnetwork/types"
@@ -29,7 +30,7 @@ const (
 )
 
 // Join method is invoked when a Sandbox is attached to an endpoint.
-func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, options map[string]interface{}) error {
+func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinfo driverapi.JoinInfo, epOpts, _ map[string]interface{}) error {
 	ctx, span := otel.Tracer("").Start(ctx, "libnetwork.drivers.ipvlan.Join", trace.WithAttributes(
 		attribute.String("nid", nid),
 		attribute.String("eid", eid),
@@ -65,15 +66,17 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 		case modeL3, modeL3S:
 			// disable gateway services to add a default gw using dev eth0 only
 			jinfo.DisableGatewayService()
-			defaultRoute, err := ifaceGateway(defaultV4RouteCidr)
-			if err != nil {
-				return err
+			if ep.addr != nil {
+				defaultRoute, err := ifaceGateway(defaultV4RouteCidr)
+				if err != nil {
+					return err
+				}
+				if err := jinfo.AddStaticRoute(defaultRoute.Destination, defaultRoute.RouteType, defaultRoute.NextHop); err != nil {
+					return fmt.Errorf("failed to set an ipvlan l3/l3s mode ipv4 default gateway: %v", err)
+				}
+				log.G(ctx).Debugf("Ipvlan Endpoint Joined with IPv4_Addr: %s, Ipvlan_Mode: %s, Parent: %s",
+					ep.addr.IP.String(), n.config.IpvlanMode, n.config.Parent)
 			}
-			if err := jinfo.AddStaticRoute(defaultRoute.Destination, defaultRoute.RouteType, defaultRoute.NextHop); err != nil {
-				return fmt.Errorf("failed to set an ipvlan l3/l3s mode ipv4 default gateway: %v", err)
-			}
-			log.G(ctx).Debugf("Ipvlan Endpoint Joined with IPv4_Addr: %s, Ipvlan_Mode: %s, Parent: %s",
-				ep.addr.IP.String(), n.config.IpvlanMode, n.config.Parent)
 			// If the endpoint has a v6 address, set a v6 default route
 			if ep.addrv6 != nil {
 				default6Route, err := ifaceGateway(defaultV6RouteCidr)
@@ -121,6 +124,10 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 				log.G(ctx).Debugf("Ipvlan Endpoint Joined with IPv6_Addr: %s, Gateway: %s, Ipvlan_Mode: %s, Parent: %s",
 					ep.addrv6.IP.String(), v6gw.String(), n.config.IpvlanMode, n.config.Parent)
 			}
+			if len(n.config.Ipv4Subnets) == 0 && len(n.config.Ipv6Subnets) == 0 {
+				// With no addresses, don't need a gateway.
+				jinfo.DisableGatewayService()
+			}
 		}
 	} else {
 		if len(n.config.Ipv4Subnets) > 0 {
@@ -137,7 +144,7 @@ func (d *driver) Join(ctx context.Context, nid, eid string, sboxKey string, jinf
 		jinfo.DisableGatewayService()
 	}
 	iNames := jinfo.InterfaceName()
-	err = iNames.SetNames(vethName, containerVethPrefix)
+	err = iNames.SetNames(vethName, containerVethPrefix, netlabel.GetIfname(epOpts))
 	if err != nil {
 		return err
 	}

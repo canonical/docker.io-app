@@ -8,7 +8,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -17,6 +16,13 @@ import (
 func WithName(name string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
 		c.Name = name
+	}
+}
+
+// WithHostname sets the hostname of the container
+func WithHostname(name string) func(*TestContainerConfig) {
+	return func(c *TestContainerConfig) {
+		c.Config.Hostname = name
 	}
 }
 
@@ -37,7 +43,7 @@ func WithImage(image string) func(*TestContainerConfig) {
 // WithCmd sets the commands of the container
 func WithCmd(cmds ...string) func(*TestContainerConfig) {
 	return func(c *TestContainerConfig) {
-		c.Config.Cmd = strslice.StrSlice(cmds)
+		c.Config.Cmd = cmds
 	}
 }
 

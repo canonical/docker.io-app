@@ -10,8 +10,8 @@ import (
 
 	"github.com/containerd/log"
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	networktypes "github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/network"
@@ -23,6 +23,7 @@ import (
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/go-connections/nat"
 	"github.com/moby/sys/signal"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 )
@@ -68,36 +69,24 @@ func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, e
 	return ctr, nil
 }
 
-// Exists returns a true if a container of the specified ID or name exists,
-// false otherwise.
-//
-// Deprecated: use [Daemon.GetContainer] to look up a container by ID, Name, or ID-prefix. This function will be removed in the next release.
-func (daemon *Daemon) Exists(id string) bool {
-	c, _ := daemon.GetContainer(id)
-	return c != nil
-}
-
-// IsPaused returns a bool indicating if the specified container is paused.
-//
-// Deprecated: use [Daemon.GetContainer] to look up a container by ID, Name, or ID-prefix, and use [container.State.IsPaused]. This function will be removed in the next release.
-func (daemon *Daemon) IsPaused(id string) bool {
-	c, _ := daemon.GetContainer(id)
-	return c.State.IsPaused()
-}
-
-func (daemon *Daemon) containerRoot(id string) string {
-	return filepath.Join(daemon.repository, id)
-}
-
 // Load reads the contents of a container from disk
 // This is typically done at startup.
 func (daemon *Daemon) load(id string) (*container.Container, error) {
-	ctr := daemon.newBaseContainer(id)
-
+	ctr := container.NewBaseContainer(id, filepath.Join(daemon.repository, id))
 	if err := ctr.FromDisk(); err != nil {
 		return nil, err
 	}
 	selinux.ReserveLabel(ctr.ProcessLabel)
+
+	if ctr.ImagePlatform.Architecture == "" {
+		migration := daemonPlatformReader{
+			imageService: daemon.imageService,
+		}
+		if daemon.containerdClient != nil {
+			migration.content = daemon.containerdClient.ContentStore()
+		}
+		migrateContainerOS(context.TODO(), migration, ctr)
+	}
 
 	if ctr.ID != id {
 		return ctr, fmt.Errorf("Container %s is stored at %s", ctr.ID, id)
@@ -107,7 +96,14 @@ func (daemon *Daemon) load(id string) (*container.Container, error) {
 }
 
 // Register makes a container object usable by the daemon as <container.ID>
+//
+// Deprecated: this function is unused and will be removed in the next release.
 func (daemon *Daemon) Register(c *container.Container) error {
+	return daemon.register(context.TODO(), c)
+}
+
+// register makes a container object usable by the daemon as [container.Container.ID].
+func (daemon *Daemon) register(ctx context.Context, c *container.Container) error {
 	// Attach to stdout and stderr
 	if c.Config.OpenStdin {
 		c.StreamConfig.NewInputPipes()
@@ -120,11 +116,21 @@ func (daemon *Daemon) Register(c *container.Container) error {
 	c.Lock()
 	defer c.Unlock()
 
+	// FIXME(thaJeztah): this logic may not be atomic:
+	//
+	// - daemon.containers.Add does not promise to "add", allows overwriting a container with the given ID.
+	// - c.CheckpointTo may fail, in which case we registered a container, but failed to write to disk
+	//
+	// We should consider:
+	//
+	// - changing the signature of containers.Add to return an error if the
+	//   given ID exists (potentially adding an alternative to "set" / "update")
+	// - adding a defer to rollback the "Add" when failing to CheckPoint.
 	daemon.containers.Add(c.ID, c)
-	return c.CheckpointTo(context.TODO(), daemon.containersReplica)
+	return c.CheckpointTo(ctx, daemon.containersReplica)
 }
 
-func (daemon *Daemon) newContainer(name string, operatingSystem string, config *containertypes.Config, hostConfig *containertypes.HostConfig, imgID image.ID, managed bool) (*container.Container, error) {
+func (daemon *Daemon) newContainer(name string, platform ocispec.Platform, config *containertypes.Config, hostConfig *containertypes.HostConfig, imgID image.ID, managed bool) (*container.Container, error) {
 	var (
 		id  string
 		err error
@@ -134,19 +140,20 @@ func (daemon *Daemon) newContainer(name string, operatingSystem string, config *
 		return nil, err
 	}
 
-	if hostConfig.NetworkMode.IsHost() {
-		if config.Hostname == "" {
+	if config.Hostname == "" {
+		if hostConfig.NetworkMode.IsHost() {
 			config.Hostname, err = os.Hostname()
 			if err != nil {
 				return nil, errdefs.System(err)
 			}
+		} else {
+			// default hostname is the container's short-ID
+			config.Hostname = id[:12]
 		}
-	} else {
-		daemon.generateHostname(id, config)
 	}
-	entrypoint, args := daemon.getEntrypointAndArgs(config.Entrypoint, config.Cmd)
+	entrypoint, args := getEntrypointAndArgs(config.Entrypoint, config.Cmd)
 
-	base := daemon.newBaseContainer(id)
+	base := container.NewBaseContainer(id, filepath.Join(daemon.repository, id))
 	base.Created = time.Now().UTC()
 	base.Managed = managed
 	base.Path = entrypoint
@@ -157,8 +164,16 @@ func (daemon *Daemon) newContainer(name string, operatingSystem string, config *
 	base.NetworkSettings = &network.Settings{}
 	base.Name = name
 	base.Driver = daemon.imageService.StorageDriver()
-	base.OS = operatingSystem
+	base.ImagePlatform = platform
+	base.OS = platform.OS //nolint:staticcheck // ignore SA1019: field is deprecated, but still set for compatibility
 	return base, err
+}
+
+func getEntrypointAndArgs(configEntrypoint, configCmd []string) (string, []string) {
+	if len(configEntrypoint) == 0 {
+		return configCmd[0], configCmd[1:]
+	}
+	return configEntrypoint[0], append(configEntrypoint[1:], configCmd...)
 }
 
 // GetByName returns a container given a name.
@@ -179,26 +194,6 @@ func (daemon *Daemon) GetByName(name string) (*container.Container, error) {
 		return nil, fmt.Errorf("Could not find container for entity id %s", id)
 	}
 	return e, nil
-}
-
-// newBaseContainer creates a new container with its initial
-// configuration based on the root storage from the daemon.
-func (daemon *Daemon) newBaseContainer(id string) *container.Container {
-	return container.NewBaseContainer(id, daemon.containerRoot(id))
-}
-
-func (daemon *Daemon) getEntrypointAndArgs(configEntrypoint strslice.StrSlice, configCmd strslice.StrSlice) (string, []string) {
-	if len(configEntrypoint) != 0 {
-		return configEntrypoint[0], append(configEntrypoint[1:], configCmd...)
-	}
-	return configCmd[0], configCmd[1:]
-}
-
-func (daemon *Daemon) generateHostname(id string, config *containertypes.Config) {
-	// Generate default hostname
-	if config.Hostname == "" {
-		config.Hostname = id[:12]
-	}
 }
 
 func (daemon *Daemon) setSecurityOptions(cfg *config.Config, container *container.Container, hostConfig *containertypes.HostConfig) error {
@@ -231,20 +226,22 @@ func (daemon *Daemon) setHostConfig(container *container.Container, hostConfig *
 
 // verifyContainerSettings performs validation of the hostconfig and config
 // structures.
-func (daemon *Daemon) verifyContainerSettings(daemonCfg *configStore, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, err error) {
+func (daemon *Daemon) verifyContainerSettings(daemonCfg *configStore, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, _ error) {
 	// First perform verification of settings common across all platforms.
-	if err = validateContainerConfig(config); err != nil {
-		return warnings, err
+	if err := validateContainerConfig(config); err != nil {
+		return nil, err
 	}
-	if err := validateHostConfig(hostConfig); err != nil {
+
+	warns, err := validateHostConfig(hostConfig)
+	warnings = append(warnings, warns...)
+	if err != nil {
 		return warnings, err
 	}
 
 	// Now do platform-specific verification
-	warnings, err = verifyPlatformContainerSettings(daemon, daemonCfg, hostConfig, update)
-	for _, w := range warnings {
-		log.G(context.TODO()).Warn(w)
-	}
+	warns, err = verifyPlatformContainerSettings(daemon, daemonCfg, hostConfig, update)
+	warnings = append(warnings, warns...)
+
 	return warnings, err
 }
 
@@ -269,45 +266,50 @@ func validateContainerConfig(config *containertypes.Config) error {
 	return validateHealthCheck(config.Healthcheck)
 }
 
-func validateHostConfig(hostConfig *containertypes.HostConfig) error {
+func validateHostConfig(hostConfig *containertypes.HostConfig) (warnings []string, _ error) {
 	if hostConfig == nil {
-		return nil
+		return nil, nil
 	}
 
 	if hostConfig.AutoRemove && !hostConfig.RestartPolicy.IsNone() {
-		return errors.Errorf("can't create 'AutoRemove' container with restart policy")
+		return warnings, errors.Errorf("can't create 'AutoRemove' container with restart policy")
 	}
 	// Validate mounts; check if host directories still exist
 	parser := volumemounts.NewParser()
 	for _, c := range hostConfig.Mounts {
 		cfg := c
+
+		if cfg.Type == mount.TypeImage {
+			warnings = append(warnings, "Image mount is an experimental feature")
+		}
+
 		if err := parser.ValidateMountConfig(&cfg); err != nil {
-			return err
+			return warnings, err
 		}
 	}
 	for _, extraHost := range hostConfig.ExtraHosts {
 		if _, err := opts.ValidateExtraHost(extraHost); err != nil {
-			return err
+			return warnings, err
 		}
 	}
 	if err := validatePortBindings(hostConfig.PortBindings); err != nil {
-		return err
+		return warnings, err
 	}
 	if err := containertypes.ValidateRestartPolicy(hostConfig.RestartPolicy); err != nil {
-		return err
+		return warnings, err
 	}
 	if err := validateCapabilities(hostConfig); err != nil {
-		return err
+		return warnings, err
 	}
 	if !hostConfig.Isolation.IsValid() {
-		return errors.Errorf("invalid isolation '%s' on %s", hostConfig.Isolation, runtime.GOOS)
+		return warnings, errors.Errorf("invalid isolation '%s' on %s", hostConfig.Isolation, runtime.GOOS)
 	}
 	for k := range hostConfig.Annotations {
 		if k == "" {
-			return errors.Errorf("invalid Annotations: the empty string is not permitted as an annotation key")
+			return warnings, errors.Errorf("invalid Annotations: the empty string is not permitted as an annotation key")
 		}
 	}
-	return nil
+	return warnings, nil
 }
 
 func validateCapabilities(hostConfig *containertypes.HostConfig) error {

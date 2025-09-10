@@ -9,7 +9,7 @@ Return low-level information on Docker objects
 |:---------------------------------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | [`-f`](#format), [`--format`](#format) | `string` |         | Format output using a custom template:<br>'json':             Print in JSON format<br>'TEMPLATE':         Print output using the given Go template.<br>Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates |
 | [`-s`](#size), [`--size`](#size)       | `bool`   |         | Display total file sizes if the type is container                                                                                                                                                                                                                  |
-| [`--type`](#type)                      | `string` |         | Return JSON for specified type                                                                                                                                                                                                                                     |
+| [`--type`](#type)                      | `string` |         | Only inspect objects of the given type                                                                                                                                                                                                                             |
 
 
 <!---MARKER_GEN_END-->
@@ -20,6 +20,8 @@ Docker inspect provides detailed information on constructs controlled by Docker.
 
 By default, `docker inspect` will render results in a JSON array.
 
+## Examples
+
 ### <a name="format"></a> Format the output (--format)
 
 If a format is specified, the given template will be executed for each result.
@@ -29,7 +31,7 @@ all the details of the format.
 
 ### <a name="type"></a> Specify target type (--type)
 
-`--type container|image|node|network|secret|service|volume|task|plugin`
+`--type config|container|image|node|network|secret|service|volume|task|plugin`
 
 The `docker inspect` command matches any type of object by either ID or name. In
 some cases multiple type of objects (for example, a container and a volume)
@@ -72,8 +74,6 @@ $ docker exec database fallocate -l 1000 /newfile
 $ docker inspect --size database -f '{{ .SizeRw }}'
 12288
 ```
-
-## Examples
 
 ### Get an instance's IP address
 

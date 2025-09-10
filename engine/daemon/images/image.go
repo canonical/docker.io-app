@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/leases"
+	"github.com/containerd/containerd/v2/core/content"
+	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/leases"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -16,7 +16,6 @@ import (
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -46,11 +45,6 @@ type manifest struct {
 	Config ocispec.Descriptor `json:"config"`
 }
 
-func (i *ImageService) PrepareSnapshot(ctx context.Context, id string, parentImage string, platform *ocispec.Platform, setupInit func(string) error) error {
-	// Only makes sense when containerd image store is used
-	panic("not implemented")
-}
-
 func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.Image, platform ocispec.Platform) (bool, error) {
 	ls, err := i.leases.ListResources(ctx, leases.Lease{ID: imageKey(img.ID().String())})
 	if err != nil {
@@ -60,7 +54,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 		log.G(ctx).WithFields(log.Fields{
 			"error":           err,
 			"image":           img.ID,
-			"desiredPlatform": platforms.Format(platform),
+			"desiredPlatform": platforms.FormatAll(platform),
 		}).Error("Error looking up image leases")
 		return false, err
 	}
@@ -81,7 +75,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 	for _, r := range ls {
 		logger := log.G(ctx).WithFields(log.Fields{
 			"image":           img.ID,
-			"desiredPlatform": platforms.Format(platform),
+			"desiredPlatform": platforms.FormatAll(platform),
 			"resourceID":      r.ID,
 			"resourceType":    r.Type,
 		})
@@ -116,7 +110,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 
 		for _, md := range ml.Manifests {
 			switch md.MediaType {
-			case ocispec.MediaTypeImageManifest, images.MediaTypeDockerSchema2Manifest:
+			case ocispec.MediaTypeImageManifest, c8dimages.MediaTypeDockerSchema2Manifest:
 			default:
 				continue
 			}
@@ -127,7 +121,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 				Variant:      md.Platform.Variant,
 			}
 			if !comparer.Match(p) {
-				logger.WithField("otherPlatform", platforms.Format(p)).Debug("Manifest is not a match")
+				logger.WithField("otherPlatform", platforms.FormatAll(p)).Debug("Manifest is not a match")
 				continue
 			}
 
@@ -164,48 +158,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 }
 
 // GetImage returns an image corresponding to the image referred to by refOrID.
-func (i *ImageService) GetImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (*image.Image, error) {
-	img, err := i.getImage(ctx, refOrID, options)
-	if err != nil {
-		return nil, err
-	}
-	if options.Details {
-		var size int64
-		var layerMetadata map[string]string
-		layerID := img.RootFS.ChainID()
-		if layerID != "" {
-			l, err := i.layerStore.Get(layerID)
-			if err != nil {
-				return nil, err
-			}
-			defer layer.ReleaseAndLog(i.layerStore, l)
-			size = l.Size()
-			layerMetadata, err = l.Metadata()
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		lastUpdated, err := i.imageStore.GetLastUpdated(img.ID())
-		if err != nil {
-			return nil, err
-		}
-		img.Details = &image.Details{
-			References:  i.referenceStore.References(img.ID().Digest()),
-			Size:        size,
-			Metadata:    layerMetadata,
-			Driver:      i.layerStore.DriverName(),
-			LastUpdated: lastUpdated,
-		}
-	}
-	return img, nil
-}
-
-func (i *ImageService) GetImageManifest(ctx context.Context, refOrID string, options backend.GetImageOpts) (*ocispec.Descriptor, error) {
-	panic("not implemented")
-}
-
-func (i *ImageService) getImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (retImg *image.Image, retErr error) {
+func (i *ImageService) GetImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (retImg *image.Image, retErr error) {
 	defer func() {
 		if retErr != nil || retImg == nil || options.Platform == nil {
 			return
@@ -242,7 +195,7 @@ func (i *ImageService) getImage(ctx context.Context, refOrID string, options bac
 		if ref, err := reference.ParseNamed(refOrID); err == nil {
 			imgName = reference.FamiliarString(ref)
 		}
-		retErr = errdefs.NotFound(errors.Errorf("image with reference %s was found but its platform (%s) does not match the specified platform (%s)", imgName, platforms.Format(imgPlat), platforms.Format(p)))
+		retErr = errdefs.NotFound(errors.Errorf("image with reference %s was found but its platform (%s) does not match the specified platform (%s)", imgName, platforms.FormatAll(imgPlat), platforms.FormatAll(p)))
 	}()
 	ref, err := reference.ParseAnyReference(refOrID)
 	if err != nil {
@@ -303,9 +256,9 @@ func (m *onlyFallbackMatcher) Match(other ocispec.Platform) bool {
 		// If there is a variant then this fallback does not apply, and there is no match
 		return false
 	}
-	otherN := platforms.Normalize(other)
-	otherN.Variant = "" // normalization adds a default variant... which is the whole problem with `platforms.Only`
 
-	return m.p.OS == otherN.OS &&
-		m.p.Architecture == otherN.Architecture
+	// note that platforms.Normalize adds a default variant... which is the
+	// whole problem with [platforms.Only], so we can't match on that.
+	otherN := platforms.Normalize(other)
+	return m.p.OS == otherN.OS && m.p.Architecture == otherN.Architecture
 }

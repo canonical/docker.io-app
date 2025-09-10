@@ -20,7 +20,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-type ds interface {
+type driverLister interface {
 	GetDriverList() []string
 }
 
@@ -34,8 +34,8 @@ type VolumeEventLogger interface {
 // This is used as the main access point for volumes to higher level services and the API.
 type VolumesService struct {
 	vs           *VolumeStore
-	ds           ds
-	pruneRunning int32
+	ds           driverLister
+	pruneRunning atomic.Bool
 	eventLogger  VolumeEventLogger
 }
 
@@ -72,8 +72,11 @@ const AnonymousLabel = "com.docker.volume.anonymous"
 func (s *VolumesService) Create(ctx context.Context, name, driverName string, options ...opts.CreateOption) (*volumetypes.Volume, error) {
 	if name == "" {
 		name = stringid.GenerateRandomID()
+		if driverName == "" {
+			driverName = volume.DefaultDriverName
+		}
 		options = append(options, opts.WithCreateLabel(AnonymousLabel, ""))
-		log.G(ctx).WithField("volume-name", name).Debug("Creating anonymous volume")
+		log.G(ctx).WithFields(log.Fields{"volume-name": name, "driver": driverName}).Debug("Creating anonymous volume")
 	} else {
 		log.G(ctx).WithField("volume-name", name).Debug("Creating named volume")
 	}
@@ -207,10 +210,10 @@ func (s *VolumesService) LocalVolumesSize(ctx context.Context) ([]*volumetypes.V
 // Note that this intentionally skips volumes with mount options as there would
 // be no space reclaimed in this case.
 func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*volumetypes.PruneReport, error) {
-	if !atomic.CompareAndSwapInt32(&s.pruneRunning, 0, 1) {
+	if !s.pruneRunning.CompareAndSwap(false, true) {
 		return nil, errdefs.Conflict(errors.New("a prune operation is already running"))
 	}
-	defer atomic.StoreInt32(&s.pruneRunning, 0)
+	defer s.pruneRunning.Store(false)
 
 	if err := withPrune(filter); err != nil {
 		return nil, err
@@ -259,18 +262,18 @@ func (s *VolumesService) Prune(ctx context.Context, filter filters.Args) (*volum
 
 // List gets the list of volumes which match the past in filters
 // If filters is nil or empty all volumes are returned.
-func (s *VolumesService) List(ctx context.Context, filter filters.Args) (volumesOut []*volumetypes.Volume, warnings []string, err error) {
+func (s *VolumesService) List(ctx context.Context, filter filters.Args) (volumes []*volumetypes.Volume, warnings []string, _ error) {
 	by, err := filtersToBy(filter, acceptedListFilters)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	volumes, warnings, err := s.vs.Find(ctx, by)
+	vols, warns, err := s.vs.Find(ctx, by)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return s.volumesToAPI(ctx, volumes, useCachedPath(true)), warnings, nil
+	return s.volumesToAPI(ctx, vols, useCachedPath(true)), warns, nil
 }
 
 // Shutdown shuts down the image service and dependencies

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api"
 	containertypes "github.com/docker/docker/api/types/container"
 	mounttypes "github.com/docker/docker/api/types/mount"
@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/integration/internal/container"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/testutil"
+	"github.com/docker/docker/volume"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"gotest.tools/v3/assert"
@@ -26,6 +27,10 @@ import (
 	"gotest.tools/v3/skip"
 )
 
+// testNonExistingPlugin is a special plugin-name, which overrides defaultTimeOut in tests.
+// this is a copy of https://github.com/moby/moby/blob/9e00a63d65434cdedc444e79a2b33a7c202b10d8/pkg/plugins/client.go#L253-L254
+const testNonExistingPlugin = "this-plugin-does-not-exist"
+
 func TestContainerNetworkMountsNoChown(t *testing.T) {
 	// chown only applies to Linux bind mounted volumes; must be same host to verify
 	skip.If(t, testEnv.IsRemoteDaemon)
@@ -33,8 +38,6 @@ func TestContainerNetworkMountsNoChown(t *testing.T) {
 	ctx := setupTest(t)
 
 	tmpDir := fs.NewDir(t, "network-file-mounts", fs.WithMode(0o755), fs.WithFile("nwfile", "network file bind mount", fs.WithMode(0o644)))
-	defer tmpDir.Remove()
-
 	tmpNWFileMount := tmpDir.Join("nwfile")
 
 	config := containertypes.Config{
@@ -221,13 +224,9 @@ func TestContainerBindMountNonRecursive(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	tmpDir1 := fs.NewDir(t, "tmpdir1", fs.WithMode(0o755),
-		fs.WithDir("mnt", fs.WithMode(0o755)))
-	defer tmpDir1.Remove()
+	tmpDir1 := fs.NewDir(t, "tmpdir1", fs.WithMode(0o755), fs.WithDir("mnt", fs.WithMode(0o755)))
 	tmpDir1Mnt := filepath.Join(tmpDir1.Path(), "mnt")
-	tmpDir2 := fs.NewDir(t, "tmpdir2", fs.WithMode(0o755),
-		fs.WithFile("file", "should not be visible when NonRecursive", fs.WithMode(0o644)))
-	defer tmpDir2.Remove()
+	tmpDir2 := fs.NewDir(t, "tmpdir2", fs.WithMode(0o755), fs.WithFile("file", "should not be visible when NonRecursive", fs.WithMode(0o644)))
 
 	err := mount.Mount(tmpDir2.Path(), tmpDir1Mnt, "none", "bind,ro")
 	if err != nil {
@@ -265,7 +264,7 @@ func TestContainerBindMountNonRecursive(t *testing.T) {
 	}
 
 	for _, c := range containers {
-		poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, c), poll.WithDelay(100*time.Millisecond))
+		poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, c))
 	}
 }
 
@@ -279,9 +278,7 @@ func TestContainerVolumesMountedAsShared(t *testing.T) {
 	ctx := setupTest(t)
 
 	// Prepare a source directory to bind mount
-	tmpDir1 := fs.NewDir(t, "volume-source", fs.WithMode(0o755),
-		fs.WithDir("mnt1", fs.WithMode(0o755)))
-	defer tmpDir1.Remove()
+	tmpDir1 := fs.NewDir(t, "volume-source", fs.WithMode(0o755), fs.WithDir("mnt1", fs.WithMode(0o755)))
 	tmpDir1Mnt := filepath.Join(tmpDir1.Path(), "mnt1")
 
 	// Convert this directory into a shared mount point so that we do
@@ -311,7 +308,7 @@ func TestContainerVolumesMountedAsShared(t *testing.T) {
 
 	apiClient := testEnv.APIClient()
 	containerID := container.Run(ctx, t, apiClient, container.WithPrivileged(true), container.WithMount(sharedMount), container.WithCmd(bindMountCmd...))
-	poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, containerID), poll.WithDelay(100*time.Millisecond))
+	poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, containerID))
 
 	// Make sure a bind mount under a shared volume propagated to host.
 	if mounted, _ := mountinfo.Mounted(tmpDir1Mnt); !mounted {
@@ -331,16 +328,12 @@ func TestContainerVolumesMountedAsSlave(t *testing.T) {
 	ctx := testutil.StartSpan(baseContext, t)
 
 	// Prepare a source directory to bind mount
-	tmpDir1 := fs.NewDir(t, "volume-source", fs.WithMode(0o755),
-		fs.WithDir("mnt1", fs.WithMode(0o755)))
-	defer tmpDir1.Remove()
+	tmpDir1 := fs.NewDir(t, "volume-source", fs.WithMode(0o755), fs.WithDir("mnt1", fs.WithMode(0o755)))
 	tmpDir1Mnt := filepath.Join(tmpDir1.Path(), "mnt1")
 
 	// Prepare a source directory with file in it. We will bind mount this
 	// directory and see if file shows up.
-	tmpDir2 := fs.NewDir(t, "volume-source2", fs.WithMode(0o755),
-		fs.WithFile("slave-testfile", "Test", fs.WithMode(0o644)))
-	defer tmpDir2.Remove()
+	tmpDir2 := fs.NewDir(t, "volume-source2", fs.WithMode(0o755), fs.WithFile("slave-testfile", "Test", fs.WithMode(0o644)))
 
 	// Convert this directory into a shared mount point so that we do
 	// not rely on propagation properties of parent mount.
@@ -402,26 +395,49 @@ func TestContainerVolumeAnonymous(t *testing.T) {
 	skip.If(t, testEnv.IsRemoteDaemon)
 
 	ctx := setupTest(t)
-
-	mntOpts := mounttypes.Mount{Type: mounttypes.TypeVolume, Target: "/foo"}
-
 	apiClient := testEnv.APIClient()
-	cID := container.Create(ctx, t, apiClient, container.WithMount(mntOpts))
 
-	inspect := container.Inspect(ctx, t, apiClient, cID)
-	assert.Assert(t, is.Len(inspect.HostConfig.Mounts, 1))
-	assert.Check(t, is.Equal(inspect.HostConfig.Mounts[0], mntOpts))
+	t.Run("no driver specified", func(t *testing.T) {
+		mntOpts := mounttypes.Mount{Type: mounttypes.TypeVolume, Target: "/foo"}
+		cID := container.Create(ctx, t, apiClient, container.WithMount(mntOpts))
 
-	assert.Assert(t, is.Len(inspect.Mounts, 1))
-	volName := inspect.Mounts[0].Name
-	assert.Check(t, is.Len(volName, 64), "volume name should be 64 bytes (from stringid.GenerateRandomID())")
+		inspect := container.Inspect(ctx, t, apiClient, cID)
+		assert.Assert(t, is.Len(inspect.HostConfig.Mounts, 1))
+		assert.Check(t, is.Equal(inspect.HostConfig.Mounts[0], mntOpts))
 
-	volInspect, err := apiClient.VolumeInspect(ctx, volName)
-	assert.NilError(t, err)
+		assert.Assert(t, is.Len(inspect.Mounts, 1))
+		vol := inspect.Mounts[0]
+		assert.Check(t, is.Len(vol.Name, 64), "volume name should be 64 bytes (from stringid.GenerateRandomID())")
+		assert.Check(t, is.Equal(vol.Driver, volume.DefaultDriverName))
 
-	// see [daemon.AnonymousLabel]; we don't want to import the daemon package here.
-	const expectedAnonymousLabel = "com.docker.volume.anonymous"
-	assert.Check(t, is.Contains(volInspect.Labels, expectedAnonymousLabel))
+		volInspect, err := apiClient.VolumeInspect(ctx, vol.Name)
+		assert.NilError(t, err)
+
+		// see [daemon.AnonymousLabel]; we don't want to import the daemon package here.
+		const expectedAnonymousLabel = "com.docker.volume.anonymous"
+		assert.Check(t, is.Contains(volInspect.Labels, expectedAnonymousLabel))
+		assert.Check(t, is.Equal(volInspect.Driver, volume.DefaultDriverName))
+	})
+
+	// Verify that specifying a custom driver is still taken into account.
+	t.Run("custom driver", func(t *testing.T) {
+		config := container.NewTestConfig(container.WithMount(mounttypes.Mount{
+			Type:   mounttypes.TypeVolume,
+			Target: "/foo",
+			VolumeOptions: &mounttypes.VolumeOptions{
+				DriverConfig: &mounttypes.Driver{
+					Name: testNonExistingPlugin,
+				},
+			},
+		}))
+		_, err := apiClient.ContainerCreate(ctx, config.Config, config.HostConfig, config.NetworkingConfig, config.Platform, config.Name)
+		// We use [testNonExistingPlugin] for this, which produces an error
+		// when used, which we use as indicator that the driver was passed
+		// through. We should have a cleaner way for this, but that would
+		// require a custom volume plugin to be installed.
+		assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
+		assert.Check(t, is.ErrorContains(err, fmt.Sprintf(`plugin %q not found`, testNonExistingPlugin)))
+	})
 }
 
 // Regression test for #38995 and #43390.
@@ -605,7 +621,7 @@ func TestContainerBindMountRecursivelyReadOnly(t *testing.T) {
 	}
 
 	for _, c := range containers {
-		poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, c), poll.WithDelay(100*time.Millisecond))
+		poll.WaitOn(t, container.IsSuccessful(ctx, apiClient, c))
 	}
 }
 

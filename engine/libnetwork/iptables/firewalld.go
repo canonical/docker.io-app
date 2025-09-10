@@ -6,26 +6,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/containerd/log"
+	"github.com/docker/docker/pkg/rootless"
 	dbus "github.com/godbus/dbus/v5"
 	"github.com/pkg/errors"
-)
-
-// IPV defines the table string
-//
-// Deprecated: use [IPVersion]
-type IPV = IPVersion
-
-const (
-	// Iptables point ipv4 table
-	//
-	// Deprecated: use [IPv4].
-	Iptables IPV = IPv4
-	// IP6Tables point to ipv6 table
-	//
-	// Deprecated: use [IPv6].
-	IP6Tables IPV = IPv6
 )
 
 const (
@@ -47,14 +35,44 @@ type Conn struct {
 var (
 	connection *Conn
 
-	firewalldRunning bool      // is Firewalld service running
-	onReloaded       []*func() // callbacks when Firewalld has been reloaded
+	firewalldInitCalled bool
+	firewalldRunning    bool // is Firewalld service running
+	// Time of the last firewalld reload.
+	firewalldReloadedAt atomic.Value
+	// Mutex to serialise firewalld reload callbacks.
+	firewalldReloadMu sync.Mutex
+	onReloaded        []*func() // callbacks when Firewalld has been reloaded
 )
+
+// UsingFirewalld returns true if iptables rules will be applied via firewalld's
+// passthrough interface. The error return is non-nil if the status cannot be
+// determined because the initialisation function has not been called.
+func UsingFirewalld() (bool, error) {
+	// If called before startup has completed, the firewall backend is unknown.
+	// But, if running rootless, the init function is not called because
+	// firewalld will be running in the host's netns, not in rootlesskit's.
+	if !firewalldInitCalled && !rootless.RunningWithRootlessKit() {
+		return false, fmt.Errorf("iptables.firewalld is not initialised")
+	}
+	return firewalldRunning, nil
+}
+
+// FirewalldReloadedAt returns the time at which the daemon last completed a
+// firewalld reload, or a zero-valued time.Time if it has not been reloaded
+// since the daemon started.
+func FirewalldReloadedAt() time.Time {
+	val := firewalldReloadedAt.Load()
+	if val == nil {
+		return time.Time{}
+	}
+	return val.(time.Time)
+}
 
 // firewalldInit initializes firewalld management code.
 func firewalldInit() error {
 	var err error
 
+	firewalldInitCalled = true
 	if connection, err = newConnection(); err != nil {
 		return fmt.Errorf("Failed to connect to D-Bus system bus: %v", err)
 	}
@@ -149,9 +167,12 @@ func connectionLost() {
 
 // call all callbacks
 func reloaded() {
+	firewalldReloadMu.Lock()
+	defer firewalldReloadMu.Unlock()
 	for _, pf := range onReloaded {
 		(*pf)()
 	}
+	firewalldReloadedAt.Store(time.Now())
 }
 
 // OnReloaded add callback
@@ -172,13 +193,6 @@ func checkRunning() bool {
 	var zone string
 	err := connection.sysObj.Call(dbusInterface+".getDefaultZone", 0).Store(&zone)
 	return err == nil
-}
-
-// Passthrough method simply passes args through to iptables/ip6tables.
-//
-// Deprecated: this function is only used internally and will be removed in the next release.
-func Passthrough(ipv IPVersion, args ...string) ([]byte, error) {
-	return passthrough(ipv, args...)
 }
 
 // passthrough method simply passes args through to iptables/ip6tables

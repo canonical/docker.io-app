@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-inspect - Return low-level information on Docker objects
@@ -316,16 +316,12 @@ $ docker inspect ded7cd95e059
 Refer to https://docs.docker.com/go/formatting/ for more information about formatting output with templates
 
 .PP
-\fB-h\fP, \fB--help\fP[=false]
-	help for inspect
-
-.PP
 \fB-s\fP, \fB--size\fP[=false]
 	Display total file sizes if the type is container
 
 .PP
 \fB--type\fP=""
-	Return JSON for specified type
+	Only inspect objects of the given type
 
 
 .SH SEE ALSO

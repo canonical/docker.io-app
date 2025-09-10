@@ -23,9 +23,10 @@ type connectOptions struct {
 	aliases      []string
 	linklocalips []string
 	driverOpts   []string
+	gwPriority   int
 }
 
-func newConnectCommand(dockerCli command.Cli) *cobra.Command {
+func newConnectCommand(dockerCLI command.Cli) *cobra.Command {
 	options := connectOptions{
 		links: opts.NewListOpts(opts.ValidateLink),
 	}
@@ -37,14 +38,14 @@ func newConnectCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.network = args[0]
 			options.container = args[1]
-			return runConnect(cmd.Context(), dockerCli.Client(), options)
+			return runConnect(cmd.Context(), dockerCLI.Client(), options)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 0 {
-				return completion.NetworkNames(dockerCli)(cmd, args, toComplete)
+				return completion.NetworkNames(dockerCLI)(cmd, args, toComplete)
 			}
 			nw := args[0]
-			return completion.ContainerNames(dockerCli, true, not(isConnected(nw)))(cmd, args, toComplete)
+			return completion.ContainerNames(dockerCLI, true, not(isConnected(nw)))(cmd, args, toComplete)
 		},
 	}
 
@@ -55,6 +56,7 @@ func newConnectCommand(dockerCli command.Cli) *cobra.Command {
 	flags.StringSliceVar(&options.aliases, "alias", []string{}, "Add network-scoped alias for the container")
 	flags.StringSliceVar(&options.linklocalips, "link-local-ip", []string{}, "Add a link-local address for the container")
 	flags.StringSliceVar(&options.driverOpts, "driver-opt", []string{}, "driver options for the network")
+	flags.IntVar(&options.gwPriority, "gw-priority", 0, "Highest gw-priority provides the default gateway. Accepts positive and negative values.")
 	return cmd
 }
 
@@ -70,9 +72,10 @@ func runConnect(ctx context.Context, apiClient client.NetworkAPIClient, options 
 			IPv6Address:  options.ipv6address,
 			LinkLocalIPs: options.linklocalips,
 		},
-		Links:      options.links.GetAll(),
+		Links:      options.links.GetSlice(),
 		Aliases:    options.aliases,
 		DriverOpts: driverOpts,
+		GwPriority: options.gwPriority,
 	})
 }
 

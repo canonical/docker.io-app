@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/docker/docker/internal/nlwrap"
 	"github.com/docker/docker/internal/testutils/netnsutils"
@@ -23,11 +22,11 @@ import (
 )
 
 const (
-	vethName1     = "wierdlongname1"
-	vethName2     = "wierdlongname2"
-	vethName3     = "wierdlongname3"
-	vethName4     = "wierdlongname4"
-	sboxIfaceName = "containername"
+	vethName1       = "wierdlongname1"
+	vethName2       = "wierdlongname2"
+	vethName3       = "wierdlongname3"
+	vethName4       = "wierdlongname4"
+	sboxIfacePrefix = "containername"
 )
 
 func generateRandomName(prefix string, size int) (string, error) {
@@ -51,11 +50,6 @@ func newKey(t *testing.T) (string, error) {
 		return "", err
 	}
 	_ = f.Close()
-
-	// Set the rpmCleanupPeriod to be low to make the test run quicker
-	gpmLock.Lock()
-	gpmCleanupPeriod = 2 * time.Second
-	gpmLock.Unlock()
 
 	return name, nil
 }
@@ -91,16 +85,16 @@ func newInfo(t *testing.T, hnd nlwrap.Handle) (*Namespace, error) {
 	// This is needed for cleanup on DeleteEndpoint()
 	intf1 := &Interface{
 		srcName:     vethName2,
-		dstName:     sboxIfaceName,
+		dstPrefix:   sboxIfacePrefix,
 		address:     addr,
 		addressIPv6: addrv6,
 		routes:      []*net.IPNet{route},
 	}
 
 	intf2 := &Interface{
-		srcName: "testbridge",
-		dstName: sboxIfaceName,
-		bridge:  true,
+		srcName:   "testbridge",
+		dstPrefix: sboxIfacePrefix,
+		bridge:    true,
 	}
 
 	err = hnd.LinkAdd(&netlink.Veth{
@@ -112,9 +106,9 @@ func newInfo(t *testing.T, hnd nlwrap.Handle) (*Namespace, error) {
 	}
 
 	intf3 := &Interface{
-		srcName: vethName4,
-		dstName: sboxIfaceName,
-		master:  "testbridge",
+		srcName:   vethName4,
+		dstPrefix: sboxIfacePrefix,
+		master:    "testbridge",
 	}
 
 	return &Namespace{
@@ -138,25 +132,17 @@ func verifySandbox(t *testing.T, ns *Namespace, ifaceSuffixes []string) {
 	defer nh.Close()
 
 	for _, suffix := range ifaceSuffixes {
-		_, err = nh.LinkByName(sboxIfaceName + suffix)
+		_, err = nh.LinkByName(sboxIfacePrefix + suffix)
 		if err != nil {
 			t.Fatalf("Could not find the interface %s inside the sandbox: %v",
-				sboxIfaceName+suffix, err)
+				sboxIfacePrefix+suffix, err)
 		}
 	}
 }
 
-func verifyCleanup(t *testing.T, ns *Namespace, wait bool) {
-	if wait {
-		time.Sleep(gpmCleanupPeriod * 2)
-	}
-
+func verifyCleanup(t *testing.T, ns *Namespace) {
 	if _, err := os.Stat(ns.Key()); err == nil {
-		if wait {
-			t.Fatalf("The sandbox path %s is not getting cleaned up even after twice the cleanup period", ns.Key())
-		} else {
-			t.Fatalf("The sandbox path %s is not cleaned up after running gc", ns.Key())
-		}
+		t.Fatalf("The sandbox path %s is not cleaned up after running gc", ns.Key())
 	}
 }
 
@@ -395,10 +381,12 @@ func TestSandboxCreate(t *testing.T) {
 	}
 
 	for _, i := range tbox.Interfaces() {
-		err = s.AddInterface(context.Background(), i.SrcName(), i.DstName(),
+		err = s.AddInterface(context.Background(), i.SrcName(), i.dstPrefix, i.DstName(),
 			WithIsBridge(i.Bridge()),
 			WithIPv4Address(i.Address()),
-			WithIPv6Address(i.AddressIPv6()))
+			WithIPv6Address(i.AddressIPv6()),
+			WithAdvertiseAddrNMsgs(0), // Made-up IP addresses, can't sent ARP/NA messages.
+		)
 		if err != nil {
 			t.Fatalf("Failed to add interfaces to sandbox: %v", err)
 		}
@@ -420,7 +408,7 @@ func TestSandboxCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifyCleanup(t, s, true)
+	verifyCleanup(t, s)
 }
 
 func TestSandboxCreateTwice(t *testing.T) {
@@ -447,8 +435,7 @@ func TestSandboxCreateTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	GC()
-	verifyCleanup(t, s, false)
+	verifyCleanup(t, s)
 }
 
 func TestSandboxGC(t *testing.T) {
@@ -467,8 +454,7 @@ func TestSandboxGC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	GC()
-	verifyCleanup(t, s, false)
+	verifyCleanup(t, s)
 }
 
 func TestAddRemoveInterface(t *testing.T) {
@@ -494,10 +480,11 @@ func TestAddRemoveInterface(t *testing.T) {
 	}
 
 	for _, i := range tbox.Interfaces() {
-		err = s.AddInterface(context.Background(), i.SrcName(), i.DstName(),
+		err = s.AddInterface(context.Background(), i.SrcName(), i.dstPrefix, i.DstName(),
 			WithIsBridge(i.Bridge()),
 			WithIPv4Address(i.Address()),
 			WithIPv6Address(i.AddressIPv6()),
+			WithAdvertiseAddrNMsgs(0), // Made-up IP addresses, can't sent ARP/NA messages.
 		)
 		if err != nil {
 			t.Fatalf("Failed to add interfaces to sandbox: %v", err)
@@ -514,22 +501,22 @@ func TestAddRemoveInterface(t *testing.T) {
 	verifySandbox(t, s, []string{"1", "2"})
 
 	i := tbox.Interfaces()[0]
-	err = s.AddInterface(context.Background(), i.SrcName(), i.DstName(),
+	err = s.AddInterface(context.Background(), i.SrcName(), i.dstPrefix, i.DstName(),
 		WithIsBridge(i.Bridge()),
 		WithIPv4Address(i.Address()),
 		WithIPv6Address(i.AddressIPv6()),
+		WithAdvertiseAddrNMsgs(0), // Made-up IP addresses, can't sent ARP/NA messages.
 	)
 	if err != nil {
 		t.Fatalf("Failed to add interfaces to sandbox: %v", err)
 	}
 
-	verifySandbox(t, s, []string{"1", "2", "3"})
+	verifySandbox(t, s, []string{"0", "1", "2"})
 
 	err = s.Destroy()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	GC()
-	verifyCleanup(t, s, false)
+	verifyCleanup(t, s)
 }

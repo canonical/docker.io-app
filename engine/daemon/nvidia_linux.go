@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/containerd/containerd/contrib/nvidia"
-	"github.com/docker/docker/pkg/capabilities"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/containerd/containerd/v2/contrib/nvidia"
+	"github.com/docker/docker/daemon/internal/capabilities"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 )
 

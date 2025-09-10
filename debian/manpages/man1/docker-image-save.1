@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Feb 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-image-save - Save one or more images to a tar archive (streamed to STDOUT by default)
@@ -36,12 +36,12 @@ $ ls -sh fedora-latest.tar
 
 
 .SH OPTIONS
-\fB-h\fP, \fB--help\fP[=false]
-	help for save
-
-.PP
 \fB-o\fP, \fB--output\fP=""
 	Write to a file, instead of STDOUT
+
+.PP
+\fB--platform\fP=""
+	Save only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")
 
 
 .SH SEE ALSO

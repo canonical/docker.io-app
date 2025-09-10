@@ -9,19 +9,20 @@ import (
 	"strconv"
 	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/idresolver"
-	"github.com/docker/cli/service/logs"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/cli/internal/logdetails"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type logsOptions struct {
@@ -49,10 +50,8 @@ func newLogsCommand(dockerCli command.Cli) *cobra.Command {
 			opts.target = args[0]
 			return runLogs(cmd.Context(), dockerCli, &opts)
 		},
-		Annotations: map[string]string{"version": "1.29"},
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			return CompletionFn(dockerCli)(cmd, args, toComplete)
-		},
+		Annotations:       map[string]string{"version": "1.29"},
+		ValidArgsFunction: completeServiceNames(dockerCli),
 	}
 
 	flags := cmd.Flags()
@@ -69,6 +68,13 @@ func newLogsCommand(dockerCli command.Cli) *cobra.Command {
 	flags.BoolVar(&opts.details, "details", false, "Show extra details provided to logs")
 	flags.SetAnnotation("details", "version", []string{"1.30"})
 	flags.StringVarP(&opts.tail, "tail", "n", "all", "Number of lines to show from the end of the logs")
+
+	flags.VisitAll(func(flag *pflag.Flag) {
+		// Set a default completion function if none was set. We don't look
+		// up if it does already have one set, because Cobra does this for
+		// us, and returns an error (which we ignore for this reason).
+		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
+	})
 	return cmd
 }
 
@@ -84,15 +90,15 @@ func runLogs(ctx context.Context, dockerCli command.Cli, opts *logsOptions) erro
 		logfunc func(context.Context, string, container.LogsOptions) (io.ReadCloser, error)
 	)
 
-	service, _, err := apiClient.ServiceInspectWithRaw(ctx, opts.target, types.ServiceInspectOptions{})
+	service, _, err := apiClient.ServiceInspectWithRaw(ctx, opts.target, swarm.ServiceInspectOptions{})
 	if err != nil {
 		// if it's any error other than service not found, it's Real
-		if !errdefs.IsNotFound(err) {
+		if !cerrdefs.IsNotFound(err) {
 			return err
 		}
 		task, _, err := apiClient.TaskInspectWithRaw(ctx, opts.target)
 		if err != nil {
-			if errdefs.IsNotFound(err) {
+			if cerrdefs.IsNotFound(err) {
 				// if the task isn't found, rewrite the error to be clear
 				// that we looked for services AND tasks and found none
 				err = fmt.Errorf("no such task or service: %v", opts.target)
@@ -258,14 +264,14 @@ func (lw *logWriter) Write(buf []byte) (int, error) {
 		return 0, errors.Errorf("invalid context in log message: %v", string(buf))
 	}
 	// parse the details out
-	details, err := logs.ParseLogDetails(string(parts[detailsIndex]))
+	details, err := logdetails.Parse(string(parts[detailsIndex]))
 	if err != nil {
 		return 0, err
 	}
 	// and then create a context from the details
 	// this removes the context-specific details from the details map, so we
 	// can more easily print the details later
-	logCtx, err := lw.parseContext(details)
+	logCtx, err := parseContext(details)
 	if err != nil {
 		return 0, err
 	}
@@ -317,7 +323,7 @@ func (lw *logWriter) Write(buf []byte) (int, error) {
 }
 
 // parseContext returns a log context and REMOVES the context from the details map
-func (lw *logWriter) parseContext(details map[string]string) (logContext, error) {
+func parseContext(details map[string]string) (logContext, error) {
 	nodeID, ok := details["com.docker.swarm.node.id"]
 	if !ok {
 		return logContext{}, errors.Errorf("missing node id in details: %v", details)

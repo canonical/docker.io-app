@@ -1,20 +1,20 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.22
+//go:build go1.23
 
 package context
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter/tabwriter"
 	"github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/context/store"
-	"github.com/docker/docker/errdefs"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -34,11 +34,11 @@ func longCreateDescription() string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString("Create a context\n\nDocker endpoint config:\n\n")
 	tw := tabwriter.NewWriter(buf, 20, 1, 3, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tDESCRIPTION")
+	_, _ = fmt.Fprintln(tw, "NAME\tDESCRIPTION")
 	for _, d := range dockerConfigKeysDescriptions {
-		fmt.Fprintf(tw, "%s\t%s\n", d.name, d.description)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", d.name, d.description)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	buf.WriteString("\nExample:\n\n$ docker context create my-context --description \"some description\" --docker \"host=tcp://myserver:2376,ca=~/ca-file,cert=~/cert-file,key=~/key-file\"\n")
 	return buf.String()
 }
@@ -79,8 +79,8 @@ func RunCreate(dockerCLI command.Cli, o *CreateOptions) error {
 		err = createNewContext(s, o)
 	}
 	if err == nil {
-		fmt.Fprintln(dockerCLI.Out(), o.Name)
-		fmt.Fprintf(dockerCLI.Err(), "Successfully created context %q\n", o.Name)
+		_, _ = fmt.Fprintln(dockerCLI.Out(), o.Name)
+		_, _ = fmt.Fprintf(dockerCLI.Err(), "Successfully created context %q\n", o.Name)
 	}
 	return err
 }
@@ -91,7 +91,7 @@ func createNewContext(contextStore store.ReaderWriter, o *CreateOptions) error {
 	}
 	dockerEP, dockerTLS, err := getDockerEndpointMetadataAndTLS(contextStore, o.Docker)
 	if err != nil {
-		return errors.Wrap(err, "unable to create docker endpoint config")
+		return fmt.Errorf("unable to create docker endpoint config: %w", err)
 	}
 	contextMetadata := store.Metadata{
 		Endpoints: map[string]any{
@@ -122,11 +122,11 @@ func checkContextNameForCreation(s store.Reader, name string) error {
 	if err := store.ValidateContextName(name); err != nil {
 		return err
 	}
-	if _, err := s.GetMetadata(name); !errdefs.IsNotFound(err) {
+	if _, err := s.GetMetadata(name); !cerrdefs.IsNotFound(err) {
 		if err != nil {
-			return errors.Wrap(err, "error while getting existing contexts")
+			return fmt.Errorf("error while getting existing contexts: %w", err)
 		}
-		return errors.Errorf("context %q already exists", name)
+		return fmt.Errorf("context %q already exists", name)
 	}
 	return nil
 }
