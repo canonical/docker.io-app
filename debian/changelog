@@ -1,3 +1,9 @@
+docker.io-app (28.2.2-0ubuntu1~25.04.1) plucky; urgency=medium
+
+  * Backport from questing to plucky (LP: #2112523)
+
+ -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 09 Sep 2025 21:35:07 -0300
+
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
   * New upstream version 28.2.2
