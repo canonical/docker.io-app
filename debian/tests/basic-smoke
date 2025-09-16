@@ -11,7 +11,7 @@ debootstrap \
 	--variant=minbase \
 	bullseye \
 	"$tempDir" \
-	http://httpredir.debian.org/debian
+	http://archive.debian.org/debian
 
 tar -cC "$tempDir" . | docker import - debian
 defer 'docker rmi debian'
