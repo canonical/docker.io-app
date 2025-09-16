@@ -9,7 +9,7 @@ docker version
 
 debootstrap \
 	--variant=minbase \
-	stable \
+	bullseye \
 	"$tempDir" \
 	http://httpredir.debian.org/debian
 
