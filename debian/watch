@@ -3,9 +3,9 @@ version=4
 opts="\
 dversionmangle=s/[+~](debian|dfsg|ds|deb)\d*$//,\
 uversionmangle=s/(\d)[_\.\-\+]?((RC|rc|pre|dev|beta|alpha)\d*)$/$1~$2/,\
-filenamemangle=s/v?@ANY_VERSION@/moby-$1.tar.gz/,\
+filenamemangle=s/(?:docker-)?v?@ANY_VERSION@/moby-$1.tar.gz/,\
 downloadurlmangle=s/api\.github\.com\/repos\/moby\/moby\/tarball\/(.*)/github.com\/moby\/moby\/archive\/refs\/tags\/$1.tar.gz/,\
 searchmode=plain,\
 " https://api.github.com/repos/moby/moby/releases?per_page=50 \
-  https://api.github.com/repos/moby/moby/tarball/v?@ANY_VERSION@ \
+  https://api.github.com/repos/moby/moby/tarball/(?:docker-)?v?@ANY_VERSION@ \
   debian ./debian/get-orig-source.sh
