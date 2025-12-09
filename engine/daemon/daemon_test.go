@@ -1,26 +1,28 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/libnetwork"
-	"github.com/docker/docker/pkg/idtools"
-	volumesservice "github.com/docker/docker/volume/service"
-	"github.com/docker/go-connections/nat"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/idtools"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	volumesservice "github.com/moby/moby/v2/daemon/volume/service"
 	"github.com/pkg/errors"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 //
-// https://github.com/docker/docker/issues/8069
+// https://github.com/moby/moby/issues/8069
 //
 
 func TestGetContainer(t *testing.T) {
@@ -217,33 +219,28 @@ func TestContainerInitDNS(t *testing.T) {
 	}
 }
 
-func newPortNoError(proto, port string) nat.Port {
-	p, _ := nat.NewPort(proto, port)
-	return p
-}
-
 func TestMerge(t *testing.T) {
-	volumesImage := make(map[string]struct{})
-	volumesImage["/test1"] = struct{}{}
-	volumesImage["/test2"] = struct{}{}
-	portsImage := make(nat.PortSet)
-	portsImage[newPortNoError("tcp", "1111")] = struct{}{}
-	portsImage[newPortNoError("tcp", "2222")] = struct{}{}
 	configImage := &containertypes.Config{
-		ExposedPorts: portsImage,
-		Env:          []string{"VAR1=1", "VAR2=2"},
-		Volumes:      volumesImage,
+		ExposedPorts: network.PortSet{
+			network.MustParsePort("1111/tcp"): struct{}{},
+			network.MustParsePort("2222/tcp"): struct{}{},
+		},
+		Env: []string{"VAR1=1", "VAR2=2"},
+		Volumes: map[string]struct{}{
+			"/test1": {},
+			"/test2": {},
+		},
 	}
 
-	portsUser := make(nat.PortSet)
-	portsUser[newPortNoError("tcp", "2222")] = struct{}{}
-	portsUser[newPortNoError("tcp", "3333")] = struct{}{}
-	volumesUser := make(map[string]struct{})
-	volumesUser["/test3"] = struct{}{}
 	configUser := &containertypes.Config{
-		ExposedPorts: portsUser,
-		Env:          []string{"VAR2=3", "VAR3=3"},
-		Volumes:      volumesUser,
+		ExposedPorts: network.PortSet{
+			network.MustParsePort("2222/tcp"): struct{}{},
+			network.MustParsePort("3333/tcp"): struct{}{},
+		},
+		Env: []string{"VAR2=3", "VAR3=3"},
+		Volumes: map[string]struct{}{
+			"/test3": {},
+		},
 	}
 
 	if err := merge(configUser, configImage); err != nil {
@@ -254,7 +251,7 @@ func TestMerge(t *testing.T) {
 		t.Fatalf("Expected 3 ExposedPorts, 1111, 2222 and 3333, found %d", len(configUser.ExposedPorts))
 	}
 	for portSpecs := range configUser.ExposedPorts {
-		if portSpecs.Port() != "1111" && portSpecs.Port() != "2222" && portSpecs.Port() != "3333" {
+		if portSpecs.Num() != 1111 && portSpecs.Num() != 2222 && portSpecs.Num() != 3333 {
 			t.Fatalf("Expected 1111 or 2222 or 3333, found %s", portSpecs)
 		}
 	}
@@ -276,12 +273,10 @@ func TestMerge(t *testing.T) {
 		}
 	}
 
-	ports, _, err := nat.ParsePortSpecs([]string{"0000"})
-	if err != nil {
-		t.Error(err)
-	}
 	configImage2 := &containertypes.Config{
-		ExposedPorts: ports,
+		ExposedPorts: map[network.Port]struct{}{
+			network.MustParsePort("0/tcp"): {},
+		},
 	}
 
 	if err := merge(configUser, configImage2); err != nil {
@@ -292,7 +287,7 @@ func TestMerge(t *testing.T) {
 		t.Fatalf("Expected 4 ExposedPorts, 0000, 1111, 2222 and 3333, found %d", len(configUser.ExposedPorts))
 	}
 	for portSpecs := range configUser.ExposedPorts {
-		if portSpecs.Port() != "0" && portSpecs.Port() != "1111" && portSpecs.Port() != "2222" && portSpecs.Port() != "3333" {
+		if portSpecs.Num() != 0 && portSpecs.Num() != 1111 && portSpecs.Num() != 2222 && portSpecs.Num() != 3333 {
 			t.Fatalf("Expected %q or %q or %q or %q, found %s", 0, 1111, 2222, 3333, portSpecs)
 		}
 	}
@@ -339,5 +334,102 @@ func TestDeriveULABaseNetwork(t *testing.T) {
 			assert.Equal(t, nw.Base, tc.expPrefix)
 			assert.Equal(t, nw.Size, 64)
 		})
+	}
+}
+
+// Reading a symlink to a directory must return the directory
+func TestResolveSymlinkedDirectoryExistingDirectory(t *testing.T) {
+	// TODO Windows: Port this test
+	if runtime.GOOS == "windows" {
+		t.Skip("Needs porting to Windows")
+	}
+
+	// On macOS, tmp itself is symlinked, so resolve this one upfront;
+	// see https://github.com/golang/go/issues/56259
+	tmpDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srcPath := filepath.Join(tmpDir, "/testReadSymlinkToExistingDirectory")
+	dstPath := filepath.Join(tmpDir, "/dirLinkTest")
+	if err = os.Mkdir(srcPath, 0o777); err != nil {
+		t.Errorf("failed to create directory: %s", err)
+	}
+
+	if err = os.Symlink(srcPath, dstPath); err != nil {
+		t.Errorf("failed to create symlink: %s", err)
+	}
+
+	var symlinkedPath string
+	if symlinkedPath, err = resolveSymlinkedDirectory(dstPath); err != nil {
+		t.Fatalf("failed to read symlink to directory: %s", err)
+	}
+
+	if symlinkedPath != srcPath {
+		t.Fatalf("symlink returned unexpected directory: %s", symlinkedPath)
+	}
+
+	if err = os.Remove(srcPath); err != nil {
+		t.Errorf("failed to remove temporary directory: %s", err)
+	}
+
+	if err = os.Remove(dstPath); err != nil {
+		t.Errorf("failed to remove symlink: %s", err)
+	}
+}
+
+// Reading a non-existing symlink must fail
+func TestResolveSymlinkedDirectoryNonExistingSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	symLinkedPath, err := resolveSymlinkedDirectory(path.Join(tmpDir, "/Non/ExistingPath"))
+	if err == nil {
+		t.Errorf("error expected for non-existing symlink")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Expected an os.ErrNotExist, got: %v", err)
+	}
+	if symLinkedPath != "" {
+		t.Fatalf("expected empty path, but '%s' was returned", symLinkedPath)
+	}
+}
+
+// Reading a symlink to a file must fail
+func TestResolveSymlinkedDirectoryToFile(t *testing.T) {
+	// TODO Windows: Port this test
+	if runtime.GOOS == "windows" {
+		t.Skip("Needs porting to Windows")
+	}
+	var err error
+	var file *os.File
+
+	// #nosec G303
+	if file, err = os.Create("/tmp/testSymlinkToFile"); err != nil {
+		t.Fatalf("failed to create file: %s", err)
+	}
+
+	_ = file.Close()
+
+	if err = os.Symlink("/tmp/testSymlinkToFile", "/tmp/fileLinkTest"); err != nil {
+		t.Errorf("failed to create symlink: %s", err)
+	}
+
+	symlinkedPath, err := resolveSymlinkedDirectory("/tmp/fileLinkTest")
+	if err == nil {
+		t.Errorf("resolveSymlinkedDirectory on a symlink to a file should've failed")
+	} else if !strings.HasPrefix(err.Error(), "canonical path points to a file") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if symlinkedPath != "" {
+		t.Errorf("path should've been empty: %s", symlinkedPath)
+	}
+
+	if err = os.Remove("/tmp/testSymlinkToFile"); err != nil {
+		t.Errorf("failed to remove file: %s", err)
+	}
+
+	if err = os.Remove("/tmp/fileLinkTest"); err != nil {
+		t.Errorf("failed to remove symlink: %s", err)
 	}
 }

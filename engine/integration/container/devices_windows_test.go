@@ -1,12 +1,13 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"strings"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/testutil"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/skip"
 )
@@ -99,7 +100,7 @@ func TestWindowsDevices(t *testing.T) {
 			// remove this skip.If and validate the expected behaviour under Hyper-V.
 			skip.If(t, d.isolation == containertypes.IsolationHyperV && !d.expectedStartFailure, "FIXME. HyperV isolation setup is probably incorrect in the test")
 
-			err := apiClient.ContainerStart(ctx, id, containertypes.StartOptions{})
+			_, err := apiClient.ContainerStart(ctx, id, client.ContainerStartOptions{})
 			if d.expectedStartFailure {
 				assert.ErrorContains(t, err, d.expectedStartFailureMessage)
 				return

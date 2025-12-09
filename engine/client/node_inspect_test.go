@@ -1,76 +1,59 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestNodeInspectError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, _, err := client.NodeInspectWithRaw(context.Background(), "nothing")
+	_, err = client.NodeInspect(t.Context(), "nothing", NodeInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 func TestNodeInspectNodeNotFound(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusNotFound, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusNotFound, "Server error")))
+	assert.NilError(t, err)
 
-	_, _, err := client.NodeInspectWithRaw(context.Background(), "unknown")
+	_, err = client.NodeInspect(t.Context(), "unknown", NodeInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 }
 
 func TestNodeInspectWithEmptyID(t *testing.T) {
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			return nil, errors.New("should not make request")
-		}),
-	}
-	_, _, err := client.NodeInspectWithRaw(context.Background(), "")
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("should not make request")
+	}))
+	assert.NilError(t, err)
+	_, err = client.NodeInspect(t.Context(), "", NodeInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	_, _, err = client.NodeInspectWithRaw(context.Background(), "    ")
+	_, err = client.NodeInspect(t.Context(), "    ", NodeInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
 
 func TestNodeInspect(t *testing.T) {
-	expectedURL := "/nodes/node_id"
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			content, err := json.Marshal(swarm.Node{
-				ID: "node_id",
-			})
-			if err != nil {
-				return nil, err
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(content)),
-			}, nil
-		}),
-	}
-
-	nodeInspect, _, err := client.NodeInspectWithRaw(context.Background(), "node_id")
+	const expectedURL = "/nodes/node_id"
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+			return nil, err
+		}
+		return mockJSONResponse(http.StatusOK, nil, swarm.Node{
+			ID: "node_id",
+		})(req)
+	}))
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(nodeInspect.ID, "node_id"))
+
+	result, err := client.NodeInspect(t.Context(), "node_id", NodeInspectOptions{})
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(result.Node.ID, "node_id"))
 }

@@ -21,15 +21,6 @@ The filter table is:
 
 Compared to the equivalent [nat mode network][1]:
 
-- In DOCKER-ISOLATION-STAGE-1:
-  - Rule 1 accepts outgoing packets related to established connections. This
-    is for responses to containers on NAT networks that would not normally
-    accept packets from another network, and may have port/protocol filtering
-    rules in place that would otherwise drop these responses.
-  - Rule 2 skips the jump to DOCKER-ISOLATION-STAGE-2 for any packet routed
-    to the routed-mode network. So, it will accept packets from other networks,
-    if they make it through the port/protocol filtering rules in the DOCKER
-    chain.
 - In the DOCKER chain:
   - A rule is added by [setICMP][5] to allow ICMP.
     *ALL* ICMP message types are allowed.
@@ -44,9 +35,6 @@ have been considered, but the host firewall is not a network boundary in the
 sense used by the RFC. So, Node Information and Router Renumbering messages are
 not discarded, and experimental/unused types are allowed because they may be
 needed._
-
-The ICMP rule, as shown by `iptables -L`, looks alarming until you spot that it's
-for `prot 1`:
 
     {{index . "LFilterDocker4"}}
 

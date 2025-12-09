@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -20,8 +20,8 @@ type removeOptions struct {
 	platforms []string
 }
 
-// NewRemoveCommand creates a new `docker remove` command
-func NewRemoveCommand(dockerCLI command.Cli) *cobra.Command {
+// newRemoveCommand creates a new "docker image remove" command
+func newRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	var options removeOptions
 
 	cmd := &cobra.Command{
@@ -35,6 +35,7 @@ func NewRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 		Annotations: map[string]string{
 			"aliases": "docker image rm, docker image remove, docker rmi",
 		},
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -46,12 +47,13 @@ func NewRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	flags.StringSliceVar(&options.platforms, "platform", nil, `Remove only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")`)
 	_ = flags.SetAnnotation("platform", "version", []string{"1.50"})
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 	return cmd
 }
 
-func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
-	cmd := *NewRemoveCommand(dockerCli)
+// newImageRemoveCommand is a sub-command under `image` (`docker image rm`)
+func newImageRemoveCommand(dockerCli command.Cli) *cobra.Command {
+	cmd := *newRemoveCommand(dockerCli)
 	cmd.Aliases = []string{"rmi", "remove"}
 	cmd.Use = "rm [OPTIONS] IMAGE [IMAGE...]"
 	return &cmd
@@ -60,7 +62,7 @@ func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
 func runRemove(ctx context.Context, dockerCLI command.Cli, opts removeOptions, images []string) error {
 	apiClient := dockerCLI.Client()
 
-	options := image.RemoveOptions{
+	options := client.ImageRemoveOptions{
 		Force:         opts.force,
 		PruneChildren: !opts.noPrune,
 	}
@@ -77,14 +79,14 @@ func runRemove(ctx context.Context, dockerCLI command.Cli, opts removeOptions, i
 	fatalErr := false
 	var errs []error
 	for _, img := range images {
-		dels, err := apiClient.ImageRemove(ctx, img, options)
+		res, err := apiClient.ImageRemove(ctx, img, options)
 		if err != nil {
-			if !cerrdefs.IsNotFound(err) {
+			if !errdefs.IsNotFound(err) {
 				fatalErr = true
 			}
 			errs = append(errs, err)
 		} else {
-			for _, del := range dels {
+			for _, del := range res.Items {
 				if del.Deleted != "" {
 					_, _ = fmt.Fprintln(dockerCLI.Out(), "Deleted:", del.Deleted)
 				} else {

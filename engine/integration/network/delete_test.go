@@ -1,18 +1,18 @@
-package network // import "github.com/docker/docker/integration/network"
+package network
 
 import (
 	"context"
 	"testing"
 
-	networktypes "github.com/docker/docker/api/types/network"
-	dclient "github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/network"
+	networktypes "github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/network"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
 
-func containsNetwork(nws []networktypes.Inspect, networkID string) bool {
+func containsNetwork(nws []networktypes.Summary, networkID string) bool {
 	for _, n := range nws {
 		if n.ID == networkID {
 			return true
@@ -26,17 +26,17 @@ func containsNetwork(nws []networktypes.Inspect, networkID string) bool {
 // first network's ID as name.
 //
 // After successful creation, properties of all three networks is returned
-func createAmbiguousNetworks(ctx context.Context, t *testing.T, client dclient.APIClient) (string, string, string) {
-	testNet := network.CreateNoError(ctx, t, client, "testNet")
-	idPrefixNet := network.CreateNoError(ctx, t, client, testNet[:12])
-	fullIDNet := network.CreateNoError(ctx, t, client, testNet)
+func createAmbiguousNetworks(ctx context.Context, t *testing.T, apiClient client.APIClient) (string, string, string) {
+	testNet := network.CreateNoError(ctx, t, apiClient, "testNet")
+	idPrefixNet := network.CreateNoError(ctx, t, apiClient, testNet[:12])
+	fullIDNet := network.CreateNoError(ctx, t, apiClient, testNet)
 
-	nws, err := client.NetworkList(ctx, networktypes.ListOptions{})
+	res, err := apiClient.NetworkList(ctx, client.NetworkListOptions{})
 	assert.NilError(t, err)
 
-	assert.Check(t, is.Equal(true, containsNetwork(nws, testNet)), "failed to create network testNet")
-	assert.Check(t, is.Equal(true, containsNetwork(nws, idPrefixNet)), "failed to create network idPrefixNet")
-	assert.Check(t, is.Equal(true, containsNetwork(nws, fullIDNet)), "failed to create network fullIDNet")
+	assert.Check(t, is.Equal(true, containsNetwork(res.Items, testNet)), "failed to create network testNet")
+	assert.Check(t, is.Equal(true, containsNetwork(res.Items, idPrefixNet)), "failed to create network idPrefixNet")
+	assert.Check(t, is.Equal(true, containsNetwork(res.Items, fullIDNet)), "failed to create network fullIDNet")
 	return testNet, idPrefixNet, fullIDNet
 }
 
@@ -44,16 +44,16 @@ func createAmbiguousNetworks(ctx context.Context, t *testing.T, client dclient.A
 func TestNetworkCreateDelete(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
 	ctx := setupTest(t)
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	netName := "testnetwork_" + t.Name()
-	network.CreateNoError(ctx, t, client, netName)
-	assert.Check(t, IsNetworkAvailable(ctx, client, netName))
+	network.CreateNoError(ctx, t, apiClient, netName)
+	assert.Check(t, IsNetworkAvailable(ctx, apiClient, netName))
 
 	// delete the network and make sure it is deleted
-	err := client.NetworkRemove(ctx, netName)
+	_, err := apiClient.NetworkRemove(ctx, netName, client.NetworkRemoveOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, IsNetworkNotAvailable(ctx, client, netName))
+	assert.Check(t, IsNetworkNotAvailable(ctx, apiClient, netName))
 }
 
 // TestDockerNetworkDeletePreferID tests that if a network with a name
@@ -64,24 +64,24 @@ func TestDockerNetworkDeletePreferID(t *testing.T) {
 		"FIXME. Windows doesn't run DinD and uses networks shared between control daemon and daemon under test")
 
 	ctx := setupTest(t)
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	testNet, idPrefixNet, fullIDNet := createAmbiguousNetworks(ctx, t, client)
+	testNet, idPrefixNet, fullIDNet := createAmbiguousNetworks(ctx, t, apiClient)
 
 	// Delete the network using a prefix of the first network's ID as name.
 	// This should the network name with the id-prefix, not the original network.
-	err := client.NetworkRemove(ctx, testNet[:12])
+	_, err := apiClient.NetworkRemove(ctx, testNet[:12], client.NetworkRemoveOptions{})
 	assert.NilError(t, err)
 
 	// Delete the network using networkID. This should remove the original
 	// network, not the network with the name equal to the networkID
-	err = client.NetworkRemove(ctx, testNet)
+	_, err = apiClient.NetworkRemove(ctx, testNet, client.NetworkRemoveOptions{})
 	assert.NilError(t, err)
 
 	// networks "testNet" and "idPrefixNet" should be removed, but "fullIDNet" should still exist
-	nws, err := client.NetworkList(ctx, networktypes.ListOptions{})
+	res, err := apiClient.NetworkList(ctx, client.NetworkListOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(false, containsNetwork(nws, testNet)), "Network testNet not removed")
-	assert.Check(t, is.Equal(false, containsNetwork(nws, idPrefixNet)), "Network idPrefixNet not removed")
-	assert.Check(t, is.Equal(true, containsNetwork(nws, fullIDNet)), "Network fullIDNet not found")
+	assert.Check(t, is.Equal(false, containsNetwork(res.Items, testNet)), "Network testNet not removed")
+	assert.Check(t, is.Equal(false, containsNetwork(res.Items, idPrefixNet)), "Network idPrefixNet not removed")
+	assert.Check(t, is.Equal(true, containsNetwork(res.Items, fullIDNet)), "Network fullIDNet not found")
 }

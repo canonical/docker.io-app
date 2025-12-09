@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/testutil/fakecontext"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
+	"github.com/moby/moby/v2/internal/testutil/fakecontext"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -21,12 +21,12 @@ type DockerCLICreateSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLICreateSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLICreateSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLICreateSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLICreateSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 // Make sure we can create a simple container with some args
@@ -92,7 +92,7 @@ func (s *DockerCLICreateSuite) TestCreateWithPortRange(c *testing.T) {
 
 	var containers []struct {
 		HostConfig *struct {
-			PortBindings map[nat.Port][]nat.PortBinding
+			PortBindings network.PortMap
 		}
 	}
 	err := json.Unmarshal([]byte(out), &containers)
@@ -105,8 +105,8 @@ func (s *DockerCLICreateSuite) TestCreateWithPortRange(c *testing.T) {
 	assert.Equal(c, len(cont.HostConfig.PortBindings), 4, fmt.Sprintf("Expected 4 ports bindings, got %d", len(cont.HostConfig.PortBindings)))
 
 	for k, v := range cont.HostConfig.PortBindings {
-		assert.Equal(c, len(v), 1, fmt.Sprintf("Expected 1 ports binding, for the port  %s but found %s", k, v))
-		assert.Equal(c, k.Port(), v[0].HostPort, fmt.Sprintf("Expected host port %s to match published port %s", k.Port(), v[0].HostPort))
+		assert.Equal(c, len(v), 1, fmt.Sprintf("Expected 1 ports binding, for the port %s but found %s", k, v))
+		assert.Equal(c, fmt.Sprintf("%d", k.Num()), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
 	}
 }
 
@@ -118,7 +118,7 @@ func (s *DockerCLICreateSuite) TestCreateWithLargePortRange(c *testing.T) {
 
 	var containers []struct {
 		HostConfig *struct {
-			PortBindings map[nat.Port][]nat.PortBinding
+			PortBindings network.PortMap
 		}
 	}
 
@@ -132,7 +132,7 @@ func (s *DockerCLICreateSuite) TestCreateWithLargePortRange(c *testing.T) {
 
 	for k, v := range cont.HostConfig.PortBindings {
 		assert.Equal(c, len(v), 1)
-		assert.Equal(c, k.Port(), v[0].HostPort, fmt.Sprintf("Expected host port %s to match published port %s", k.Port(), v[0].HostPort))
+		assert.Equal(c, fmt.Sprintf("%d", k.Num()), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
 	}
 }
 
@@ -152,10 +152,10 @@ func (s *DockerCLICreateSuite) TestCreateVolumesCreated(c *testing.T) {
 	const name = "test_create_volume"
 	cli.DockerCmd(c, "create", "--name", name, "-v", prefix+slash+"foo", "busybox")
 
-	dir, err := inspectMountSourceField(name, prefix+slash+"foo")
+	mnt, err := inspectMountPoint(name, prefix+slash+"foo")
 	assert.Assert(c, err == nil, "Error getting volume host path: %q", err)
 
-	if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) {
+	if _, err := os.Stat(mnt.Source); err != nil && os.IsNotExist(err) {
 		c.Fatalf("Volume was not created")
 	}
 	if err != nil {
@@ -178,7 +178,7 @@ func (s *DockerCLICreateSuite) TestCreateLabels(c *testing.T) {
 
 func (s *DockerCLICreateSuite) TestCreateLabelFromImage(c *testing.T) {
 	imageName := "testcreatebuildlabel"
-	buildImageSuccessfully(c, imageName, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName, build.WithDockerfile(`FROM busybox
 		LABEL k1=v1 k2=v2`))
 
 	const name = "test_create_labels_from_image"

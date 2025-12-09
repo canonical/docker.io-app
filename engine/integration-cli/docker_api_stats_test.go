@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -11,17 +13,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/request"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
-
-var expectedNetworkInterfaceStats = strings.Split("rx_bytes rx_dropped rx_errors rx_packets tx_bytes tx_dropped tx_errors tx_packets", " ")
 
 func (s *DockerAPISuite) TestAPIStatsNoStreamGetCpu(c *testing.T) {
 	skip.If(c, RuntimeIsWindowsContainerd(), "FIXME: Broken on Windows + containerd combination")
@@ -35,10 +35,10 @@ func (s *DockerAPISuite) TestAPIStatsNoStreamGetCpu(c *testing.T) {
 	assert.Equal(c, resp.Header.Get("Content-Type"), "application/json")
 	assert.Equal(c, resp.Header.Get("Content-Type"), "application/json")
 
-	var v *container.StatsResponse
+	var v container.StatsResponse
 	err = json.NewDecoder(body).Decode(&v)
 	assert.NilError(c, err)
-	body.Close()
+	_ = body.Close()
 
 	cpuPercent := 0.0
 
@@ -74,7 +74,7 @@ func (s *DockerAPISuite) TestAPIStatsStoppedContainerInGoroutines(c *testing.T) 
 		info := system.Info{}
 		err = json.NewDecoder(body).Decode(&info)
 		assert.NilError(c, err)
-		body.Close()
+		_ = body.Close()
 		return info.NGoroutines
 	}
 
@@ -82,7 +82,7 @@ func (s *DockerAPISuite) TestAPIStatsStoppedContainerInGoroutines(c *testing.T) 
 	routines := getGoRoutines()
 	_, body, err := request.Get(testutil.GetContext(c), "/containers/"+id+"/stats")
 	assert.NilError(c, err)
-	body.Close()
+	_ = body.Close()
 
 	t := time.After(30 * time.Second)
 	for {
@@ -164,82 +164,16 @@ func (s *DockerAPISuite) TestAPIStatsNetworkStats(c *testing.T) {
 	assert.Assert(c, postRxPackets >= expRxPkts, "Reported less RxPackets than expected. Expected >= %d. Found %d. %s", expRxPkts, postRxPackets, pingouts)
 }
 
-func (s *DockerAPISuite) TestAPIStatsNetworkStatsVersioning(c *testing.T) {
-	testRequires(c, testEnv.IsLocalDaemon, DaemonIsLinux)
+func getNetworkStats(t *testing.T, id string) map[string]container.NetworkStats {
+	_, body, err := request.Get(testutil.GetContext(t), "/containers/"+id+"/stats?stream=false")
+	assert.NilError(t, err)
 
-	id := runSleepingContainer(c)
-	cli.WaitRun(c, id)
-
-	statsJSONBlob := getStats(c, id)
-	assert.Assert(c, jsonBlobHasGTE121NetworkStats(statsJSONBlob), "Stats JSON blob from API does not look like a >=v1.21 API stats structure", statsJSONBlob)
-}
-
-func getNetworkStats(c *testing.T, id string) map[string]container.NetworkStats {
-	var st *container.StatsResponse
-
-	_, body, err := request.Get(testutil.GetContext(c), "/containers/"+id+"/stats?stream=false")
-	assert.NilError(c, err)
-
+	var st container.StatsResponse
 	err = json.NewDecoder(body).Decode(&st)
-	assert.NilError(c, err)
-	body.Close()
+	assert.NilError(t, err)
+	_ = body.Close()
 
 	return st.Networks
-}
-
-// getStats returns stats result for the
-// container with id using an API call with version apiVersion. Since the
-// stats result type differs between API versions, we simply return
-// map[string]interface{}.
-func getStats(c *testing.T, id string) map[string]interface{} {
-	c.Helper()
-	stats := make(map[string]interface{})
-
-	_, body, err := request.Get(testutil.GetContext(c), "/containers/"+id+"/stats?stream=false")
-	assert.NilError(c, err)
-	defer body.Close()
-
-	err = json.NewDecoder(body).Decode(&stats)
-	assert.NilError(c, err, "failed to decode stat: %s", err)
-
-	return stats
-}
-
-func jsonBlobHasGTE121NetworkStats(blob map[string]interface{}) bool {
-	networksStatsIntfc, ok := blob["networks"]
-	if !ok {
-		return false
-	}
-	networksStats, ok := networksStatsIntfc.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	for _, networkInterfaceStatsIntfc := range networksStats {
-		networkInterfaceStats, ok := networkInterfaceStatsIntfc.(map[string]interface{})
-		if !ok {
-			return false
-		}
-		for _, expectedKey := range expectedNetworkInterfaceStats {
-			if _, ok := networkInterfaceStats[expectedKey]; !ok {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (s *DockerAPISuite) TestAPIStatsContainerNotFound(c *testing.T) {
-	testRequires(c, DaemonIsLinux)
-	apiClient, err := client.NewClientWithOpts(client.FromEnv)
-	assert.NilError(c, err)
-	defer apiClient.Close()
-
-	expected := "No such container: nonexistent"
-
-	_, err = apiClient.ContainerStats(testutil.GetContext(c), "nonexistent", true)
-	assert.ErrorContains(c, err, expected)
-	_, err = apiClient.ContainerStats(testutil.GetContext(c), "nonexistent", false)
-	assert.ErrorContains(c, err, expected)
 }
 
 func (s *DockerAPISuite) TestAPIStatsNoStreamConnectedContainers(c *testing.T) {
@@ -251,30 +185,21 @@ func (s *DockerAPISuite) TestAPIStatsNoStreamConnectedContainers(c *testing.T) {
 	id2 := runSleepingContainer(c, "--net", "container:"+id1)
 	cli.WaitRun(c, id2)
 
-	ch := make(chan error, 1)
-	go func() {
-		resp, body, err := request.Get(testutil.GetContext(c), "/containers/"+id2+"/stats?stream=false")
-		defer body.Close()
-		if err != nil {
-			ch <- err
-		}
-		if resp.StatusCode != http.StatusOK {
-			ch <- fmt.Errorf("Invalid StatusCode %v", resp.StatusCode)
-		}
-		if resp.Header.Get("Content-Type") != "application/json" {
-			ch <- fmt.Errorf("Invalid 'Content-Type' %v", resp.Header.Get("Content-Type"))
-		}
-		var v *container.StatsResponse
-		if err := json.NewDecoder(body).Decode(&v); err != nil {
-			ch <- err
-		}
-		ch <- nil
-	}()
+	// We expect an immediate response; use a timeout to avoid hanging.
+	ctx, cancel := context.WithTimeout(testutil.GetContext(c), 10*time.Second)
+	defer cancel()
 
-	select {
-	case err := <-ch:
-		assert.NilError(c, err, "Error in stats Engine API: %v", err)
-	case <-time.After(15 * time.Second):
-		c.Fatalf("Stats did not return after timeout")
-	}
+	resp, body, err := request.Get(ctx, "/containers/"+id2+"/stats?stream=false&one-shot=true")
+	assert.NilError(c, err)
+	defer func() { _ = body.Close() }()
+
+	assert.Check(c, is.Equal(resp.StatusCode, http.StatusOK), "invalid StatusCode %v", resp.StatusCode)
+	assert.Check(c, is.Equal(resp.Header.Get("Content-Type"), "application/json"), "invalid 'Content-Type' %v", resp.Header.Get("Content-Type"))
+
+	var v container.StatsResponse
+	dec := json.NewDecoder(body)
+	assert.NilError(c, dec.Decode(&v))
+	assert.Check(c, is.Equal(v.ID, id2))
+	err = dec.Decode(&v)
+	assert.Check(c, is.ErrorIs(err, io.EOF), "expected only a single result")
 }

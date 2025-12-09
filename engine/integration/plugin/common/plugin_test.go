@@ -1,4 +1,4 @@
-package common // import "github.com/docker/docker/integration/plugin/common"
+package common
 
 import (
 	"encoding/base64"
@@ -15,15 +15,16 @@ import (
 
 	c8dimages "github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
-	"github.com/docker/docker/api/types"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
-	"github.com/docker/docker/testutil/fixtures/plugin"
-	"github.com/docker/docker/testutil/registry"
-	"github.com/docker/docker/testutil/request"
+	"github.com/moby/moby/api/types/jsonstream"
+	registrytypes "github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
+	"github.com/moby/moby/v2/internal/testutil/fixtures/plugin"
+	"github.com/moby/moby/v2/internal/testutil/registry"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -100,7 +101,7 @@ func TestPluginInstall(t *testing.T) {
 	skip.If(t, testEnv.IsRootless, "rootless mode has different view of localhost")
 
 	ctx := testutil.StartSpan(baseContext, t)
-	client := testEnv.APIClient()
+	apiclient := testEnv.APIClient()
 
 	t.Run("no auth", func(t *testing.T) {
 		ctx := setupTest(t)
@@ -112,14 +113,14 @@ func TestPluginInstall(t *testing.T) {
 		repo := path.Join(registry.DefaultURL, name+":latest")
 		assert.NilError(t, plugin.CreateInRegistry(ctx, repo, nil))
 
-		rdr, err := client.PluginInstall(ctx, repo, types.PluginInstallOptions{Disabled: true, RemoteRef: repo})
+		rdr, err := apiclient.PluginInstall(ctx, repo, client.PluginInstallOptions{Disabled: true, RemoteRef: repo})
 		assert.NilError(t, err)
 		defer rdr.Close()
 
 		_, err = io.Copy(io.Discard, rdr)
 		assert.NilError(t, err)
 
-		_, _, err = client.PluginInspectWithRaw(ctx, repo)
+		_, err = apiclient.PluginInspect(ctx, repo, client.PluginInspectOptions{})
 		assert.NilError(t, err)
 	})
 
@@ -131,38 +132,49 @@ func TestPluginInstall(t *testing.T) {
 
 		name := "test-" + strings.ToLower(t.Name())
 		repo := path.Join(registry.DefaultURL, name+":latest")
-		err := plugin.Create(ctx, client, repo)
+		err := plugin.Create(ctx, apiclient, repo)
 		assert.NilError(t, err)
 
-		rdr, err := client.PluginPush(ctx, repo, "")
+		res, err := apiclient.PluginPush(ctx, repo, client.PluginPushOptions{})
 		assert.NilError(t, err)
-		defer rdr.Close()
+		defer res.Close()
 
 		buf := &strings.Builder{}
 		assert.NilError(t, err)
 		var digest string
-		assert.NilError(t, jsonmessage.DisplayJSONMessagesStream(rdr, buf, 0, false, func(j jsonmessage.JSONMessage) {
+
+		// PushResult contains the tag, manifest digest, and manifest size from the
+		// push. It's used to signal this information to the trust code in the client
+		// so it can sign the manifest if necessary.
+		//
+		// TODO(thaJeztah): this aux-type is only present for docker content trust, which is deprecated.
+		type pushResult struct {
+			Tag    string
+			Digest string
+			Size   int
+		}
+		assert.NilError(t, jsonmessage.DisplayJSONMessagesStream(res, buf, 0, false, func(j jsonstream.Message) {
 			if j.Aux != nil {
-				var r types.PushResult
+				var r pushResult
 				assert.NilError(t, json.Unmarshal(*j.Aux, &r))
 				digest = r.Digest
 			}
 		}), buf)
 
-		err = client.PluginRemove(ctx, repo, types.PluginRemoveOptions{Force: true})
+		_, err = apiclient.PluginRemove(ctx, repo, client.PluginRemoveOptions{Force: true})
 		assert.NilError(t, err)
 
-		rdr, err = client.PluginInstall(ctx, repo, types.PluginInstallOptions{
+		installResult, err := apiclient.PluginInstall(ctx, repo, client.PluginInstallOptions{
 			Disabled:  true,
 			RemoteRef: repo + "@" + digest,
 		})
 		assert.NilError(t, err)
-		defer rdr.Close()
+		defer installResult.Close()
 
-		_, err = io.Copy(io.Discard, rdr)
+		_, err = io.Copy(io.Discard, installResult)
 		assert.NilError(t, err)
 
-		_, _, err = client.PluginInspectWithRaw(ctx, repo)
+		_, err = apiclient.PluginInspect(ctx, repo, client.PluginInspectOptions{})
 		assert.NilError(t, err)
 	})
 
@@ -180,7 +192,7 @@ func TestPluginInstall(t *testing.T) {
 		authEncoded, err := json.Marshal(auth)
 		assert.NilError(t, err)
 
-		rdr, err := client.PluginInstall(ctx, repo, types.PluginInstallOptions{
+		rdr, err := apiclient.PluginInstall(ctx, repo, client.PluginInstallOptions{
 			RegistryAuth: base64.URLEncoding.EncodeToString(authEncoded),
 			Disabled:     true,
 			RemoteRef:    repo,
@@ -191,7 +203,7 @@ func TestPluginInstall(t *testing.T) {
 		_, err = io.Copy(io.Discard, rdr)
 		assert.NilError(t, err)
 
-		_, _, err = client.PluginInspectWithRaw(ctx, repo)
+		_, err = apiclient.PluginInspect(ctx, repo, client.PluginInspectOptions{})
 		assert.NilError(t, err)
 	})
 	t.Run("with insecure", func(t *testing.T) {
@@ -233,15 +245,15 @@ func TestPluginInstall(t *testing.T) {
 		repo := path.Join(regURL, name+":latest")
 		assert.NilError(t, plugin.CreateInRegistry(ctx, repo, nil, plugin.WithInsecureRegistry(regURL)))
 
-		client := d.NewClientT(t)
-		rdr, err := client.PluginInstall(ctx, repo, types.PluginInstallOptions{Disabled: true, RemoteRef: repo})
+		apiClient := d.NewClientT(t)
+		rdr, err := apiClient.PluginInstall(ctx, repo, client.PluginInstallOptions{Disabled: true, RemoteRef: repo})
 		assert.NilError(t, err)
 		defer rdr.Close()
 
 		_, err = io.Copy(io.Discard, rdr)
 		assert.NilError(t, err)
 
-		_, _, err = client.PluginInspectWithRaw(ctx, repo)
+		_, err = apiClient.PluginInspect(ctx, repo, client.PluginInspectOptions{})
 		assert.NilError(t, err)
 	})
 	// TODO: test insecure registry with https
@@ -264,12 +276,15 @@ func TestPluginsWithRuntimes(t *testing.T) {
 	d.Start(t)
 	defer d.Stop(t)
 
-	client := d.NewClientT(t)
+	apiclient := d.NewClientT(t)
 
-	assert.NilError(t, plugin.Create(ctx, client, "test:latest"))
-	defer client.PluginRemove(ctx, "test:latest", types.PluginRemoveOptions{Force: true})
+	assert.NilError(t, plugin.Create(ctx, apiclient, "test:latest"))
+	defer func() {
+		_, _ = apiclient.PluginRemove(ctx, "test:latest", client.PluginRemoveOptions{Force: true})
+	}()
 
-	assert.NilError(t, client.PluginEnable(ctx, "test:latest", types.PluginEnableOptions{Timeout: 30}))
+	_, err = apiclient.PluginEnable(ctx, "test:latest", client.PluginEnableOptions{Timeout: 30})
+	assert.NilError(t, err)
 
 	p := filepath.Join(dir, "myrt")
 	script := fmt.Sprintf(`#!/bin/sh
@@ -326,16 +341,16 @@ func TestPluginBackCompatMediaTypes(t *testing.T) {
 
 	repo := path.Join(registry.DefaultURL, strings.ToLower(t.Name())+":latest")
 
-	client := testEnv.APIClient()
+	apiclient := testEnv.APIClient()
 
-	assert.NilError(t, plugin.Create(ctx, client, repo))
+	assert.NilError(t, plugin.Create(ctx, apiclient, repo))
 
-	rdr, err := client.PluginPush(ctx, repo, "")
+	res, err := apiclient.PluginPush(ctx, repo, client.PluginPushOptions{})
 	assert.NilError(t, err)
-	defer rdr.Close()
+	defer res.Close()
 
 	buf := &strings.Builder{}
-	assert.NilError(t, jsonmessage.DisplayJSONMessagesStream(rdr, buf, 0, false, nil), buf)
+	assert.NilError(t, jsonmessage.DisplayJSONMessagesStream(res, buf, 0, false, nil), buf)
 
 	// Use custom header here because older versions of the registry do not
 	// parse the accept header correctly and does not like the accept header
@@ -355,7 +370,7 @@ func TestPluginBackCompatMediaTypes(t *testing.T) {
 	fetcher, err := resolver.Fetcher(ctx, n)
 	assert.NilError(t, err)
 
-	rdr, err = fetcher.Fetch(ctx, desc)
+	rdr, err := fetcher.Fetch(ctx, desc)
 	assert.NilError(t, err)
 	defer rdr.Close()
 

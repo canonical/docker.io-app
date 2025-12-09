@@ -1,6 +1,6 @@
 //go:build !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"bufio"
@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
 	statsV1 "github.com/containerd/cgroups/v3/cgroup1/stats"
 	statsV2 "github.com/containerd/cgroups/v3/cgroup2/stats"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
+	cerrdefs "github.com/containerd/errdefs"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/container"
 	"github.com/pkg/errors"
 )
 
@@ -40,16 +42,18 @@ func (daemon *Daemon) stats(c *container.Container) (*containertypes.StatsRespon
 	}
 	cs, err := task.Stats(context.Background())
 	if err != nil {
-		if strings.Contains(err.Error(), "container not found") {
+		if cerrdefs.IsNotFound(err) || strings.Contains(err.Error(), "container not found") {
 			return nil, containerNotFound(c.ID)
 		}
 		return nil, err
 	}
 	s := &containertypes.StatsResponse{
-		Read: cs.Read,
+		ID:     c.ID,
+		Name:   c.Name,
+		OSType: runtime.GOOS,
+		Read:   cs.Read,
 	}
-	stats := cs.Metrics
-	switch t := stats.(type) {
+	switch t := cs.Metrics.(type) {
 	case *statsV1.Metrics:
 		return daemon.statsV1(s, t)
 	case *statsV2.Metrics:
@@ -348,7 +352,7 @@ func readSystemCPUUsage(r io.Reader) (cpuUsage uint64, cpuNum uint32, _ error) {
 		if line[3] == ' ' {
 			parts := strings.Fields(line)
 			if len(parts) < 8 {
-				return 0, 0, fmt.Errorf("invalid number of cpu fields")
+				return 0, 0, errors.New("invalid number of cpu fields")
 			}
 			var totalClockTicks uint64
 			for _, i := range parts[1:8] {

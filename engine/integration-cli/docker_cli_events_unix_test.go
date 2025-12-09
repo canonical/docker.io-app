@@ -14,8 +14,8 @@ import (
 	"unicode"
 
 	"github.com/creack/pty"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -100,7 +100,7 @@ func (s *DockerCLIEventSuite) TestEventsOOMDisableTrue(c *testing.T) {
 	}()
 
 	cli.WaitRun(c, "oomTrue")
-	defer dockerCmdWithResult("kill", "oomTrue")
+	defer cli.Docker(cli.Args("kill", "oomTrue"))
 	containerID := inspectField(c, "oomTrue", "Id")
 
 	testActions := map[string]chan bool{
@@ -312,7 +312,7 @@ func (s *DockerCLIEventSuite) TestEventsImageUntagDelete(c *testing.T) {
 	defer observer.Stop()
 
 	name := "testimageevents"
-	buildImageSuccessfully(c, name, build.WithDockerfile(`FROM scratch
+	cli.BuildCmd(c, name, build.WithDockerfile(`FROM scratch
 		MAINTAINER "docker"`))
 	imageID := getIDByName(c, name)
 	assert.NilError(c, deleteImages(name))

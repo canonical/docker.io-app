@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -18,19 +18,19 @@ type DockerCLIHistorySuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIHistorySuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIHistorySuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIHistorySuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIHistorySuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 // This is a heisen-test.  Because the created timestamp of images and the behavior of
 // sort is not predictable it doesn't always fail.
 func (s *DockerCLIHistorySuite) TestBuildHistory(c *testing.T) {
 	const name = "testbuildhistory"
-	buildImageSuccessfully(c, name, build.WithDockerfile(`FROM `+minimalBaseImage()+`
+	cli.BuildCmd(c, name, build.WithDockerfile(`FROM `+minimalBaseImage()+`
 LABEL label.A="A"
 LABEL label.B="B"
 LABEL label.C="C"

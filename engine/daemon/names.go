@@ -1,17 +1,16 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/names"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/namesgenerator"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/stringid"
+	"github.com/moby/moby/v2/daemon/names"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/internal/namesgenerator"
 	"github.com/pkg/errors"
 )
 
@@ -22,12 +21,12 @@ var (
 
 func (daemon *Daemon) registerName(container *container.Container) error {
 	if container.ID == "" {
-		return fmt.Errorf("invalid empty id")
+		return errors.New("invalid empty id")
 	}
 	if daemon.containers.Get(container.ID) != nil {
 		// TODO(thaJeztah): should this be a panic (duplicate IDs due to invalid state on disk?)
 		// TODO(thaJeztah): should this also check for container.ID being a prefix of another container's ID? (daemon.containersReplica.GetByPrefix); only should happen due to corruption / truncated ID.
-		return fmt.Errorf("container is already loaded")
+		return errors.New("container is already loaded")
 	}
 	if container.Name == "" {
 		name, err := daemon.generateAndReserveName(container.ID)

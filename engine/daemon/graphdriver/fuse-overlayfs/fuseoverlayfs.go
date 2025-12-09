@@ -1,11 +1,10 @@
 //go:build linux
 
-package fuseoverlayfs // import "github.com/docker/docker/daemon/graphdriver/fuse-overlayfs"
+package fuseoverlayfs
 
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -14,16 +13,16 @@ import (
 	"strings"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/daemon/graphdriver/overlayutils"
-	"github.com/docker/docker/daemon/internal/fstype"
-	"github.com/docker/docker/daemon/internal/mountref"
-	"github.com/docker/docker/internal/containerfs"
-	"github.com/docker/docker/internal/directory"
-	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
 	"github.com/moby/locker"
+	"github.com/moby/moby/v2/daemon/graphdriver"
+	"github.com/moby/moby/v2/daemon/graphdriver/overlayutils"
+	"github.com/moby/moby/v2/daemon/internal/containerfs"
+	"github.com/moby/moby/v2/daemon/internal/directory"
+	"github.com/moby/moby/v2/daemon/internal/fstype"
+	"github.com/moby/moby/v2/daemon/internal/mountref"
+	"github.com/moby/moby/v2/pkg/parsers/kernel"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/user"
 	"github.com/moby/sys/userns"
@@ -155,7 +154,7 @@ func (d *Driver) Cleanup() error {
 // file system.
 func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts) error {
 	if opts != nil && len(opts.StorageOpt) != 0 {
-		return fmt.Errorf("--storage-opt is not supported")
+		return errors.New("--storage-opt is not supported")
 	}
 	return d.create(id, parent, opts)
 }
@@ -164,7 +163,7 @@ func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts
 // The parent filesystem is used to configure these directories for the overlay.
 func (d *Driver) Create(id, parent string, opts *graphdriver.CreateOpts) (retErr error) {
 	if opts != nil && len(opts.StorageOpt) != 0 {
-		return fmt.Errorf("--storage-opt is not supported")
+		return errors.New("--storage-opt is not supported")
 	}
 	return d.create(id, parent, opts)
 }
@@ -188,7 +187,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 	}()
 
 	if opts != nil && len(opts.StorageOpt) > 0 {
-		return fmt.Errorf("--storage-opt is not supported")
+		return errors.New("--storage-opt is not supported")
 	}
 
 	if err := user.MkdirAndChown(path.Join(dir, diffDirName), 0o755, uid, gid); err != nil {
@@ -281,7 +280,7 @@ func (d *Driver) getLowerDirs(id string) ([]string, error) {
 // Remove cleans the directories that are created for this id.
 func (d *Driver) Remove(id string) error {
 	if id == "" {
-		return fmt.Errorf("refusing to remove the directories: id is empty")
+		return errors.New("refusing to remove the directories: id is empty")
 	}
 	d.locker.Lock(id)
 	defer d.locker.Unlock(id)

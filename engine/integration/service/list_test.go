@@ -1,12 +1,12 @@
-package service // import "github.com/docker/docker/integration/service"
+package service
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/docker/api/types/filters"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/integration/internal/swarm"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -32,8 +32,8 @@ func TestServiceListWithStatuses(t *testing.T) {
 
 	d := swarm.NewSwarm(ctx, t, testEnv)
 	defer d.Stop(t)
-	client := d.NewClientT(t)
-	defer client.Close()
+	apiClient := d.NewClientT(t)
+	defer apiClient.Close()
 
 	serviceCount := 3
 	// create some services.
@@ -43,7 +43,8 @@ func TestServiceListWithStatuses(t *testing.T) {
 		// tasks to fail and exit. instead, we'll just pass no args, which
 		// works.
 		spec.TaskTemplate.ContainerSpec.Args = []string{}
-		resp, err := client.ServiceCreate(ctx, spec, swarmtypes.ServiceCreateOptions{
+		resp, err := apiClient.ServiceCreate(ctx, client.ServiceCreateOptions{
+			Spec:          spec,
 			QueryRegistry: false,
 		})
 		assert.NilError(t, err)
@@ -52,12 +53,12 @@ func TestServiceListWithStatuses(t *testing.T) {
 		// serviceContainerCount function does not do. instead, we'll use a
 		// bespoke closure right here.
 		poll.WaitOn(t, func(log poll.LogT) poll.Result {
-			tasks, err := client.TaskList(ctx, swarmtypes.TaskListOptions{
-				Filters: filters.NewArgs(filters.Arg("service", id)),
+			taskList, err := apiClient.TaskList(ctx, client.TaskListOptions{
+				Filters: make(client.Filters).Add("service", id),
 			})
 
 			running := 0
-			for _, task := range tasks {
+			for _, task := range taskList.Items {
 				if task.Status.State == swarmtypes.TaskStateRunning {
 					running++
 				}
@@ -71,25 +72,25 @@ func TestServiceListWithStatuses(t *testing.T) {
 			default:
 				return poll.Continue(
 					"running task count %d (%d total), waiting for %d",
-					running, len(tasks), i+1,
+					running, len(taskList.Items), i+1,
 				)
 			}
 		})
 	}
 
 	// now, let's do the list operation with no status arg set.
-	resp, err := client.ServiceList(ctx, swarmtypes.ServiceListOptions{})
+	result, err := apiClient.ServiceList(ctx, client.ServiceListOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Len(resp, serviceCount))
-	for _, service := range resp {
+	assert.Check(t, is.Len(result.Items, serviceCount))
+	for _, service := range result.Items {
 		assert.Check(t, is.Nil(service.ServiceStatus))
 	}
 
 	// now try again, but with Status: true. This time, we should have statuses
-	resp, err = client.ServiceList(ctx, swarmtypes.ServiceListOptions{Status: true})
+	result, err = apiClient.ServiceList(ctx, client.ServiceListOptions{Status: true})
 	assert.NilError(t, err)
-	assert.Check(t, is.Len(resp, serviceCount))
-	for _, service := range resp {
+	assert.Check(t, is.Len(result.Items, serviceCount))
+	for _, service := range result.Items {
 		replicas := *service.Spec.Mode.Replicated.Replicas
 
 		assert.Assert(t, service.ServiceStatus != nil)

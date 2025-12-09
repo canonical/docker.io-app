@@ -1,12 +1,11 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/pkg/sysinfo"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/pkg/sysinfo"
 )
 
 // fillPlatformInfo fills the platform related info.
@@ -18,7 +17,7 @@ WARNING: Feature flag "windows-dns-proxy" has been removed, forwarding to extern
 	return nil
 }
 
-func (daemon *Daemon) fillPlatformVersion(ctx context.Context, v *types.Version, cfg *configStore) error {
+func (daemon *Daemon) fillPlatformVersion(ctx context.Context, v *system.VersionResponse, cfg *configStore) error {
 	return nil
 }
 

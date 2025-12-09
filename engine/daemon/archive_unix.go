@@ -1,6 +1,6 @@
 //go:build !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/ioutils"
-	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/moby/go-archive"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	volumemounts "github.com/moby/moby/v2/daemon/volume/mounts"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/pkg/ioutils"
 	"github.com/pkg/errors"
 )
 
@@ -97,7 +97,7 @@ func (daemon *Daemon) containerArchivePath(container *container.Container, path 
 // noOverwriteDirNonDir is true then it will be an error if unpacking the
 // given content would cause an existing directory to be replaced with a non-
 // directory and vice versa.
-func (daemon *Daemon) containerExtractToDir(container *container.Container, path string, copyUIDGID, noOverwriteDirNonDir bool, content io.Reader) error {
+func (daemon *Daemon) containerExtractToDir(container *container.Container, path string, copyUIDGID, allowOverwriteDirWithFile bool, content io.Reader) error {
 	container.Lock()
 	defer container.Unlock()
 
@@ -131,13 +131,13 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 			return err
 		}
 
-		options := daemon.defaultTarCopyOptions(noOverwriteDirNonDir)
+		options := daemon.defaultTarCopyOptions(allowOverwriteDirWithFile)
 
 		if copyUIDGID {
 			var err error
 			// tarCopyOptions will appropriately pull in the right uid/gid for the
 			// user/group and will set the options.
-			options, err = daemon.tarCopyOptions(container, noOverwriteDirNonDir)
+			options, err = daemon.tarCopyOptions(container, allowOverwriteDirWithFile)
 			if err != nil {
 				return err
 			}

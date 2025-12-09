@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package image
 
@@ -13,8 +13,8 @@ import (
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/inspect"
 	flagsHelper "github.com/docker/cli/cli/flags"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
@@ -26,7 +26,7 @@ type inspectOptions struct {
 }
 
 // newInspectCommand creates a new cobra.Command for `docker image inspect`
-func newInspectCommand(dockerCli command.Cli) *cobra.Command {
+func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts inspectOptions
 
 	cmd := &cobra.Command{
@@ -35,9 +35,10 @@ func newInspectCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.refs = args
-			return runInspect(cmd.Context(), dockerCli, opts)
+			return runInspect(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: completion.ImageNames(dockerCli, -1),
+		ValidArgsFunction:     completion.ImageNames(dockerCLI, -1),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -51,7 +52,7 @@ If the image or the server is not multi-platform capable, the command will error
 'os[/arch[/variant]]': Explicit platform (eg. linux/amd64)`)
 	flags.SetAnnotation("platform", "version", []string{"1.49"})
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 	return cmd
 }
 

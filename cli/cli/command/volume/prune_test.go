@@ -11,8 +11,8 @@ import (
 
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -21,11 +21,11 @@ import (
 
 func TestVolumePruneErrors(t *testing.T) {
 	testCases := []struct {
-		name            string
-		args            []string
-		flags           map[string]string
-		volumePruneFunc func(args filters.Args) (volume.PruneReport, error)
-		expectedError   string
+		name          string
+		args          []string
+		flags         map[string]string
+		pruneFunc     func(client.VolumePruneOptions) (client.VolumePruneResult, error)
+		expectedError string
 	}{
 		{
 			name:          "accepts no arguments",
@@ -37,8 +37,8 @@ func TestVolumePruneErrors(t *testing.T) {
 			flags: map[string]string{
 				"force": "true",
 			},
-			volumePruneFunc: func(args filters.Args) (volume.PruneReport, error) {
-				return volume.PruneReport{}, errors.New("error pruning volumes")
+			pruneFunc: func(opts client.VolumePruneOptions) (client.VolumePruneResult, error) {
+				return client.VolumePruneResult{}, errors.New("error pruning volumes")
 			},
 			expectedError: "error pruning volumes",
 		},
@@ -53,9 +53,9 @@ func TestVolumePruneErrors(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewPruneCommand(
+			cmd := newPruneCommand(
 				test.NewFakeCli(&fakeClient{
-					volumePruneFunc: tc.volumePruneFunc,
+					volumePruneFunc: tc.pruneFunc,
 				}),
 			)
 			cmd.SetArgs(tc.args)
@@ -71,41 +71,41 @@ func TestVolumePruneErrors(t *testing.T) {
 
 func TestVolumePruneSuccess(t *testing.T) {
 	testCases := []struct {
-		name            string
-		args            []string
-		input           string
-		volumePruneFunc func(args filters.Args) (volume.PruneReport, error)
+		name      string
+		args      []string
+		input     string
+		pruneFunc func(client.VolumePruneOptions) (client.VolumePruneResult, error)
 	}{
 		{
 			name:  "all",
 			args:  []string{"--all"},
 			input: "y",
-			volumePruneFunc: func(pruneFilter filters.Args) (volume.PruneReport, error) {
-				assert.Check(t, is.DeepEqual([]string{"true"}, pruneFilter.Get("all")))
-				return volume.PruneReport{}, nil
+			pruneFunc: func(opts client.VolumePruneOptions) (client.VolumePruneResult, error) {
+				assert.Check(t, is.DeepEqual(opts.Filters["all"], map[string]bool{"true": true}))
+				return client.VolumePruneResult{}, nil
 			},
 		},
 		{
 			name: "all-forced",
 			args: []string{"--all", "--force"},
-			volumePruneFunc: func(pruneFilter filters.Args) (volume.PruneReport, error) {
-				return volume.PruneReport{}, nil
+			pruneFunc: func(opts client.VolumePruneOptions) (client.VolumePruneResult, error) {
+				return client.VolumePruneResult{}, nil
 			},
 		},
 		{
 			name:  "label-filter",
 			args:  []string{"--filter", "label=foobar"},
 			input: "y",
-			volumePruneFunc: func(pruneFilter filters.Args) (volume.PruneReport, error) {
-				assert.Check(t, is.DeepEqual([]string{"foobar"}, pruneFilter.Get("label")))
-				return volume.PruneReport{}, nil
+			pruneFunc: func(opts client.VolumePruneOptions) (client.VolumePruneResult, error) {
+				assert.Check(t, is.DeepEqual(opts.Filters["label"], map[string]bool{"foobar": true}))
+				return client.VolumePruneResult{}, nil
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cli := test.NewFakeCli(&fakeClient{volumePruneFunc: tc.volumePruneFunc})
-			cmd := NewPruneCommand(cli)
+			cli := test.NewFakeCli(&fakeClient{volumePruneFunc: tc.pruneFunc})
+			cmd := newPruneCommand(cli)
 			if tc.input != "" {
 				cli.SetIn(streams.NewIn(io.NopCloser(strings.NewReader(tc.input))))
 			}
@@ -121,7 +121,7 @@ func TestVolumePruneSuccess(t *testing.T) {
 func TestVolumePruneForce(t *testing.T) {
 	testCases := []struct {
 		name            string
-		volumePruneFunc func(args filters.Args) (volume.PruneReport, error)
+		volumePruneFunc func(options client.VolumePruneOptions) (client.VolumePruneResult, error)
 	}{
 		{
 			name: "empty",
@@ -135,7 +135,7 @@ func TestVolumePruneForce(t *testing.T) {
 		cli := test.NewFakeCli(&fakeClient{
 			volumePruneFunc: tc.volumePruneFunc,
 		})
-		cmd := NewPruneCommand(cli)
+		cmd := newPruneCommand(cli)
 		cmd.Flags().Set("force", "true")
 		assert.NilError(t, cmd.Execute())
 		golden.Assert(t, cli.OutBuffer().String(), fmt.Sprintf("volume-prune.%s.golden", tc.name))
@@ -152,7 +152,7 @@ func TestVolumePrunePromptYes(t *testing.T) {
 		})
 
 		cli.SetIn(streams.NewIn(io.NopCloser(strings.NewReader(input))))
-		cmd := NewPruneCommand(cli)
+		cmd := newPruneCommand(cli)
 		cmd.SetArgs([]string{})
 		assert.NilError(t, cmd.Execute())
 		golden.Assert(t, cli.OutBuffer().String(), "volume-prune-yes.golden")
@@ -170,7 +170,7 @@ func TestVolumePrunePromptNo(t *testing.T) {
 			})
 
 			cli.SetIn(streams.NewIn(io.NopCloser(strings.NewReader(input))))
-			cmd := NewPruneCommand(cli)
+			cmd := newPruneCommand(cli)
 			cmd.SetArgs([]string{})
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
@@ -180,12 +180,14 @@ func TestVolumePrunePromptNo(t *testing.T) {
 	}
 }
 
-func simplePruneFunc(filters.Args) (volume.PruneReport, error) {
-	return volume.PruneReport{
-		VolumesDeleted: []string{
-			"foo", "bar", "baz",
+func simplePruneFunc(options client.VolumePruneOptions) (client.VolumePruneResult, error) {
+	return client.VolumePruneResult{
+		Report: volume.PruneReport{
+			VolumesDeleted: []string{
+				"foo", "bar", "baz",
+			},
+			SpaceReclaimed: 2000,
 		},
-		SpaceReclaimed: 2000,
 	}, nil
 }
 
@@ -194,12 +196,12 @@ func TestVolumePrunePromptTerminate(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cli := test.NewFakeCli(&fakeClient{
-		volumePruneFunc: func(filter filters.Args) (volume.PruneReport, error) {
-			return volume.PruneReport{}, errors.New("fakeClient volumePruneFunc should not be called")
+		volumePruneFunc: func(options client.VolumePruneOptions) (client.VolumePruneResult, error) {
+			return client.VolumePruneResult{}, errors.New("fakeClient volumePruneFunc should not be called")
 		},
 	})
 
-	cmd := NewPruneCommand(cli)
+	cmd := newPruneCommand(cli)
 	cmd.SetArgs([]string{})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

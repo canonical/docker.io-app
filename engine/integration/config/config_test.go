@@ -1,4 +1,4 @@
-package config // import "github.com/docker/docker/integration/config"
+package config
 
 import (
 	"bytes"
@@ -9,13 +9,11 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/swarm"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/swarm"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -35,14 +33,14 @@ func TestConfigInspect(t *testing.T) {
 	testName := t.Name()
 	configID := createConfig(ctx, t, c, testName, []byte("TESTINGDATA"), nil)
 
-	insp, body, err := c.ConfigInspectWithRaw(ctx, configID)
+	result, err := c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.Spec.Name, testName))
+	assert.Check(t, is.Equal(result.Config.Spec.Name, testName))
 
 	var config swarmtypes.Config
-	err = json.Unmarshal(body, &config)
+	err = json.Unmarshal(result.Raw, &config)
 	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual(config, insp))
+	assert.Check(t, is.DeepEqual(config, result.Config))
 }
 
 func TestConfigList(t *testing.T) {
@@ -56,9 +54,9 @@ func TestConfigList(t *testing.T) {
 	defer c.Close()
 
 	// This test case is ported from the original TestConfigsEmptyList
-	configs, err := c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	result, err := c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(len(configs), 0))
+	assert.Check(t, is.Equal(len(result.Items), 0))
 
 	testName0 := "test0-" + t.Name()
 	testName1 := "test1-" + t.Name()
@@ -71,64 +69,66 @@ func TestConfigList(t *testing.T) {
 	config1ID := createConfig(ctx, t, c, testName1, []byte("TESTINGDATA1"), map[string]string{"type": "production"})
 
 	// test by `config ls`
-	entries, err := c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	res, err := c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual(configNamesFromList(entries), testNames))
+	assert.Check(t, is.DeepEqual(configNamesFromList(res.Items), testNames))
 
 	testCases := []struct {
 		desc     string
-		filters  filters.Args
+		filters  client.Filters
 		expected []string
 	}{
 		{
 			desc:     "test filter by name",
-			filters:  filters.NewArgs(filters.Arg("name", testName0)),
+			filters:  make(client.Filters).Add("name", testName0),
 			expected: []string{testName0},
 		},
 		{
 			desc:     "test filter by id",
-			filters:  filters.NewArgs(filters.Arg("id", config1ID)),
+			filters:  make(client.Filters).Add("id", config1ID),
 			expected: []string{testName1},
 		},
 		{
 			desc:     "test filter by label key only",
-			filters:  filters.NewArgs(filters.Arg("label", "type")),
+			filters:  make(client.Filters).Add("label", "type"),
 			expected: testNames,
 		},
 		{
 			desc:     "test filter by label key=value " + testName0,
-			filters:  filters.NewArgs(filters.Arg("label", "type=test")),
+			filters:  make(client.Filters).Add("label", "type=test"),
 			expected: []string{testName0},
 		},
 		{
 			desc:     "test filter by label key=value " + testName1,
-			filters:  filters.NewArgs(filters.Arg("label", "type=production")),
+			filters:  make(client.Filters).Add("label", "type=production"),
 			expected: []string{testName1},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
-			entries, err = c.ConfigList(ctx, swarmtypes.ConfigListOptions{
+			res, err = c.ConfigList(ctx, client.ConfigListOptions{
 				Filters: tc.filters,
 			})
 			assert.NilError(t, err)
-			assert.Check(t, is.DeepEqual(configNamesFromList(entries), tc.expected))
+			assert.Check(t, is.DeepEqual(configNamesFromList(res.Items), tc.expected))
 		})
 	}
 }
 
-func createConfig(ctx context.Context, t *testing.T, client client.APIClient, name string, data []byte, labels map[string]string) string {
-	config, err := client.ConfigCreate(ctx, swarmtypes.ConfigSpec{
-		Annotations: swarmtypes.Annotations{
-			Name:   name,
-			Labels: labels,
+func createConfig(ctx context.Context, t *testing.T, apiClient client.APIClient, name string, data []byte, labels map[string]string) string {
+	result, err := apiClient.ConfigCreate(ctx, client.ConfigCreateOptions{
+		Spec: swarmtypes.ConfigSpec{
+			Annotations: swarmtypes.Annotations{
+				Name:   name,
+				Labels: labels,
+			},
+			Data: data,
 		},
-		Data: data,
 	})
 	assert.NilError(t, err)
-	assert.Check(t, config.ID != "")
-	return config.ID
+	assert.Check(t, result.ID != "")
+	return result.ID
 }
 
 func TestConfigsCreateAndDelete(t *testing.T) {
@@ -143,14 +143,14 @@ func TestConfigsCreateAndDelete(t *testing.T) {
 	testName := "test_config-" + t.Name()
 	configID := createConfig(ctx, t, c, testName, []byte("TESTINGDATA"), nil)
 
-	err := c.ConfigRemove(ctx, configID)
+	_, err := c.ConfigRemove(ctx, configID, client.ConfigRemoveOptions{})
 	assert.NilError(t, err)
 
-	_, _, err = c.ConfigInspectWithRaw(ctx, configID)
+	_, err = c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.Check(t, cerrdefs.IsNotFound(err))
 	assert.Check(t, is.ErrorContains(err, configID))
 
-	err = c.ConfigRemove(ctx, "non-existing")
+	_, err = c.ConfigRemove(ctx, "non-existing", client.ConfigRemoveOptions{})
 	assert.Check(t, cerrdefs.IsNotFound(err))
 	assert.Check(t, is.ErrorContains(err, "non-existing"))
 
@@ -160,12 +160,12 @@ func TestConfigsCreateAndDelete(t *testing.T) {
 		"key2": "value2",
 	})
 
-	insp, _, err := c.ConfigInspectWithRaw(ctx, configID)
+	result, err := c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.Spec.Name, testName))
-	assert.Check(t, is.Equal(len(insp.Spec.Labels), 2))
-	assert.Check(t, is.Equal(insp.Spec.Labels["key1"], "value1"))
-	assert.Check(t, is.Equal(insp.Spec.Labels["key2"], "value2"))
+	assert.Check(t, is.Equal(result.Config.Spec.Name, testName))
+	assert.Check(t, is.Equal(len(result.Config.Spec.Labels), 2))
+	assert.Check(t, is.Equal(result.Config.Spec.Labels["key1"], "value1"))
+	assert.Check(t, is.Equal(result.Config.Spec.Labels["key2"], "value2"))
 }
 
 func TestConfigsUpdate(t *testing.T) {
@@ -181,41 +181,41 @@ func TestConfigsUpdate(t *testing.T) {
 	testName := "test_config-" + t.Name()
 	configID := createConfig(ctx, t, c, testName, []byte("TESTINGDATA"), nil)
 
-	insp, _, err := c.ConfigInspectWithRaw(ctx, configID)
+	insp, err := c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.ID, configID))
+	assert.Check(t, is.Equal(insp.Config.ID, configID))
 
 	// test UpdateConfig with full ID
-	insp.Spec.Labels = map[string]string{"test": "test1"}
-	err = c.ConfigUpdate(ctx, configID, insp.Version, insp.Spec)
+	insp.Config.Spec.Labels = map[string]string{"test": "test1"}
+	_, err = c.ConfigUpdate(ctx, configID, client.ConfigUpdateOptions{Version: insp.Config.Version, Spec: insp.Config.Spec})
 	assert.NilError(t, err)
 
-	insp, _, err = c.ConfigInspectWithRaw(ctx, configID)
+	insp, err = c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.Spec.Labels["test"], "test1"))
+	assert.Check(t, is.Equal(insp.Config.Spec.Labels["test"], "test1"))
 
 	// test UpdateConfig with full name
-	insp.Spec.Labels = map[string]string{"test": "test2"}
-	err = c.ConfigUpdate(ctx, testName, insp.Version, insp.Spec)
+	insp.Config.Spec.Labels = map[string]string{"test": "test2"}
+	_, err = c.ConfigUpdate(ctx, testName, client.ConfigUpdateOptions{Version: insp.Config.Version, Spec: insp.Config.Spec})
 	assert.NilError(t, err)
 
-	insp, _, err = c.ConfigInspectWithRaw(ctx, configID)
+	insp, err = c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.Spec.Labels["test"], "test2"))
+	assert.Check(t, is.Equal(insp.Config.Spec.Labels["test"], "test2"))
 
 	// test UpdateConfig with prefix ID
-	insp.Spec.Labels = map[string]string{"test": "test3"}
-	err = c.ConfigUpdate(ctx, configID[:1], insp.Version, insp.Spec)
+	insp.Config.Spec.Labels = map[string]string{"test": "test3"}
+	_, err = c.ConfigUpdate(ctx, configID[:1], client.ConfigUpdateOptions{Version: insp.Config.Version, Spec: insp.Config.Spec})
 	assert.NilError(t, err)
 
-	insp, _, err = c.ConfigInspectWithRaw(ctx, configID)
+	insp, err = c.ConfigInspect(ctx, configID, client.ConfigInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(insp.Spec.Labels["test"], "test3"))
+	assert.Check(t, is.Equal(insp.Config.Spec.Labels["test"], "test3"))
 
 	// test UpdateConfig in updating Data which is not supported in daemon
 	// this test will produce an error in func UpdateConfig
-	insp.Spec.Data = []byte("TESTINGDATA2")
-	err = c.ConfigUpdate(ctx, configID, insp.Version, insp.Spec)
+	insp.Config.Spec.Data = []byte("TESTINGDATA2")
+	_, err = c.ConfigUpdate(ctx, configID, client.ConfigUpdateOptions{Version: insp.Config.Version, Spec: insp.Config.Spec})
 	assert.Check(t, cerrdefs.IsInvalidArgument(err))
 	assert.Check(t, is.ErrorContains(err, "only updates to Labels are allowed"))
 }
@@ -236,7 +236,9 @@ func TestTemplatedConfig(t *testing.T) {
 		},
 		Data: []byte("this is a secret"),
 	}
-	referencedSecret, err := c.SecretCreate(ctx, referencedSecretSpec)
+	referencedSecret, err := c.SecretCreate(ctx, client.SecretCreateOptions{
+		Spec: referencedSecretSpec,
+	})
 	assert.Check(t, err)
 
 	referencedConfigName := "referencedconfig-" + t.Name()
@@ -246,7 +248,9 @@ func TestTemplatedConfig(t *testing.T) {
 		},
 		Data: []byte("this is a config"),
 	}
-	referencedConfig, err := c.ConfigCreate(ctx, referencedConfigSpec)
+	referencedConfigResult, err := c.ConfigCreate(ctx, client.ConfigCreateOptions{
+		Spec: referencedConfigSpec,
+	})
 	assert.Check(t, err)
 
 	templatedConfigName := "templated_config-" + t.Name()
@@ -263,7 +267,9 @@ func TestTemplatedConfig(t *testing.T) {
 `),
 	}
 
-	templatedConfig, err := c.ConfigCreate(ctx, configSpec)
+	templatedConfigResult, err := c.ConfigCreate(ctx, client.ConfigCreateOptions{
+		Spec: configSpec,
+	})
 	assert.Check(t, err)
 
 	const serviceName = "svc_templated_config"
@@ -276,7 +282,7 @@ func TestTemplatedConfig(t *testing.T) {
 					GID:  "0",
 					Mode: 0o600,
 				},
-				ConfigID:   templatedConfig.ID,
+				ConfigID:   templatedConfigResult.ID,
 				ConfigName: templatedConfigName,
 			},
 		),
@@ -288,7 +294,7 @@ func TestTemplatedConfig(t *testing.T) {
 					GID:  "0",
 					Mode: 0o600,
 				},
-				ConfigID:   referencedConfig.ID,
+				ConfigID:   referencedConfigResult.ID,
 				ConfigName: referencedConfigName,
 			},
 		),
@@ -312,7 +318,7 @@ func TestTemplatedConfig(t *testing.T) {
 	tasks := swarm.GetRunningTasks(ctx, t, c, serviceID)
 	assert.Assert(t, len(tasks) > 0, "no running tasks found for service %s", serviceID)
 
-	resp := swarm.ExecTask(ctx, t, d, tasks[0], container.ExecOptions{
+	resp := swarm.ExecTask(ctx, t, d, tasks[0], client.ExecCreateOptions{
 		Cmd:          []string{"/bin/cat", "/templated_config"},
 		AttachStdout: true,
 		AttachStderr: true,
@@ -327,7 +333,7 @@ func TestTemplatedConfig(t *testing.T) {
 
 	outBuf.Reset()
 	errBuf.Reset()
-	resp = swarm.ExecTask(ctx, t, d, tasks[0], container.ExecOptions{
+	resp = swarm.ExecTask(ctx, t, d, tasks[0], client.ExecCreateOptions{
 		Cmd:          []string{"mount"},
 		AttachStdout: true,
 		AttachStderr: true,
@@ -356,18 +362,18 @@ func TestConfigCreateResolve(t *testing.T) {
 	fakeName := configID
 	fakeID := createConfig(ctx, t, c, fakeName, []byte("fake foo"), nil)
 
-	entries, err := c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	res, err := c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Assert(t, is.Contains(configNamesFromList(entries), configName))
-	assert.Assert(t, is.Contains(configNamesFromList(entries), fakeName))
+	assert.Assert(t, is.Contains(configNamesFromList(res.Items), configName))
+	assert.Assert(t, is.Contains(configNamesFromList(res.Items), fakeName))
 
-	err = c.ConfigRemove(ctx, configID)
+	_, err = c.ConfigRemove(ctx, configID, client.ConfigRemoveOptions{})
 	assert.NilError(t, err)
 
 	// Fake one will remain
-	entries, err = c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	res, err = c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Assert(t, is.DeepEqual(configNamesFromList(entries), []string{fakeName}))
+	assert.Assert(t, is.DeepEqual(configNamesFromList(res.Items), []string{fakeName}))
 
 	// Remove based on name prefix of the fake one
 	// (which is the same as the ID of foo one) should not work
@@ -375,18 +381,18 @@ func TestConfigCreateResolve(t *testing.T) {
 	// - Full ID
 	// - Full Name
 	// - Partial ID (prefix)
-	err = c.ConfigRemove(ctx, configID[:5])
-	assert.Assert(t, nil != err)
-	entries, err = c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	_, err = c.ConfigRemove(ctx, configID[:5], client.ConfigRemoveOptions{})
+	assert.Assert(t, err != nil)
+	res, err = c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Assert(t, is.DeepEqual(configNamesFromList(entries), []string{fakeName}))
+	assert.Assert(t, is.DeepEqual(configNamesFromList(res.Items), []string{fakeName}))
 
 	// Remove based on ID prefix of the fake one should succeed
-	err = c.ConfigRemove(ctx, fakeID[:5])
+	_, err = c.ConfigRemove(ctx, fakeID[:5], client.ConfigRemoveOptions{})
 	assert.NilError(t, err)
-	entries, err = c.ConfigList(ctx, swarmtypes.ConfigListOptions{})
+	res, err = c.ConfigList(ctx, client.ConfigListOptions{})
 	assert.NilError(t, err)
-	assert.Assert(t, is.Equal(0, len(entries)))
+	assert.Assert(t, is.Equal(0, len(res.Items)))
 }
 
 func configNamesFromList(entries []swarmtypes.Config) []string {

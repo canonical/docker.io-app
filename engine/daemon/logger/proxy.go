@@ -1,4 +1,4 @@
-package logger // import "github.com/docker/docker/daemon/logger"
+package logger
 
 import (
 	"errors"
@@ -6,8 +6,8 @@ import (
 )
 
 type client interface {
-	Call(string, interface{}, interface{}) error
-	Stream(string, interface{}) (io.ReadCloser, error)
+	Call(string, any, any) error
+	Stream(string, any) (io.ReadCloser, error)
 }
 
 type logPluginProxy struct {

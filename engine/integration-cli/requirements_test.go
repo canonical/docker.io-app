@@ -2,21 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/containerd/containerd/v2/plugins"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/requirement"
-	"github.com/docker/docker/testutil/registry"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/internal/testutil/registry"
 )
 
 func DaemonIsWindows() bool {
@@ -28,23 +30,23 @@ func DaemonIsLinux() bool {
 }
 
 func OnlyDefaultNetworks(ctx context.Context) bool {
-	apiClient, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.New(client.FromEnv)
 	if err != nil {
 		return false
 	}
-	networks, err := apiClient.NetworkList(ctx, network.ListOptions{})
-	if err != nil || len(networks) > 0 {
+	res, err := apiClient.NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil || len(res.Items) > 0 {
 		return false
 	}
 	return true
 }
 
 func IsAmd64() bool {
-	return testEnv.DaemonVersion.Arch == "amd64"
+	return testEnv.DaemonInfo.Architecture == "amd64"
 }
 
 func NotPpc64le() bool {
-	return testEnv.DaemonVersion.Arch != "ppc64le"
+	return testEnv.DaemonInfo.Architecture != "ppc64le"
 }
 
 func UnixCli() bool {
@@ -65,7 +67,7 @@ func Network() bool {
 	}
 
 	resp, err := c.Get(url)
-	if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		panic(fmt.Sprintf("Timeout for GET request on %s", url))
 	}
 	if resp != nil {
@@ -154,18 +156,15 @@ func TODOBuildkit() bool {
 	return os.Getenv("DOCKER_BUILDKIT") == ""
 }
 
-func DockerCLIVersion(t testing.TB) string {
-	out := cli.DockerCmd(t, "--version").Stdout()
-	version := strings.Fields(out)
-	if len(version) < 3 {
-		t.Fatal("unknown version output", version)
-	}
-	return version[2]
-}
-
 // testRequires checks if the environment satisfies the requirements
 // for the test to run or skips the tests.
-func testRequires(t *testing.T, requirements ...requirement.Test) {
+func testRequires(t *testing.T, requirements ...func() bool) {
 	t.Helper()
-	requirement.Is(t, requirements...)
+	for _, check := range requirements {
+		if !check() {
+			requirementFunc := runtime.FuncForPC(reflect.ValueOf(check).Pointer()).Name()
+			_, req, _ := strings.Cut(path.Base(requirementFunc), ".")
+			t.Skipf("unmatched requirement %s", req)
+		}
+	}
 }

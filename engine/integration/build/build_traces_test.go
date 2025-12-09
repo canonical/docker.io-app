@@ -2,16 +2,16 @@ package build
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client/buildkit"
-	"github.com/docker/docker/testutil"
 	moby_buildkit_v1 "github.com/moby/buildkit/api/services/control"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/util/progress/progressui"
+	"github.com/moby/moby/v2/internal/testutil"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"gotest.tools/v3/assert"
@@ -33,7 +33,15 @@ func TestBuildkitHistoryTracePropagation(t *testing.T) {
 
 	ctx := testutil.StartSpan(baseContext, t)
 
-	opts := buildkit.ClientOpts(testEnv.APIClient())
+	c := testEnv.APIClient()
+	opts := []client.ClientOpt{
+		client.WithSessionDialer(func(ctx context.Context, proto string, meta map[string][]string) (net.Conn, error) {
+			return c.DialHijack(ctx, "/session", proto, meta)
+		}),
+		client.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return c.DialHijack(ctx, "/grpc", "h2c", nil)
+		}),
+	}
 	bc, err := client.New(ctx, "", opts...)
 	assert.NilError(t, err)
 	defer bc.Close()
@@ -107,7 +115,7 @@ func TestBuildkitHistoryTracePropagation(t *testing.T) {
 		}
 
 		if msg.Record.Ref != he.Record.Ref {
-			return poll.Error(fmt.Errorf("got incorrect history record"))
+			return poll.Error(errors.New("got incorrect history record"))
 		}
 		if msg.Record.Trace != nil {
 			return poll.Success()

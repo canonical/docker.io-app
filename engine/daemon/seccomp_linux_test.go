@@ -1,15 +1,15 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"testing"
 
 	coci "github.com/containerd/containerd/v2/pkg/oci"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
-	dconfig "github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/oci"
-	"github.com/docker/docker/pkg/sysinfo"
-	"github.com/docker/docker/profiles/seccomp"
+	containertypes "github.com/moby/moby/api/types/container"
+	dconfig "github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/pkg/oci"
+	"github.com/moby/moby/v2/pkg/sysinfo"
+	"github.com/moby/profiles/seccomp"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"gotest.tools/v3/assert"
 )

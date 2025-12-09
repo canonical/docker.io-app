@@ -8,8 +8,9 @@ import (
 
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -17,7 +18,7 @@ func TestSwarmUnlockErrors(t *testing.T) {
 	testCases := []struct {
 		name            string
 		args            []string
-		swarmUnlockFunc func(req swarm.UnlockRequest) error
+		swarmUnlockFunc func(client.SwarmUnlockOptions) (client.SwarmUnlockResult, error)
 		infoFunc        func() (system.Info, error)
 		expectedError   string
 	}{
@@ -35,7 +36,7 @@ func TestSwarmUnlockErrors(t *testing.T) {
 					},
 				}, nil
 			},
-			expectedError: "This node is not part of a swarm",
+			expectedError: "this node is not part of a swarm",
 		},
 		{
 			name: "is-not-locked",
@@ -46,7 +47,7 @@ func TestSwarmUnlockErrors(t *testing.T) {
 					},
 				}, nil
 			},
-			expectedError: "Error: swarm is not locked",
+			expectedError: "error: swarm is not locked",
 		},
 		{
 			name: "unlockrequest-failed",
@@ -57,8 +58,8 @@ func TestSwarmUnlockErrors(t *testing.T) {
 					},
 				}, nil
 			},
-			swarmUnlockFunc: func(req swarm.UnlockRequest) error {
-				return errors.New("error unlocking the swarm")
+			swarmUnlockFunc: func(client.SwarmUnlockOptions) (client.SwarmUnlockResult, error) {
+				return client.SwarmUnlockResult{}, errors.New("error unlocking the swarm")
 			},
 			expectedError: "error unlocking the swarm",
 		},
@@ -92,11 +93,11 @@ func TestSwarmUnlock(t *testing.T) {
 				},
 			}, nil
 		},
-		swarmUnlockFunc: func(req swarm.UnlockRequest) error {
-			if req.UnlockKey != input {
-				return errors.New("invalid unlock key")
+		swarmUnlockFunc: func(req client.SwarmUnlockOptions) (client.SwarmUnlockResult, error) {
+			if req.Key != input {
+				return client.SwarmUnlockResult{}, errors.New("invalid unlock key")
 			}
-			return nil
+			return client.SwarmUnlockResult{}, nil
 		},
 	})
 	dockerCli.SetIn(streams.NewIn(io.NopCloser(strings.NewReader(input))))

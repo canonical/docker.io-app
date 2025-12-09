@@ -2,20 +2,19 @@ package manager
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/docker/cli/cli-plugins/metadata"
-	"github.com/docker/cli/internal/lazyregexp"
 	"github.com/spf13/cobra"
 )
-
-var pluginNameRe = lazyregexp.New("^[a-z][a-z0-9]*$")
 
 // Plugin represents a potential plugin with all it's metadata.
 type Plugin struct {
@@ -31,12 +30,34 @@ type Plugin struct {
 	ShadowedPaths []string `json:",omitempty"`
 }
 
+// MarshalJSON implements [json.Marshaler] to handle marshaling the
+// [Plugin.Err] field (Go doesn't marshal errors by default).
+func (p *Plugin) MarshalJSON() ([]byte, error) {
+	type Alias Plugin // avoid recursion
+
+	cp := *p // shallow copy to avoid mutating original
+
+	if cp.Err != nil {
+		if _, ok := cp.Err.(encoding.TextMarshaler); !ok {
+			cp.Err = &pluginError{cp.Err}
+		}
+	}
+
+	return json.Marshal((*Alias)(&cp))
+}
+
+// pluginCandidate represents a possible plugin candidate, for mocking purposes.
+type pluginCandidate interface {
+	Path() string
+	Metadata() ([]byte, error)
+}
+
 // newPlugin determines if the given candidate is valid and returns a
 // Plugin.  If the candidate fails one of the tests then `Plugin.Err`
 // is set, and is always a `pluginError`, but the `Plugin` is still
 // returned with no error. An error is only returned due to a
 // non-recoverable error.
-func newPlugin(c Candidate, cmds []*cobra.Command) (Plugin, error) {
+func newPlugin(c pluginCandidate, cmds []*cobra.Command) (Plugin, error) {
 	path := c.Path()
 	if path == "" {
 		return Plugin{}, errors.New("plugin candidate path cannot be empty")
@@ -62,8 +83,8 @@ func newPlugin(c Candidate, cmds []*cobra.Command) (Plugin, error) {
 	}
 
 	// Now apply the candidate tests, so these update p.Err.
-	if !pluginNameRe.MatchString(p.Name) {
-		p.Err = NewPluginError("plugin candidate %q did not match %q", p.Name, pluginNameRe.String())
+	if !isValidPluginName(p.Name) {
+		p.Err = newPluginError("plugin candidate %q did not match %q", p.Name, pluginNameFormat)
 		return p, nil
 	}
 
@@ -75,11 +96,11 @@ func newPlugin(c Candidate, cmds []*cobra.Command) (Plugin, error) {
 			continue
 		}
 		if cmd.Name() == p.Name {
-			p.Err = NewPluginError("plugin %q duplicates builtin command", p.Name)
+			p.Err = newPluginError("plugin %q duplicates builtin command", p.Name)
 			return p, nil
 		}
 		if cmd.HasAlias(p.Name) {
-			p.Err = NewPluginError("plugin %q duplicates an alias of builtin command %q", p.Name, cmd.Name())
+			p.Err = newPluginError("plugin %q duplicates an alias of builtin command %q", p.Name, cmd.Name())
 			return p, nil
 		}
 	}
@@ -95,15 +116,40 @@ func newPlugin(c Candidate, cmds []*cobra.Command) (Plugin, error) {
 		p.Err = wrapAsPluginError(err, "invalid metadata")
 		return p, nil
 	}
-	if p.Metadata.SchemaVersion != "0.1.0" {
-		p.Err = NewPluginError("plugin SchemaVersion %q is not valid, must be 0.1.0", p.Metadata.SchemaVersion)
+	if err := validateSchemaVersion(p.Metadata.SchemaVersion); err != nil {
+		p.Err = &pluginError{cause: err}
 		return p, nil
 	}
 	if p.Metadata.Vendor == "" {
-		p.Err = NewPluginError("plugin metadata does not define a vendor")
+		p.Err = newPluginError("plugin metadata does not define a vendor")
 		return p, nil
 	}
 	return p, nil
+}
+
+// validateSchemaVersion validates if the plugin's schemaVersion is supported.
+//
+// The current schema-version is "0.1.0", but we don't want to break compatibility
+// until v2.0.0 of the schema version. Check for the major version to be < 2.0.0.
+//
+// Note that CLI versions before 28.4.1 may not support these versions as they were
+// hard-coded to only accept "0.1.0".
+func validateSchemaVersion(version string) error {
+	if version == "0.1.0" {
+		return nil
+	}
+	if version == "" {
+		return errors.New("plugin SchemaVersion version cannot be empty")
+	}
+	major, _, ok := strings.Cut(version, ".")
+	majorVersion, err := strconv.Atoi(major)
+	if !ok || err != nil {
+		return fmt.Errorf("plugin SchemaVersion %q has wrong format: must be <major>.<minor>.<patch>", version)
+	}
+	if majorVersion > 1 {
+		return fmt.Errorf("plugin SchemaVersion %q is not supported: must be lower than 2.0.0", version)
+	}
+	return nil
 }
 
 // RunHook executes the plugin's hooks command
@@ -123,4 +169,27 @@ func (p *Plugin) RunHook(ctx context.Context, hookData HookPluginData) ([]byte, 
 	}
 
 	return hookCmdOutput, nil
+}
+
+// pluginNameFormat is used as part of errors for invalid plugin-names.
+// We should consider making this less technical ("must start with "a-z",
+// and only consist of lowercase alphanumeric characters").
+const pluginNameFormat = `^[a-z][a-z0-9]*$`
+
+func isValidPluginName(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// first character must be a-z
+	if c := s[0]; c < 'a' || c > 'z' {
+		return false
+	}
+	// followed by a-z or 0-9
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }

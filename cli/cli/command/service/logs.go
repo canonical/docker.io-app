@@ -3,26 +3,23 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
+	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/command/idresolver"
 	"github.com/docker/cli/internal/logdetails"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/pkg/stringid"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 type logsOptions struct {
@@ -39,7 +36,7 @@ type logsOptions struct {
 	target string
 }
 
-func newLogsCommand(dockerCli command.Cli) *cobra.Command {
+func newLogsCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts logsOptions
 
 	cmd := &cobra.Command{
@@ -48,10 +45,11 @@ func newLogsCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.target = args[0]
-			return runLogs(cmd.Context(), dockerCli, &opts)
+			return runLogs(cmd.Context(), dockerCLI, &opts)
 		},
-		Annotations:       map[string]string{"version": "1.29"},
-		ValidArgsFunction: completeServiceNames(dockerCli),
+		Annotations:           map[string]string{"version": "1.29"},
+		ValidArgsFunction:     completeServiceNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -59,46 +57,37 @@ func newLogsCommand(dockerCli command.Cli) *cobra.Command {
 	flags.BoolVar(&opts.noResolve, "no-resolve", false, "Do not map IDs to Names in output")
 	flags.BoolVar(&opts.noTrunc, "no-trunc", false, "Do not truncate output")
 	flags.BoolVar(&opts.raw, "raw", false, "Do not neatly format logs")
-	flags.SetAnnotation("raw", "version", []string{"1.30"})
+	_ = flags.SetAnnotation("raw", "version", []string{"1.30"})
 	flags.BoolVar(&opts.noTaskIDs, "no-task-ids", false, "Do not include task IDs in output")
 	// options identical to container logs
 	flags.BoolVarP(&opts.follow, "follow", "f", false, "Follow log output")
 	flags.StringVar(&opts.since, "since", "", `Show logs since timestamp (e.g. "2013-01-02T13:23:37Z") or relative (e.g. "42m" for 42 minutes)`)
 	flags.BoolVarP(&opts.timestamps, "timestamps", "t", false, "Show timestamps")
 	flags.BoolVar(&opts.details, "details", false, "Show extra details provided to logs")
-	flags.SetAnnotation("details", "version", []string{"1.30"})
+	_ = flags.SetAnnotation("details", "version", []string{"1.30"})
 	flags.StringVarP(&opts.tail, "tail", "n", "all", "Number of lines to show from the end of the logs")
 
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
 	return cmd
 }
 
-func runLogs(ctx context.Context, dockerCli command.Cli, opts *logsOptions) error {
+func runLogs(ctx context.Context, dockerCli command.Cli, opts *logsOptions) error { //nolint:gocyclo
 	apiClient := dockerCli.Client()
 
 	var (
 		maxLength    = 1
 		responseBody io.ReadCloser
 		tty          bool
-		// logfunc is used to delay the call to logs so that we can do some
-		// processing before we actually get the logs
-		logfunc func(context.Context, string, container.LogsOptions) (io.ReadCloser, error)
 	)
 
-	service, _, err := apiClient.ServiceInspectWithRaw(ctx, opts.target, swarm.ServiceInspectOptions{})
+	service, err := apiClient.ServiceInspect(ctx, opts.target, client.ServiceInspectOptions{})
 	if err != nil {
 		// if it's any error other than service not found, it's Real
-		if !cerrdefs.IsNotFound(err) {
+		if !errdefs.IsNotFound(err) {
 			return err
 		}
-		task, _, err := apiClient.TaskInspectWithRaw(ctx, opts.target)
+		res, err := apiClient.TaskInspect(ctx, opts.target, client.TaskInspectOptions{})
 		if err != nil {
-			if cerrdefs.IsNotFound(err) {
+			if errdefs.IsNotFound(err) {
 				// if the task isn't found, rewrite the error to be clear
 				// that we looked for services AND tasks and found none
 				err = fmt.Errorf("no such task or service: %v", opts.target)
@@ -106,46 +95,66 @@ func runLogs(ctx context.Context, dockerCli command.Cli, opts *logsOptions) erro
 			return err
 		}
 
-		tty = task.Spec.ContainerSpec.TTY
-		maxLength = getMaxLength(task.Slot)
+		tty = res.Task.Spec.ContainerSpec.TTY
+		maxLength = getMaxLength(res.Task.Slot)
 
-		// use the TaskLogs api function
-		logfunc = apiClient.TaskLogs
+		// we can't prettify tty logs. tell the user that this is the case.
+		// this is why we assign the logs function to a variable and delay calling
+		// it. we want to check this before we make the call and checking twice in
+		// each branch is even sloppier than this CLI disaster already is
+		if tty && !opts.raw {
+			return errors.New("tty service logs only supported with --raw")
+		}
+
+		// now get the logs
+		responseBody, err = apiClient.TaskLogs(ctx, opts.target, client.TaskLogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+			Since:      opts.since,
+			Timestamps: opts.timestamps,
+			Follow:     opts.follow,
+			Tail:       opts.tail,
+			// get the details if we request it OR if we're not doing raw mode
+			// (we need them for the context to pretty print)
+			Details: opts.details || !opts.raw,
+		})
+		if err != nil {
+			return err
+		}
+		defer responseBody.Close()
 	} else {
-		// use ServiceLogs api function
-		logfunc = apiClient.ServiceLogs
-		tty = service.Spec.TaskTemplate.ContainerSpec.TTY
-		if service.Spec.Mode.Replicated != nil && service.Spec.Mode.Replicated.Replicas != nil {
+		tty = service.Service.Spec.TaskTemplate.ContainerSpec.TTY
+		if service.Service.Spec.Mode.Replicated != nil && service.Service.Spec.Mode.Replicated.Replicas != nil {
 			// if replicas are initialized, figure out if we need to pad them
-			replicas := *service.Spec.Mode.Replicated.Replicas
+			replicas := *service.Service.Spec.Mode.Replicated.Replicas
 			maxLength = getMaxLength(int(replicas))
 		}
-	}
 
-	// we can't prettify tty logs. tell the user that this is the case.
-	// this is why we assign the logs function to a variable and delay calling
-	// it. we want to check this before we make the call and checking twice in
-	// each branch is even sloppier than this CLI disaster already is
-	if tty && !opts.raw {
-		return errors.New("tty service logs only supported with --raw")
-	}
+		// we can't prettify tty logs. tell the user that this is the case.
+		// this is why we assign the logs function to a variable and delay calling
+		// it. we want to check this before we make the call and checking twice in
+		// each branch is even sloppier than this CLI disaster already is
+		if tty && !opts.raw {
+			return errors.New("tty service logs only supported with --raw")
+		}
 
-	// now get the logs
-	responseBody, err = logfunc(ctx, opts.target, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Since:      opts.since,
-		Timestamps: opts.timestamps,
-		Follow:     opts.follow,
-		Tail:       opts.tail,
-		// get the details if we request it OR if we're not doing raw mode
-		// (we need them for the context to pretty print)
-		Details: opts.details || !opts.raw,
-	})
-	if err != nil {
-		return err
+		// now get the logs
+		responseBody, err = apiClient.ServiceLogs(ctx, opts.target, client.ServiceLogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+			Since:      opts.since,
+			Timestamps: opts.timestamps,
+			Follow:     opts.follow,
+			Tail:       opts.tail,
+			// get the details if we request it OR if we're not doing raw mode
+			// (we need them for the context to pretty print)
+			Details: opts.details || !opts.raw,
+		})
+		if err != nil {
+			return err
+		}
+		defer responseBody.Close()
 	}
-	defer responseBody.Close()
 
 	// tty logs get straight copied. they're not muxed with stdcopy
 	if tty {
@@ -210,21 +219,21 @@ func (f *taskFormatter) format(ctx context.Context, logCtx logContext) (string, 
 		return "", err
 	}
 
-	task, _, err := f.client.TaskInspectWithRaw(ctx, logCtx.taskID)
+	res, err := f.client.TaskInspect(ctx, logCtx.taskID, client.TaskInspectOptions{})
 	if err != nil {
 		return "", err
 	}
 
-	taskName := fmt.Sprintf("%s.%d", serviceName, task.Slot)
+	taskName := fmt.Sprintf("%s.%d", serviceName, res.Task.Slot)
 	if !f.opts.noTaskIDs {
 		if f.opts.noTrunc {
-			taskName += "." + task.ID
+			taskName += "." + res.Task.ID
 		} else {
-			taskName += "." + stringid.TruncateID(task.ID)
+			taskName += "." + formatter.TruncateID(res.Task.ID)
 		}
 	}
 
-	paddingCount := f.padding - getMaxLength(task.Slot)
+	paddingCount := f.padding - getMaxLength(res.Task.Slot)
 	padding := ""
 	if paddingCount > 0 {
 		padding = strings.Repeat(" ", paddingCount)
@@ -261,7 +270,7 @@ func (lw *logWriter) Write(buf []byte) (int, error) {
 	// break up the log line into parts.
 	parts := bytes.SplitN(buf, []byte(" "), numParts)
 	if len(parts) != numParts {
-		return 0, errors.Errorf("invalid context in log message: %v", string(buf))
+		return 0, fmt.Errorf("invalid context in log message: %v", string(buf))
 	}
 	// parse the details out
 	details, err := logdetails.Parse(string(parts[detailsIndex]))
@@ -326,19 +335,19 @@ func (lw *logWriter) Write(buf []byte) (int, error) {
 func parseContext(details map[string]string) (logContext, error) {
 	nodeID, ok := details["com.docker.swarm.node.id"]
 	if !ok {
-		return logContext{}, errors.Errorf("missing node id in details: %v", details)
+		return logContext{}, fmt.Errorf("missing node id in details: %v", details)
 	}
 	delete(details, "com.docker.swarm.node.id")
 
 	serviceID, ok := details["com.docker.swarm.service.id"]
 	if !ok {
-		return logContext{}, errors.Errorf("missing service id in details: %v", details)
+		return logContext{}, fmt.Errorf("missing service id in details: %v", details)
 	}
 	delete(details, "com.docker.swarm.service.id")
 
 	taskID, ok := details["com.docker.swarm.task.id"]
 	if !ok {
-		return logContext{}, errors.Errorf("missing task id in details: %s", details)
+		return logContext{}, fmt.Errorf("missing task id in details: %s", details)
 	}
 	delete(details, "com.docker.swarm.task.id")
 

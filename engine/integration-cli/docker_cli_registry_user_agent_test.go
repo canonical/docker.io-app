@@ -6,9 +6,10 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/registry"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/registry"
 	"gotest.tools/v3/assert"
+	is "gotest.tools/v3/assert/cmp"
 )
 
 // unescapeBackslashSemicolonParens unescapes \;()
@@ -28,25 +29,27 @@ func unescapeBackslashSemicolonParens(s string) string {
 	return string(ret)
 }
 
-func regexpCheckUA(c *testing.T, ua string) {
+func regexpCheckUA(t *testing.T, ua string) {
+	t.Helper()
+
 	re := regexp.MustCompile("(?P<dockerUA>.+) UpstreamClient(?P<upstreamUA>.+)")
 	substrArr := re.FindStringSubmatch(ua)
 
-	assert.Equal(c, len(substrArr), 3, "Expected 'UpstreamClient()' with upstream client UA")
+	assert.Assert(t, is.Len(substrArr, 3), "missing UpstreamClient in user-agent: %s", ua)
 	dockerUA := substrArr[1]
 	upstreamUAEscaped := substrArr[2]
 
 	// check dockerUA looks correct
 	reDockerUA := regexp.MustCompile("^docker/[0-9A-Za-z+]")
 	bMatchDockerUA := reDockerUA.MatchString(dockerUA)
-	assert.Assert(c, bMatchDockerUA, "Docker Engine User-Agent malformed")
+	assert.Assert(t, bMatchDockerUA, "Docker Engine User-Agent malformed")
 
 	// check upstreamUA looks correct
 	// Expecting something like:  Docker-Client/1.11.0-dev (linux)
 	upstreamUA := unescapeBackslashSemicolonParens(upstreamUAEscaped)
 	reUpstreamUA := regexp.MustCompile(`^\(Docker-Client/[0-9A-Za-z+]`)
 	bMatchUpstreamUA := reUpstreamUA.MatchString(upstreamUA)
-	assert.Assert(c, bMatchUpstreamUA, "(Upstream) Docker Client User-Agent malformed")
+	assert.Assert(t, bMatchUpstreamUA, "(Upstream) Docker Client User-Agent malformed")
 }
 
 // registerUserAgentHandler registers a handler for the `/v2/*` endpoint.
@@ -87,11 +90,12 @@ func (s *DockerRegistrySuite) TestUserAgentPassThrough(c *testing.T) {
 	assert.NilError(c, err)
 	defer os.RemoveAll(tmp)
 
-	dockerfile, err := makefile(tmp, "FROM "+imgRepo)
-	assert.NilError(c, err, "Unable to create test dockerfile")
+	// FIXME(thaJeztah): BuildKit doesn't pass through upstream user-agent: "missing UpstreamClient in user-agent: buildkit/v0.25"
+	// dockerfile, err := makefile(tmp, "FROM "+imgRepo)
+	// assert.NilError(c, err, "Unable to create test dockerfile")
 
-	s.d.Cmd("build", "--file", dockerfile, tmp)
-	regexpCheckUA(c, ua)
+	// s.d.Cmd("build", "--file", dockerfile, tmp)
+	// regexpCheckUA(c, ua)
 
 	s.d.Cmd("login", "-u", "richard", "-p", "testtest", reg.URL())
 	regexpCheckUA(c, ua)

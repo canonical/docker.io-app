@@ -61,10 +61,6 @@ type Config struct {
 	State string `toml:"state"`
 	// TempDir is the path to a directory where to place containerd temporary files
 	TempDir string `toml:"temp"`
-	// PluginDir is the directory for dynamic plugins to be stored
-	//
-	// Deprecated: Please use proxy or binary external plugins.
-	PluginDir string `toml:"plugin_dir"`
 	// GRPC configuration settings
 	GRPC GRPCConfig `toml:"grpc"`
 	// TTRPC configuration settings
@@ -217,6 +213,7 @@ type GRPCConfig struct {
 	GID            int    `toml:"gid"`
 	MaxRecvMsgSize int    `toml:"max_recv_message_size"`
 	MaxSendMsgSize int    `toml:"max_send_message_size"`
+	TCPTLSCName    string `toml:"tcp_tls_common_name"`
 }
 
 // TTRPCConfig provides TTRPC configuration for the socket

@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -27,21 +28,21 @@ func TestSecretContextFormatWrite(t *testing.T) {
 		},
 		// Table format
 		{
-			formatter.Context{Format: NewFormat("table", false)},
+			formatter.Context{Format: newFormat("table", false)},
 			`ID        NAME        DRIVER    CREATED                  UPDATED
 1         passwords             Less than a second ago   Less than a second ago
 2         id_rsa                Less than a second ago   Less than a second ago
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("table {{.Name}}", true)},
+			formatter.Context{Format: newFormat("table {{.Name}}", true)},
 			`NAME
 passwords
 id_rsa
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("{{.ID}}-{{.Name}}", false)},
+			formatter.Context{Format: newFormat("{{.ID}}-{{.Name}}", false)},
 			`1-passwords
 2-id_rsa
 `,
@@ -65,7 +66,7 @@ id_rsa
 			var out bytes.Buffer
 			tc.context.Output = &out
 
-			if err := FormatWrite(tc.context, secrets); err != nil {
+			if err := formatWrite(tc.context, client.SecretListResult{Items: secrets}); err != nil {
 				assert.Error(t, err, tc.expected)
 			} else {
 				assert.Equal(t, out.String(), tc.expected)

@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"bytes"
@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -39,9 +40,9 @@ func TestCreateWithCDIDevices(t *testing.T) {
 		container.WithCmd("/bin/sh", "-c", "env"),
 		container.WithCDIDevices("vendor1.com/device=foo"),
 	)
-	defer apiClient.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+	defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
 
-	inspect, err := apiClient.ContainerInspect(ctx, id)
+	res, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
 
 	expectedRequests := []containertypes.DeviceRequest{
@@ -50,10 +51,10 @@ func TestCreateWithCDIDevices(t *testing.T) {
 			DeviceIDs: []string{"vendor1.com/device=foo"},
 		},
 	}
-	assert.Check(t, is.DeepEqual(inspect.HostConfig.DeviceRequests, expectedRequests))
+	assert.Check(t, is.DeepEqual(res.Container.HostConfig.DeviceRequests, expectedRequests))
 
 	poll.WaitOn(t, container.IsStopped(ctx, apiClient, id))
-	reader, err := apiClient.ContainerLogs(ctx, id, containertypes.LogsOptions{
+	reader, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
 		ShowStdout: true,
 	})
 	assert.NilError(t, err)
@@ -179,7 +180,7 @@ func TestCDIInfoDiscoveredDevices(t *testing.T) {
 	cdiDir := testutil.TempDir(t)
 	specFilePath := filepath.Join(cdiDir, "test-device.json")
 
-	err := os.WriteFile(specFilePath, []byte(specContent), 0644)
+	err := os.WriteFile(specFilePath, []byte(specContent), 0o644)
 	assert.NilError(t, err, "Failed to write sample CDI spec file")
 
 	d := daemon.New(t)
@@ -187,8 +188,9 @@ func TestCDIInfoDiscoveredDevices(t *testing.T) {
 	defer d.Stop(t)
 
 	c := d.NewClientT(t)
-	info, err := c.Info(ctx)
+	result, err := c.Info(ctx, client.InfoOptions{})
 	assert.NilError(t, err)
+	info := result.Info
 
 	assert.Check(t, is.Len(info.CDISpecDirs, 1))
 	assert.Check(t, is.Equal(info.CDISpecDirs[0], cdiDir))

@@ -8,6 +8,7 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -17,8 +18,8 @@ type killOptions struct {
 	containers []string
 }
 
-// NewKillCommand creates a new cobra.Command for `docker kill`
-func NewKillCommand(dockerCli command.Cli) *cobra.Command {
+// newKillCommand creates a new cobra.Command for "docker container kill"
+func newKillCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts killOptions
 
 	cmd := &cobra.Command{
@@ -27,12 +28,13 @@ func NewKillCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.containers = args
-			return runKill(cmd.Context(), dockerCli, &opts)
+			return runKill(cmd.Context(), dockerCLI, &opts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker container kill, docker kill",
 		},
-		ValidArgsFunction: completion.ContainerNames(dockerCli, false),
+		ValidArgsFunction:     completion.ContainerNames(dockerCLI, false),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -46,7 +48,10 @@ func NewKillCommand(dockerCli command.Cli) *cobra.Command {
 func runKill(ctx context.Context, dockerCLI command.Cli, opts *killOptions) error {
 	apiClient := dockerCLI.Client()
 	errChan := parallelOperation(ctx, opts.containers, func(ctx context.Context, container string) error {
-		return apiClient.ContainerKill(ctx, container, opts.signal)
+		_, err := apiClient.ContainerKill(ctx, container, client.ContainerKillOptions{
+			Signal: opts.signal,
+		})
+		return err
 	})
 
 	var errs []error

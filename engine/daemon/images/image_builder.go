@@ -1,8 +1,7 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"runtime"
 
@@ -10,14 +9,15 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/builder"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/v2/daemon/builder"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/internal/progress"
+	"github.com/moby/moby/v2/daemon/internal/streamformatter"
+	"github.com/moby/moby/v2/daemon/internal/stringid"
+	"github.com/moby/moby/v2/daemon/server/buildbackend"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -46,7 +46,9 @@ func (l *roLayer) Release() error {
 	}
 	if l.roLayer != nil {
 		metadata, err := l.layerStore.Release(l.roLayer)
-		layer.LogReleaseMetadata(metadata)
+		for _, m := range metadata {
+			log.G(context.TODO()).WithField("chainID", m.ChainID).Infof("release ROLayer: cleaned up layer %s", m.ChainID)
+		}
 		if err != nil {
 			return errors.Wrap(err, "failed to release ROLayer")
 		}
@@ -125,7 +127,9 @@ func (l *rwLayer) Release() error {
 	}
 
 	metadata, err := l.layerStore.ReleaseRWLayer(l.rwLayer)
-	layer.LogReleaseMetadata(metadata)
+	for _, m := range metadata {
+		log.G(context.TODO()).WithField("chainID", m.ChainID).Infof("release RWLayer: cleaned up layer %s", m.ChainID)
+	}
 	if err != nil {
 		return errors.Wrap(err, "failed to release RWLayer")
 	}
@@ -165,7 +169,7 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 		return nil, err
 	}
 
-	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
+	img, err := i.GetImage(ctx, name, imagebackend.GetImageOpts{Platform: platform})
 	if cerrdefs.IsNotFound(err) && img != nil && platform != nil {
 		imgPlat := ocispec.Platform{
 			OS:           img.OS,
@@ -192,10 +196,10 @@ Please notify the image author to correct the configuration.`,
 // GetImageAndReleasableLayer returns an image and releaseable layer for a reference or ID.
 // Every call to GetImageAndReleasableLayer MUST call releasableLayer.Release() to prevent
 // leaking of layers.
-func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID string, opts backend.GetImageAndLayerOptions) (builder.Image, builder.ROLayer, error) {
+func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID string, opts buildbackend.GetImageAndLayerOptions) (builder.Image, builder.ROLayer, error) {
 	if refOrID == "" { // FROM scratch
 		if runtime.GOOS == "windows" {
-			return nil, nil, fmt.Errorf(`"FROM scratch" is not supported on Windows`)
+			return nil, nil, errors.New(`"FROM scratch" is not supported on Windows`)
 		}
 		if opts.Platform != nil {
 			if err := image.CheckOS(opts.Platform.OS); err != nil {
@@ -206,9 +210,9 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 		return nil, lyr, err
 	}
 
-	if opts.PullOption != backend.PullOptionForcePull {
-		img, err := i.GetImage(ctx, refOrID, backend.GetImageOpts{Platform: opts.Platform})
-		if err != nil && opts.PullOption == backend.PullOptionNoPull {
+	if opts.PullOption != buildbackend.PullOptionForcePull {
+		img, err := i.GetImage(ctx, refOrID, imagebackend.GetImageOpts{Platform: opts.Platform})
+		if err != nil && opts.PullOption == buildbackend.PullOptionNoPull {
 			return nil, nil, err
 		}
 		if err != nil && !cerrdefs.IsNotFound(err) {

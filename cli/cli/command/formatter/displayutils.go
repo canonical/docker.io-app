@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package formatter
 
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/moby/moby/client/pkg/stringid"
 	"golang.org/x/text/width"
 )
 
@@ -25,6 +26,14 @@ func charWidth(r rune) int {
 	default:
 		return 1
 	}
+}
+
+// TruncateID returns a shorthand version of a string identifier for presentation,
+// after trimming digest algorithm prefix (if any).
+//
+// This function is a wrapper for [stringid.TruncateID] for convenience.
+func TruncateID(id string) string {
+	return stringid.TruncateID(id)
 }
 
 // Ellipsis truncates a string to fit within maxDisplayWidth, and appends ellipsis (…).

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/integration-cli/checker"
-	"github.com/docker/docker/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/checker"
+	"github.com/moby/moby/v2/integration-cli/cli"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -20,29 +20,31 @@ type DockerCLIRestartSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIRestartSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIRestartSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIRestartSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIRestartSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLIRestartSuite) TestRestartStoppedContainer(c *testing.T) {
-	cli.DockerCmd(c, "run", "--name=test", "busybox", "echo", "foobar")
-	cID := getIDByName(c, "test")
+	cID := cli.DockerCmd(c, "run", "-d", "busybox", "sh", "-c", "echo foobar && exit 0").Stdout()
+	cID = strings.TrimSpace(cID)
 
-	out := cli.DockerCmd(c, "logs", cID).Combined()
-	assert.Equal(c, out, "foobar\n")
+	getLogs := func(t *testing.T) (any, string) {
+		out := cli.DockerCmd(t, "logs", cID).Combined()
+		return out, ""
+	}
 
+	// Wait 10 seconds for the 'echo' to appear in the logs
+	poll.WaitOn(c, pollCheck(c, getLogs, checker.Equals("foobar\n")), poll.WithTimeout(10*time.Second))
+
+	// Make sure the container has stopped before we restart it.
+	cli.WaitExited(c, cID, 20*time.Second)
 	cli.DockerCmd(c, "restart", cID)
 
-	// Wait until the container has stopped
-	err := waitInspect(cID, "{{.State.Running}}", "false", 20*time.Second)
-	assert.NilError(c, err)
-
-	out = cli.DockerCmd(c, "logs", cID).Combined()
-	assert.Equal(c, out, "foobar\nfoobar\n")
+	poll.WaitOn(c, pollCheck(c, getLogs, checker.Equals("foobar\nfoobar\n")), poll.WithTimeout(10*time.Second))
 }
 
 func (s *DockerCLIRestartSuite) TestRestartRunningContainer(c *testing.T) {
@@ -50,8 +52,8 @@ func (s *DockerCLIRestartSuite) TestRestartRunningContainer(c *testing.T) {
 	cID = strings.TrimSpace(cID)
 	cli.WaitRun(c, cID)
 
-	getLogs := func(c *testing.T) (interface{}, string) {
-		out := cli.DockerCmd(c, "logs", cID).Combined()
+	getLogs := func(t *testing.T) (any, string) {
+		out := cli.DockerCmd(t, "logs", cID).Combined()
 		return out, ""
 	}
 
@@ -74,7 +76,7 @@ func (s *DockerCLIRestartSuite) TestRestartWithVolumes(c *testing.T) {
 	out = strings.Trim(out, " \n\r")
 	assert.Equal(c, out, "1")
 
-	source, err := inspectMountSourceField(cID, prefix+slash+"test")
+	mnt, err := inspectMountPoint(cID, prefix+slash+"test")
 	assert.NilError(c, err)
 
 	cli.DockerCmd(c, "restart", cID)
@@ -84,9 +86,9 @@ func (s *DockerCLIRestartSuite) TestRestartWithVolumes(c *testing.T) {
 	out = strings.Trim(out, " \n\r")
 	assert.Equal(c, out, "1")
 
-	sourceAfterRestart, err := inspectMountSourceField(cID, prefix+slash+"test")
+	mountAfterRestart, err := inspectMountPoint(cID, prefix+slash+"test")
 	assert.NilError(c, err)
-	assert.Equal(c, source, sourceAfterRestart)
+	assert.Equal(c, mnt.Source, mountAfterRestart.Source)
 }
 
 func (s *DockerCLIRestartSuite) TestRestartDisconnectedContainer(c *testing.T) {

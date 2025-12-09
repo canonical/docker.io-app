@@ -1,4 +1,4 @@
-package plugin // import "github.com/docker/docker/daemon/cluster/controllers/plugin"
+package plugin
 
 import (
 	"context"
@@ -8,13 +8,14 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/swarm/runtime"
-	"github.com/docker/docker/plugin"
-	v2 "github.com/docker/docker/plugin/v2"
 	"github.com/gogo/protobuf/proto"
+	plugintypes "github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/internal/runtime"
+	"github.com/moby/moby/v2/daemon/pkg/plugin"
+	v2 "github.com/moby/moby/v2/daemon/pkg/plugin/v2"
+	"github.com/moby/moby/v2/daemon/server/backend"
 	"github.com/moby/swarmkit/v2/api"
 	"github.com/pkg/errors"
 )
@@ -30,7 +31,7 @@ import (
 // the right way to pass registry credentials via secrets.
 type Controller struct {
 	backend Backend
-	spec    runtime.PluginSpec
+	spec    swarm.RuntimeSpec
 	logger  *log.Entry
 
 	pluginID  string
@@ -46,10 +47,10 @@ type Backend interface {
 	Disable(name string, config *backend.PluginDisableConfig) error
 	Enable(name string, config *backend.PluginEnableConfig) error
 	Remove(name string, config *backend.PluginRmConfig) error
-	Pull(ctx context.Context, ref reference.Named, name string, metaHeaders http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer, opts ...plugin.CreateOpt) error
-	Upgrade(ctx context.Context, ref reference.Named, name string, metaHeaders http.Header, authConfig *registry.AuthConfig, privileges types.PluginPrivileges, outStream io.Writer) error
+	Pull(ctx context.Context, ref reference.Named, name string, metaHeaders http.Header, authConfig *registry.AuthConfig, privileges plugintypes.Privileges, outStream io.Writer, opts ...plugin.CreateOpt) error
+	Upgrade(ctx context.Context, ref reference.Named, name string, metaHeaders http.Header, authConfig *registry.AuthConfig, privileges plugintypes.Privileges, outStream io.Writer) error
 	Get(name string) (*v2.Plugin, error)
-	SubscribeEvents(buffer int, events ...plugin.Event) (eventCh <-chan interface{}, cancel func())
+	SubscribeEvents(buffer int, events ...plugin.Event) (eventCh <-chan any, cancel func())
 }
 
 // NewController returns a new cluster plugin controller
@@ -70,14 +71,15 @@ func NewController(backend Backend, t *api.Task) (*Controller, error) {
 	}, nil
 }
 
-func readSpec(t *api.Task) (runtime.PluginSpec, error) {
+func readSpec(t *api.Task) (swarm.RuntimeSpec, error) {
 	var cfg runtime.PluginSpec
 
 	generic := t.Spec.GetGeneric()
 	if err := proto.Unmarshal(generic.Payload.Value, &cfg); err != nil {
-		return cfg, errors.Wrap(err, "error reading plugin spec")
+		return swarm.RuntimeSpec{}, errors.Wrap(err, "error reading plugin spec")
 	}
-	return cfg, nil
+
+	return runtime.ToAPI(cfg), nil
 }
 
 // Update is the update phase from swarmkit
@@ -248,10 +250,10 @@ func (p *Controller) Close() error {
 	return nil
 }
 
-func convertPrivileges(ls []*runtime.PluginPrivilege) types.PluginPrivileges {
-	var out types.PluginPrivileges
+func convertPrivileges(ls []*swarm.RuntimePrivilege) plugintypes.Privileges {
+	var out plugintypes.Privileges
 	for _, p := range ls {
-		pp := types.PluginPrivilege{
+		pp := plugintypes.Privilege{
 			Name:        p.Name,
 			Description: p.Description,
 			Value:       p.Value,

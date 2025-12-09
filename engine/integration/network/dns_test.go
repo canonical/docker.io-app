@@ -1,13 +1,15 @@
-package network // import "github.com/docker/docker/integration/network"
+package network
 
 import (
+	"net/netip"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/internal/sliceutil"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -27,10 +29,10 @@ func TestDaemonDNSFallback(t *testing.T) {
 	c := d.NewClientT(t)
 
 	network.CreateNoError(ctx, t, c, "test")
-	defer c.NetworkRemove(ctx, "test")
+	defer c.NetworkRemove(ctx, "test", client.NetworkRemoveOptions{})
 
 	cid := container.Run(ctx, t, c, container.WithNetworkMode("test"), container.WithCmd("nslookup", "docker.com"))
-	defer c.ContainerRemove(ctx, cid, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, cid, client.ContainerRemoveOptions{Force: true})
 
 	poll.WaitOn(t, container.IsSuccessful(ctx, c, cid))
 }
@@ -80,10 +82,10 @@ func TestIntDNSAsExtDNS(t *testing.T) {
 
 			res := container.RunAttach(ctx, t, c,
 				container.WithNetworkMode(netName),
-				container.WithDNS(tc.extServers),
+				container.WithDNS(sliceutil.Map(tc.extServers, netip.MustParseAddr)),
 				container.WithCmd("nslookup", "docker.com"),
 			)
-			defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, res.ContainerID, client.ContainerRemoveOptions{Force: true})
 
 			assert.Check(t, is.Equal(res.ExitCode, tc.expExitCode))
 			assert.Check(t, is.Contains(res.Stdout.String(), tc.expStdout))
@@ -120,7 +122,7 @@ func TestExtDNSInIPv6OnlyNw(t *testing.T) {
 	defer network.RemoveNoError(ctx, t, c, netName)
 
 	ctrId := container.Run(ctx, t, c, container.WithNetworkMode(netName))
-	defer c.ContainerRemove(ctx, ctrId, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, ctrId, client.ContainerRemoveOptions{Force: true})
 
 	res, err := container.Exec(ctx, c, ctrId, []string{"nslookup", "test.example"})
 	assert.NilError(t, err)

@@ -8,23 +8,20 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestRunKill(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		containerKillFunc: func(
-			ctx context.Context,
-			container string,
-			signal string,
-		) error {
-			assert.Assert(t, is.Equal(signal, "STOP"))
-			return nil
+		containerKillFunc: func(ctx context.Context, container string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
+			assert.Assert(t, is.Equal(options.Signal, "STOP"))
+			return client.ContainerKillResult{}, nil
 		},
 	})
 
-	cmd := NewKillCommand(cli)
+	cmd := newKillCommand(cli)
 	cmd.SetOut(io.Discard)
 
 	cmd.SetArgs([]string{
@@ -47,16 +44,12 @@ func TestRunKill(t *testing.T) {
 
 func TestRunKillClientError(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		containerKillFunc: func(
-			ctx context.Context,
-			container string,
-			signal string,
-		) error {
-			return fmt.Errorf("client error for container %s", container)
+		containerKillFunc: func(ctx context.Context, container string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
+			return client.ContainerKillResult{}, fmt.Errorf("client error for container %s", container)
 		},
 	})
 
-	cmd := NewKillCommand(cli)
+	cmd := newKillCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 

@@ -162,7 +162,7 @@ Function Get-HeadCommit() {
 
 # Utility function to get the commit for upstream
 Function Get-UpstreamCommit() {
-    Invoke-Expression "git fetch -q https://github.com/docker/docker.git refs/heads/master"
+    Invoke-Expression "git fetch -q https://github.com/moby/moby.git refs/heads/master"
     if ($LASTEXITCODE -ne 0) { Throw "Failed fetching" }
 
     $upstream = Invoke-Expression "git rev-parse --verify FETCH_HEAD"
@@ -243,7 +243,7 @@ Function Validate-DCO($headCommit, $upstreamCommit) {
         $badCommits | %{ $e+=" - $_`n"}
         $e += "`nPlease amend each commit to include a properly formatted DCO marker.`n`n"
         $e += "Visit the following URL for information about the Docker DCO:`n"
-        $e += "https://github.com/docker/docker/blob/master/CONTRIBUTING.md#sign-your-work`n"
+        $e += "https://github.com/moby/moby/blob/master/CONTRIBUTING.md#sign-your-work`n"
         Throw $e
     }
 }
@@ -261,10 +261,10 @@ Function Validate-PkgImports($headCommit, $upstreamCommit) {
         if ($LASTEXITCODE -ne 0) { Throw "Failed go list for dependencies on $file" }
         $imports = $imports -Replace "\[" -Replace "\]", "" -Split(" ") | Sort-Object | Get-Unique
         # Filter out what we are looking for
-        $imports = @() + $imports -NotMatch "^github.com/docker/docker/pkg/" `
-                                  -NotMatch "^github.com/docker/docker/vendor" `
-                                  -NotMatch "^github.com/docker/docker/internal" `
-                                  -Match "^github.com/docker/docker" `
+        $imports = @() + $imports -NotMatch "^github.com/moby/moby/v2/pkg/" `
+                                  -NotMatch "^github.com/moby/moby/v2/vendor" `
+                                  -NotMatch "^github.com/moby/moby/v2/internal" `
+                                  -Match    "^github.com/moby/moby/v2" `
                                   -Replace "`n", ""
         $imports | ForEach-Object{ $badFiles+="$file imports $_`n" }
     }
@@ -318,13 +318,11 @@ Function Validate-GoFormat($headCommit, $upstreamCommit) {
 Function Run-UnitTests() {
     Write-Host "INFO: Running unit tests..."
     $testPath="./..."
-    $goListCommand = "go list -e -f '{{if ne .Name """ + '\"github.com/docker/docker\"' + """}}{{.ImportPath}}{{end}}' $testPath"
+    $goListCommand = "go list -e -f '{{if ne .Name """ + '\"github.com/moby/moby/v2\"' + """}}{{.ImportPath}}{{end}}' $testPath"
     $pkgList = $(Invoke-Expression $goListCommand)
     if ($LASTEXITCODE -ne 0) { Throw "go list for unit tests failed" }
-    $pkgList = $pkgList | Select-String -Pattern "github.com/docker/docker"
-    $pkgList = $pkgList | Select-String -NotMatch "github.com/docker/docker/vendor"
-    $pkgList = $pkgList | Select-String -NotMatch "github.com/docker/docker/man"
-    $pkgList = $pkgList | Select-String -NotMatch "github.com/docker/docker/integration"
+    $pkgList = $pkgList | Select-String -Pattern "github.com/moby/moby/v2"
+    $pkgList = $pkgList | Select-String -NotMatch "github.com/moby/moby/v2/integration"
     $pkgList = $pkgList -replace "`r`n", " "
 
     $jsonFilePath = $bundlesDir + "\go-test-report-unit-flaky-tests.json"
@@ -484,12 +482,12 @@ Try {
         Catch [Exception] { Throw $_ }
     }
 
-    $ldflags = "-X 'github.com/docker/docker/dockerversion.Version="+$dockerVersion+"'"
-    $ldflags += " -X 'github.com/docker/docker/dockerversion.GitCommit="+$gitCommit+"'"
-    $ldflags += " -X 'github.com/docker/docker/dockerversion.BuildTime="+$env:BUILDTIME+"'"
-    $ldflags += " -X 'github.com/docker/docker/dockerversion.PlatformName="+$env:PLATFORM+"'"
-    $ldflags += " -X 'github.com/docker/docker/dockerversion.ProductName="+$env:PRODUCT+"'"
-    $ldflags += " -X 'github.com/docker/docker/dockerversion.DefaultProductLicense="+$env:DEFAULT_PRODUCT_LICENSE+"'"
+    $ldflags = "-X 'github.com/moby/moby/v2/dockerversion.Version="+$dockerVersion+"'"
+    $ldflags += " -X 'github.com/moby/moby/v2/dockerversion.GitCommit="+$gitCommit+"'"
+    $ldflags += " -X 'github.com/moby/moby/v2/dockerversion.BuildTime="+$env:BUILDTIME+"'"
+    $ldflags += " -X 'github.com/moby/moby/v2/dockerversion.PlatformName="+$env:PLATFORM+"'"
+    $ldflags += " -X 'github.com/moby/moby/v2/dockerversion.ProductName="+$env:PRODUCT+"'"
+    $ldflags += " -X 'github.com/moby/moby/v2/dockerversion.DefaultProductLicense="+$env:DEFAULT_PRODUCT_LICENSE+"'"
 
     # DCO, Package import and Go formatting tests.
     if ($DCO -or $PkgImports -or $GoFormat) {
@@ -515,7 +513,7 @@ Try {
         if ($Client) {
             # Get the Docker channel and version from the environment, or use the defaults.
             if (-not ($channel = $env:DOCKERCLI_CHANNEL)) { $channel = "stable" }
-            if (-not ($version = $env:DOCKERCLI_VERSION)) { $version = "17.06.2-ce" }
+            if (-not ($version = $env:DOCKERCLI_VERSION)) { $version = "25.0.5" }
 
             # Download the zip file and extract the client executable.
             Write-Host "INFO: Downloading docker/cli version $version from $channel..."

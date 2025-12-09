@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -18,8 +18,8 @@ const (
 	internalHeader  = "INTERNAL"
 )
 
-// NewFormat returns a Format for rendering using a network Context
-func NewFormat(source string, quiet bool) formatter.Format {
+// newFormat returns a [formatter.Format] for rendering a networkContext.
+func newFormat(source string, quiet bool) formatter.Format {
 	switch source {
 	case formatter.TableFormatKey:
 		if quiet {
@@ -35,30 +35,34 @@ func NewFormat(source string, quiet bool) formatter.Format {
 	return formatter.Format(source)
 }
 
-// FormatWrite writes the context
-func FormatWrite(ctx formatter.Context, networks []network.Summary) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, nw := range networks {
-			networkCtx := &networkContext{trunc: ctx.Trunc, n: nw}
-			if err := format(networkCtx); err != nil {
+// formatWrite writes the context.
+func formatWrite(fmtCtx formatter.Context, networks client.NetworkListResult) error {
+	networkCtx := networkContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"ID":        networkIDHeader,
+				"Name":      formatter.NameHeader,
+				"Driver":    formatter.DriverHeader,
+				"Scope":     formatter.ScopeHeader,
+				"IPv4":      ipv4Header,
+				"IPv6":      ipv6Header,
+				"Internal":  internalHeader,
+				"Labels":    formatter.LabelsHeader,
+				"CreatedAt": formatter.CreatedAtHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(&networkCtx, func(format func(subContext formatter.SubContext) error) error {
+		for _, nw := range networks.Items {
+			if err := format(&networkContext{
+				trunc: fmtCtx.Trunc,
+				n:     nw,
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	networkCtx := networkContext{}
-	networkCtx.Header = formatter.SubHeaderContext{
-		"ID":        networkIDHeader,
-		"Name":      formatter.NameHeader,
-		"Driver":    formatter.DriverHeader,
-		"Scope":     formatter.ScopeHeader,
-		"IPv4":      ipv4Header,
-		"IPv6":      ipv6Header,
-		"Internal":  internalHeader,
-		"Labels":    formatter.LabelsHeader,
-		"CreatedAt": formatter.CreatedAtHeader,
-	}
-	return ctx.Write(&networkCtx, render)
+	})
 }
 
 type networkContext struct {
@@ -73,7 +77,7 @@ func (c *networkContext) MarshalJSON() ([]byte, error) {
 
 func (c *networkContext) ID() string {
 	if c.trunc {
-		return stringid.TruncateID(c.n.ID)
+		return formatter.TruncateID(c.n.ID)
 	}
 	return c.n.ID
 }

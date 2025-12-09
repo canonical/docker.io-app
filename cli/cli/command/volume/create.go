@@ -9,9 +9,9 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -36,7 +36,7 @@ type createOptions struct {
 	preferredTopology opts.ListOpts
 }
 
-func newCreateCommand(dockerCli command.Cli) *cobra.Command {
+func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	options := createOptions{
 		driverOpts:        *opts.NewMapOpts(nil, nil),
 		labels:            opts.NewListOpts(opts.ValidateLabel),
@@ -57,9 +57,10 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 				options.name = args[0]
 			}
 			options.cluster = hasClusterVolumeOptionSet(cmd.Flags())
-			return runCreate(cmd.Context(), dockerCli, options)
+			return runCreate(cmd.Context(), dockerCLI, options)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
 	flags.StringVarP(&options.driver, "driver", "d", "local", "Specify volume driver name")
@@ -113,7 +114,7 @@ func hasClusterVolumeOptionSet(flags *pflag.FlagSet) bool {
 }
 
 func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions) error {
-	volOpts := volume.CreateOptions{
+	volOpts := client.VolumeCreateOptions{
 		Driver:     options.driver,
 		DriverOpts: options.driverOpts.GetAll(),
 		Name:       options.name,
@@ -195,11 +196,11 @@ func runCreate(ctx context.Context, dockerCli command.Cli, options createOptions
 		volOpts.ClusterVolumeSpec.AccessibilityRequirements = topology
 	}
 
-	vol, err := dockerCli.Client().VolumeCreate(ctx, volOpts)
+	res, err := dockerCli.Client().VolumeCreate(ctx, volOpts)
 	if err != nil {
 		return err
 	}
 
-	_, _ = fmt.Fprintln(dockerCli.Out(), vol.Name)
+	_, _ = fmt.Fprintln(dockerCli.Out(), res.Volume.Name)
 	return nil
 }

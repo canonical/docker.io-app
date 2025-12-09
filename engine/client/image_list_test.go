@@ -1,29 +1,21 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/image"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestImageListError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.ImageList(context.Background(), image.ListOptions{})
+	_, err = client.ImageList(t.Context(), ImageListOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
@@ -32,22 +24,24 @@ func TestImageListError(t *testing.T) {
 //
 // Regression test for https://github.com/docker/cli/issues/4890
 func TestImageListConnectionError(t *testing.T) {
-	client, err := NewClientWithOpts(WithAPIVersionNegotiation(), WithHost("tcp://no-such-host.invalid"))
+	client, err := New(WithHost("tcp://no-such-host.invalid"))
 	assert.NilError(t, err)
 
-	_, err = client.ImageList(context.Background(), image.ListOptions{})
+	_, err = client.ImageList(t.Context(), ImageListOptions{})
 	assert.Check(t, is.ErrorType(err, IsErrConnectionFailed))
 }
 
 func TestImageList(t *testing.T) {
 	const expectedURL = "/images/json"
 
-	listCases := []struct {
-		options             image.ListOptions
+	tests := []struct {
+		doc                 string
+		options             ImageListOptions
 		expectedQueryParams map[string]string
 	}{
 		{
-			options: image.ListOptions{},
+			doc:     "no options",
+			options: ImageListOptions{},
 			expectedQueryParams: map[string]string{
 				"all":     "",
 				"filter":  "",
@@ -55,12 +49,12 @@ func TestImageList(t *testing.T) {
 			},
 		},
 		{
-			options: image.ListOptions{
-				Filters: filters.NewArgs(
-					filters.Arg("label", "label1"),
-					filters.Arg("label", "label2"),
-					filters.Arg("dangling", "true"),
-				),
+			doc: "label filters and dangling",
+			options: ImageListOptions{
+				Filters: make(Filters).
+					Add("label", "label1").
+					Add("label", "label2").
+					Add("dangling", "true"),
 			},
 			expectedQueryParams: map[string]string{
 				"all":     "",
@@ -69,8 +63,9 @@ func TestImageList(t *testing.T) {
 			},
 		},
 		{
-			options: image.ListOptions{
-				Filters: filters.NewArgs(filters.Arg("dangling", "false")),
+			doc: "label filters no dangling",
+			options: ImageListOptions{
+				Filters: make(Filters).Add("dangling", "false"),
 			},
 			expectedQueryParams: map[string]string{
 				"all":     "",
@@ -78,118 +73,40 @@ func TestImageList(t *testing.T) {
 				"filters": `{"dangling":{"false":true}}`,
 			},
 		},
+		{
+			doc: "with shared size",
+			options: ImageListOptions{
+				SharedSize: true,
+			},
+			expectedQueryParams: map[string]string{
+				"shared-size": "1",
+			},
+		},
 	}
-	for _, listCase := range listCases {
-		client := &Client{
-			client: newMockClient(func(req *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(req.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
+			client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+				if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+					return nil, err
 				}
 				query := req.URL.Query()
-				for key, expected := range listCase.expectedQueryParams {
+				for key, expected := range tc.expectedQueryParams {
 					actual := query.Get(key)
 					if actual != expected {
 						return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
 					}
 				}
-				content, err := json.Marshal([]image.Summary{
-					{
-						ID: "image_id2",
-					},
-					{
-						ID: "image_id2",
-					},
-				})
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			}),
-		}
-
-		images, err := client.ImageList(context.Background(), listCase.options)
-		assert.NilError(t, err)
-		assert.Check(t, is.Len(images, 2))
-	}
-}
-
-func TestImageListApiBefore125(t *testing.T) {
-	expectedFilter := "image:tag"
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			query := req.URL.Query()
-			actualFilter := query.Get("filter")
-			if actualFilter != expectedFilter {
-				return nil, fmt.Errorf("filter not set in URL query properly. Expected '%s', got %s", expectedFilter, actualFilter)
-			}
-			actualFilters := query.Get("filters")
-			if actualFilters != "" {
-				return nil, fmt.Errorf("filters should have not been present, were with value: %s", actualFilters)
-			}
-			content, err := json.Marshal([]image.Summary{
-				{
-					ID: "image_id2",
-				},
-				{
-					ID: "image_id2",
-				},
-			})
-			if err != nil {
-				return nil, err
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(content)),
-			}, nil
-		}),
-		version: "1.24",
-	}
-
-	options := image.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("reference", "image:tag")),
-	}
-
-	images, err := client.ImageList(context.Background(), options)
-	assert.NilError(t, err)
-	assert.Check(t, is.Len(images, 2))
-}
-
-// Checks if shared-size query parameter is set/not being set correctly
-// for /images/json.
-func TestImageListWithSharedSize(t *testing.T) {
-	t.Parallel()
-	const sharedSize = "shared-size"
-	for _, tc := range []struct {
-		name       string
-		version    string
-		options    image.ListOptions
-		sharedSize string // expected value for the shared-size query param, or empty if it should not be set.
-	}{
-		{name: "unset after 1.42, no options set", version: "1.42"},
-		{name: "set after 1.42, if requested", version: "1.42", options: image.ListOptions{SharedSize: true}, sharedSize: "1"},
-		{name: "unset before 1.42, even if requested", version: "1.41", options: image.ListOptions{SharedSize: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var query url.Values
-			client := &Client{
-				client: newMockClient(func(req *http.Request) (*http.Response, error) {
-					query = req.URL.Query()
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(strings.NewReader("[]")),
-					}, nil
-				}),
-				version: tc.version,
-			}
-			_, err := client.ImageList(context.Background(), tc.options)
+				return mockJSONResponse(http.StatusOK, nil, []image.Summary{
+					{ID: "image_id2"},
+					{ID: "image_id2"},
+				})(req)
+			}))
 			assert.NilError(t, err)
-			expectedSet := tc.sharedSize != ""
-			assert.Check(t, is.Equal(query.Has(sharedSize), expectedSet))
-			assert.Check(t, is.Equal(query.Get(sharedSize), tc.sharedSize))
+			defer func() { _ = client.Close() }()
+
+			images, err := client.ImageList(t.Context(), tc.options)
+			assert.NilError(t, err)
+			assert.Check(t, is.Len(images.Items, 2))
 		})
 	}
 }

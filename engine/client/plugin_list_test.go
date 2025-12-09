@@ -1,28 +1,21 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/api/types/plugin"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestPluginListError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.PluginList(context.Background(), filters.NewArgs())
+	_, err = client.PluginList(t.Context(), PluginListOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
@@ -30,11 +23,10 @@ func TestPluginList(t *testing.T) {
 	const expectedURL = "/plugins"
 
 	listCases := []struct {
-		filters             filters.Args
+		filters             Filters
 		expectedQueryParams map[string]string
 	}{
 		{
-			filters: filters.NewArgs(),
 			expectedQueryParams: map[string]string{
 				"all":     "",
 				"filter":  "",
@@ -42,7 +34,7 @@ func TestPluginList(t *testing.T) {
 			},
 		},
 		{
-			filters: filters.NewArgs(filters.Arg("enabled", "true")),
+			filters: make(Filters).Add("enabled", "true"),
 			expectedQueryParams: map[string]string{
 				"all":     "",
 				"filter":  "",
@@ -50,10 +42,7 @@ func TestPluginList(t *testing.T) {
 			},
 		},
 		{
-			filters: filters.NewArgs(
-				filters.Arg("capability", "volumedriver"),
-				filters.Arg("capability", "authz"),
-			),
+			filters: make(Filters).Add("capability", "volumedriver", "authz"),
 			expectedQueryParams: map[string]string{
 				"all":     "",
 				"filter":  "",
@@ -63,38 +52,28 @@ func TestPluginList(t *testing.T) {
 	}
 
 	for _, listCase := range listCases {
-		client := &Client{
-			client: newMockClient(func(req *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(req.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+		client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+				return nil, err
+			}
+			query := req.URL.Query()
+			for key, expected := range listCase.expectedQueryParams {
+				actual := query.Get(key)
+				if actual != expected {
+					return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
 				}
-				query := req.URL.Query()
-				for key, expected := range listCase.expectedQueryParams {
-					actual := query.Get(key)
-					if actual != expected {
-						return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
-					}
-				}
-				content, err := json.Marshal([]*types.Plugin{
-					{
-						ID: "plugin_id1",
-					},
-					{
-						ID: "plugin_id2",
-					},
-				})
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			}),
-		}
-
-		plugins, err := client.PluginList(context.Background(), listCase.filters)
+			}
+			return mockJSONResponse(http.StatusOK, nil, []plugin.Plugin{
+				{ID: "plugin_id1"},
+				{ID: "plugin_id2"},
+			})(req)
+		}))
 		assert.NilError(t, err)
-		assert.Check(t, is.Len(plugins, 2))
+
+		list, err := client.PluginList(t.Context(), PluginListOptions{
+			Filters: listCase.filters,
+		})
+		assert.NilError(t, err)
+		assert.Check(t, is.Len(list.Items, 2))
 	}
 }

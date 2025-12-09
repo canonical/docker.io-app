@@ -11,12 +11,12 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/templates"
-	"github.com/docker/docker/api/types/events"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -27,8 +27,8 @@ type eventsOptions struct {
 	format string
 }
 
-// NewEventsCommand creates a new cobra.Command for `docker events`
-func NewEventsCommand(dockerCli command.Cli) *cobra.Command {
+// newEventsCommand creates a new cobra.Command for `docker events`
+func newEventsCommand(dockerCLI command.Cli) *cobra.Command {
 	options := eventsOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
@@ -36,12 +36,13 @@ func NewEventsCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Get real time events from the server",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEvents(cmd.Context(), dockerCli, &options)
+			return runEvents(cmd.Context(), dockerCLI, &options)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker system events, docker events",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -50,12 +51,12 @@ func NewEventsCommand(dockerCli command.Cli) *cobra.Command {
 	flags.VarP(&options.filter, "filter", "f", "Filter output based on conditions provided")
 	flags.StringVar(&options.format, "format", "", flagsHelper.InspectFormatHelp) // using the same flag description as "inspect" commands for now.
 
-	_ = cmd.RegisterFlagCompletionFunc("filter", completeEventFilters(dockerCli))
+	_ = cmd.RegisterFlagCompletionFunc("filter", completeEventFilters(dockerCLI))
 
 	return cmd
 }
 
-func runEvents(ctx context.Context, dockerCli command.Cli, options *eventsOptions) error {
+func runEvents(ctx context.Context, dockerCLI command.Cli, options *eventsOptions) error {
 	tmpl, err := makeTemplate(options.format)
 	if err != nil {
 		return cli.StatusError{
@@ -64,22 +65,22 @@ func runEvents(ctx context.Context, dockerCli command.Cli, options *eventsOption
 		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	evts, errs := dockerCli.Client().Events(ctx, events.ListOptions{
+	eventRes := dockerCLI.Client().Events(ctx, client.EventsListOptions{
 		Since:   options.since,
 		Until:   options.until,
 		Filters: options.filter.Value(),
 	})
 	defer cancel()
 
-	out := dockerCli.Out()
+	out := dockerCLI.Out()
 
 	for {
 		select {
-		case event := <-evts:
+		case event := <-eventRes.Messages:
 			if err := handleEvent(out, event, tmpl); err != nil {
 				return err
 			}
-		case err := <-errs:
+		case err := <-eventRes.Err:
 			if err == io.EOF {
 				return nil
 			}
@@ -92,8 +93,11 @@ func handleEvent(out io.Writer, event events.Message, tmpl *template.Template) e
 	if tmpl == nil {
 		return prettyPrintEvent(out, event)
 	}
-
-	return formatEvent(out, event, tmpl)
+	if err := tmpl.Execute(out, event); err != nil {
+		return err
+	}
+	_, _ = out.Write([]byte{'\n'})
+	return nil
 }
 
 func makeTemplate(format string) (*template.Template, error) {
@@ -143,9 +147,4 @@ func prettyPrintEvent(out io.Writer, event events.Message) error {
 	}
 	_, _ = fmt.Fprint(out, "\n")
 	return nil
-}
-
-func formatEvent(out io.Writer, event events.Message, tmpl *template.Template) error {
-	defer out.Write([]byte{'\n'})
-	return tmpl.Execute(out, event)
 }

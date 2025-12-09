@@ -2,22 +2,23 @@ package stack
 
 import (
 	"context"
-	"io"
 	"sort"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/cli/cli/command/stack/formatter"
-	"github.com/docker/cli/cli/command/stack/options"
-	"github.com/docker/cli/cli/command/stack/swarm"
+	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/fvbommel/sortorder"
 	"github.com/spf13/cobra"
 )
 
-func newListCommand(dockerCli command.Cli) *cobra.Command {
-	opts := options.List{}
+// listOptions holds docker stack ls options
+type listOptions struct {
+	format string
+}
+
+func newListCommand(dockerCLI command.Cli) *cobra.Command {
+	opts := listOptions{}
 
 	cmd := &cobra.Command{
 		Use:     "ls [OPTIONS]",
@@ -25,38 +26,34 @@ func newListCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "List stacks",
 		Args:    cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunList(cmd.Context(), dockerCli, opts)
+			return runList(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&opts.Format, "format", "", flagsHelper.FormatHelp)
+	flags.StringVar(&opts.format, "format", "", flagsHelper.FormatHelp)
 	return cmd
 }
 
-// RunList performs a stack list against the specified swarm cluster
-func RunList(ctx context.Context, dockerCli command.Cli, opts options.List) error {
-	ss, err := swarm.GetStacks(ctx, dockerCli.Client())
+// runList performs a stack list against the specified swarm cluster
+func runList(ctx context.Context, dockerCLI command.Cli, opts listOptions) error {
+	stacks, err := getStacks(ctx, dockerCLI.Client())
 	if err != nil {
 		return err
 	}
-	stacks := make([]*formatter.Stack, 0, len(ss))
-	stacks = append(stacks, ss...)
-	return format(dockerCli.Out(), opts, stacks)
-}
 
-func format(out io.Writer, opts options.List, stacks []*formatter.Stack) error {
-	fmt := formatter.Format(opts.Format)
-	if fmt == "" || fmt == formatter.TableFormatKey {
-		fmt = formatter.SwarmStackTableFormat
+	format := formatter.Format(opts.format)
+	if format == "" || format == formatter.TableFormatKey {
+		format = stackTableFormat
 	}
 	stackCtx := formatter.Context{
-		Output: out,
-		Format: fmt,
+		Output: dockerCLI.Out(),
+		Format: format,
 	}
 	sort.Slice(stacks, func(i, j int) bool {
 		return sortorder.NaturalLess(stacks[i].Name, stacks[j].Name)
 	})
-	return formatter.StackWrite(stackCtx, stacks)
+	return stackWrite(stackCtx, stacks)
 }

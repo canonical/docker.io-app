@@ -8,46 +8,67 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/server/httputils"
-	"github.com/docker/docker/api/types"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestTLSCloseWriter(t *testing.T) {
 	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
 	var chErr chan error
 	ts := &httptest.Server{Config: &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/_ping" {
+				resp, err := mockPingResponse(http.StatusOK, PingResult{APIVersion: MaxAPIVersion})(req)
+				if err != nil {
+					chErr <- fmt.Errorf("sending ping response: %w", err)
+					return
+				}
+				_ = resp.Header.Write(w)
+				w.WriteHeader(resp.StatusCode)
+				return
+			}
+
 			chErr = make(chan error, 1)
 			defer close(chErr)
-			if err := httputils.ParseForm(req); err != nil {
+
+			if err := req.ParseForm(); err != nil && !strings.HasPrefix(err.Error(), "mime:") {
 				chErr <- fmt.Errorf("error parsing form: %w", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			r, rw, err := httputils.HijackConnection(w)
+
+			conn, _, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				chErr <- fmt.Errorf("error hijacking connection: %w", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			defer r.Close()
+			defer func() { _ = conn.Close() }()
 
-			fmt.Fprint(rw, "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\n")
+			// Flush the options to make sure the client sets the raw mode
+			_, _ = conn.Write([]byte{})
+
+			_, err = fmt.Fprint(conn, "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\n")
+			if err != nil {
+				chErr <- fmt.Errorf("writing update response: %w", err)
+				return
+			}
 
 			buf := make([]byte, 5)
-			_, err = r.Read(buf)
+			_, err = conn.Read(buf)
 			if err != nil {
 				chErr <- fmt.Errorf("error reading from client: %w", err)
 				return
 			}
-			_, err = rw.Write(buf)
+			_, err = conn.Write(buf)
 			if err != nil {
 				chErr <- fmt.Errorf("error writing to client: %w", err)
 				return
@@ -68,7 +89,7 @@ func TestTLSCloseWriter(t *testing.T) {
 	assert.NilError(t, err)
 
 	ts.Listener = l
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	defer func() {
 		if chErr != nil {
@@ -82,14 +103,16 @@ func TestTLSCloseWriter(t *testing.T) {
 	serverURL, err := url.Parse(ts.URL)
 	assert.NilError(t, err)
 
-	client, err := NewClientWithOpts(WithHost("tcp://"+serverURL.Host), WithHTTPClient(ts.Client()))
+	httpClient := ts.Client()
+	defer httpClient.CloseIdleConnections()
+	client, err := New(WithHost("tcp://"+serverURL.Host), WithHTTPClient(httpClient))
 	assert.NilError(t, err)
 
-	resp, err := client.postHijacked(context.Background(), "/asdf", url.Values{}, nil, map[string][]string{"Content-Type": {"text/plain"}})
+	resp, err := client.postHijacked(ctx, "/asdf", url.Values{}, nil, map[string][]string{"Content-Type": {"text/plain"}})
 	assert.NilError(t, err)
 	defer resp.Close()
 
-	_, ok := resp.Conn.(types.CloseWriter)
+	_, ok := resp.Conn.(CloseWriter)
 	assert.Check(t, ok, "tls conn did not implement the CloseWrite interface")
 
 	_, err = resp.Conn.Write([]byte("hello"))

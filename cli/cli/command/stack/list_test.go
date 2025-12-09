@@ -7,7 +7,8 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -16,7 +17,7 @@ func TestListErrors(t *testing.T) {
 	testCases := []struct {
 		args            []string
 		flags           map[string]string
-		serviceListFunc func(options swarm.ServiceListOptions) ([]swarm.Service, error)
+		serviceListFunc func(options client.ServiceListOptions) (client.ServiceListResult, error)
 		expectedError   string
 	}{
 		{
@@ -32,15 +33,17 @@ func TestListErrors(t *testing.T) {
 		},
 		{
 			args: []string{},
-			serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
-				return []swarm.Service{}, errors.New("error getting services")
+			serviceListFunc: func(options client.ServiceListOptions) (client.ServiceListResult, error) {
+				return client.ServiceListResult{}, errors.New("error getting services")
 			},
 			expectedError: "error getting services",
 		},
 		{
 			args: []string{},
-			serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
-				return []swarm.Service{*builders.Service()}, nil
+			serviceListFunc: func(options client.ServiceListOptions) (client.ServiceListResult, error) {
+				return client.ServiceListResult{
+					Items: []swarm.Service{*builders.Service()},
+				}, nil
 			},
 			expectedError: "cannot get label",
 		},
@@ -114,8 +117,10 @@ func TestStackList(t *testing.T) {
 				)
 			}
 			cli := test.NewFakeCli(&fakeClient{
-				serviceListFunc: func(options swarm.ServiceListOptions) ([]swarm.Service, error) {
-					return services, nil
+				serviceListFunc: func(options client.ServiceListOptions) (client.ServiceListResult, error) {
+					return client.ServiceListResult{
+						Items: services,
+					}, nil
 				},
 			})
 			cmd := newListCommand(cli)

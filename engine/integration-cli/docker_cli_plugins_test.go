@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/fixtures/plugin"
+	plugintypes "github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/daemon"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/fixtures/plugin"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -35,12 +35,12 @@ type DockerCLIPluginsSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIPluginsSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIPluginsSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIPluginsSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIPluginsSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (ps *DockerPluginSuite) TestPluginBasicOps(c *testing.T) {
@@ -172,12 +172,12 @@ func (ps *DockerPluginSuite) TestPluginSet(c *testing.T) {
 
 	// Create a new plugin with extra settings
 	err := plugin.Create(ctx, client, name, func(cfg *plugin.Config) {
-		cfg.Env = []types.PluginEnv{{Name: "DEBUG", Value: &initialValue, Settable: []string{"value"}}}
-		cfg.Mounts = []types.PluginMount{
+		cfg.Env = []plugintypes.Env{{Name: "DEBUG", Value: &initialValue, Settable: []string{"value"}}}
+		cfg.Mounts = []plugintypes.Mount{
 			{Name: "pmount1", Settable: []string{"source"}, Type: "none", Source: &mntSrc},
 			{Name: "pmount2", Settable: []string{"source"}, Type: "none"}, // Mount without source is invalid.
 		}
-		cfg.Linux.Devices = []types.PluginDevice{
+		cfg.Linux.Devices = []plugintypes.Device{
 			{Name: "pdev1", Path: &devPath, Settable: []string{"path"}},
 			{Name: "pdev2", Settable: []string{"path"}}, // Device without Path is invalid.
 		}
@@ -200,10 +200,10 @@ func (ps *DockerPluginSuite) TestPluginSet(c *testing.T) {
 	assert.Check(c, is.Contains(mounts, "bar"))
 	out, _, err := dockerCmdWithError("plugin", "set", name, "pmount2.source=bar2")
 	assert.ErrorContains(c, err, "")
-	assert.Check(c, is.Contains(out, "Plugin config has no mount source"))
+	assert.Check(c, is.Contains(out, "plugin config has no mount source"))
 	out, _, err = dockerCmdWithError("plugin", "set", name, "pdev2.path=/dev/bar2")
 	assert.ErrorContains(c, err, "")
-	assert.Check(c, is.Contains(out, "Plugin config has no device path"))
+	assert.Check(c, is.Contains(out, "plugin config has no device path"))
 }
 
 func (ps *DockerPluginSuite) TestPluginInstallArgs(c *testing.T) {
@@ -212,7 +212,7 @@ func (ps *DockerPluginSuite) TestPluginInstallArgs(c *testing.T) {
 	defer cancel()
 
 	plugin.CreateInRegistry(ctx, pluginName, nil, func(cfg *plugin.Config) {
-		cfg.Env = []types.PluginEnv{{Name: "DEBUG", Settable: []string{"value"}}}
+		cfg.Env = []plugintypes.Env{{Name: "DEBUG", Settable: []string{"value"}}}
 	})
 
 	out := cli.DockerCmd(c, "plugin", "install", "--grant-all-permissions", "--disable", pluginName, "DEBUG=1").Stdout()
@@ -331,7 +331,7 @@ func (ps *DockerPluginSuite) TestPluginInspect(c *testing.T) {
 	assert.ErrorContains(c, err, "")
 }
 
-// Test case for https://github.com/docker/docker/pull/29186#discussion_r91277345
+// Test case for https://github.com/moby/moby/pull/29186#discussion_r91277345
 func (s *DockerCLIPluginsSuite) TestPluginInspectOnWindows(c *testing.T) {
 	// This test should work on Windows only
 	testRequires(c, DaemonIsWindows)
@@ -349,7 +349,7 @@ func (ps *DockerPluginSuite) TestPluginIDPrefix(c *testing.T) {
 	ctx, cancel := context.WithTimeout(testutil.GetContext(c), 60*time.Second)
 	initialValue := "0"
 	err := plugin.Create(ctx, client, name, func(cfg *plugin.Config) {
-		cfg.Env = []types.PluginEnv{{Name: "DEBUG", Value: &initialValue, Settable: []string{"value"}}}
+		cfg.Env = []plugintypes.Env{{Name: "DEBUG", Value: &initialValue, Settable: []string{"value"}}}
 	})
 	cancel()
 

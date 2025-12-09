@@ -1,12 +1,12 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"io"
 	"os"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/errdefs"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/errdefs"
 )
 
 // ContainerStatPath stats the filesystem resource at the specified path in the
@@ -57,16 +57,16 @@ func (daemon *Daemon) ContainerArchivePath(name string, path string) (content io
 // ContainerExtractToDir extracts the given archive to the specified location
 // in the filesystem of the container identified by the given name. The given
 // path must be of a directory in the container. If it is not, the error will
-// be an errdefs.InvalidParameter. If noOverwriteDirNonDir is true then it will
-// be an error if unpacking the given content would cause an existing directory
-// to be replaced with a non-directory and vice versa.
-func (daemon *Daemon) ContainerExtractToDir(name, path string, copyUIDGID, noOverwriteDirNonDir bool, content io.Reader) error {
+// be an errdefs.InvalidParameter. It returns an error if unpacking the given
+// content would cause an existing directory to be replaced with a non-directory
+// or vice versa, unless allowOverwriteDirWithFile is set to true.
+func (daemon *Daemon) ContainerExtractToDir(name, path string, copyUIDGID, allowOverwriteDirWithFile bool, content io.Reader) error {
 	ctr, err := daemon.GetContainer(name)
 	if err != nil {
 		return err
 	}
 
-	err = daemon.containerExtractToDir(ctr, path, copyUIDGID, noOverwriteDirNonDir, content)
+	err = daemon.containerExtractToDir(ctr, path, copyUIDGID, allowOverwriteDirWithFile, content)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return containerFileNotFound{path, name}

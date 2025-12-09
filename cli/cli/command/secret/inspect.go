@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package secret
 
@@ -12,6 +12,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ type inspectOptions struct {
 	pretty bool
 }
 
-func newSecretInspectCommand(dockerCli command.Cli) *cobra.Command {
+func newSecretInspectCommand(dockerCLI command.Cli) *cobra.Command {
 	opts := inspectOptions{}
 	cmd := &cobra.Command{
 		Use:   "inspect [OPTIONS] SECRET [SECRET...]",
@@ -29,11 +30,10 @@ func newSecretInspectCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.names = args
-			return runSecretInspect(cmd.Context(), dockerCli, opts)
+			return runSecretInspect(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			return completeNames(dockerCli)(cmd, args, toComplete)
-		},
+		ValidArgsFunction:     completeNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	cmd.Flags().StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
@@ -41,30 +41,30 @@ func newSecretInspectCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-func runSecretInspect(ctx context.Context, dockerCli command.Cli, opts inspectOptions) error {
-	client := dockerCli.Client()
+func runSecretInspect(ctx context.Context, dockerCLI command.Cli, opts inspectOptions) error {
+	apiClient := dockerCLI.Client()
 
 	if opts.pretty {
 		opts.format = "pretty"
 	}
 
 	getRef := func(id string) (any, []byte, error) {
-		return client.SecretInspectWithRaw(ctx, id)
+		res, err := apiClient.SecretInspect(ctx, id, client.SecretInspectOptions{})
+		return res.Secret, res.Raw, err
 	}
-	f := opts.format
 
 	// check if the user is trying to apply a template to the pretty format, which
 	// is not supported
-	if strings.HasPrefix(f, "pretty") && f != "pretty" {
+	if strings.HasPrefix(opts.format, "pretty") && opts.format != "pretty" {
 		return errors.New("cannot supply extra formatting options to the pretty template")
 	}
 
 	secretCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewFormat(f, false),
+		Output: dockerCLI.Out(),
+		Format: newFormat(opts.format, false),
 	}
 
-	if err := InspectFormatWrite(secretCtx, opts.names, getRef); err != nil {
+	if err := inspectFormatWrite(secretCtx, opts.names, getRef); err != nil {
 		return cli.StatusError{StatusCode: 1, Status: err.Error()}
 	}
 	return nil

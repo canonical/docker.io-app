@@ -1,13 +1,14 @@
-package gcplogs // import "github.com/docker/docker/daemon/logger/gcplogs"
+package gcplogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/docker/docker/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger"
 
 	"cloud.google.com/go/compute/metadata"
 	"cloud.google.com/go/logging"
@@ -115,7 +116,7 @@ func New(info logger.Info) (logger.Logger, error) {
 		project = projectID
 	}
 	if project == "" {
-		return nil, fmt.Errorf("No project was specified and couldn't read project from the metadata server. Please specify a project")
+		return nil, errors.New("No project was specified and couldn't read project from the metadata server. Please specify a project")
 	}
 
 	c, err := logging.NewClient(context.Background(), project)
@@ -187,7 +188,7 @@ func New(info logger.Info) (logger.Logger, error) {
 	// without overly spamming /var/log/docker.log so we log the first time
 	// we overflow and every 1000th time after.
 	c.OnError = func(err error) {
-		if err == logging.ErrOverflow {
+		if errors.Is(err, logging.ErrOverflow) {
 			if i := droppedLogs.Add(1); i%1000 == 1 {
 				log.G(context.TODO()).Errorf("gcplogs driver has dropped %v logs", i)
 			}

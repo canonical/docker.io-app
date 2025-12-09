@@ -112,7 +112,6 @@ func TestMapOpts(t *testing.T) {
 	}
 }
 
-//nolint:gocyclo // ignore "cyclomatic complexity 17 is too high"
 func TestListOptsWithoutValidator(t *testing.T) {
 	o := NewListOpts(nil)
 	err := o.Set("foo")
@@ -142,18 +141,11 @@ func TestListOptsWithoutValidator(t *testing.T) {
 	if o.Get("baz") {
 		t.Error(`o.Get("baz") == true`)
 	}
-	o.Delete("foo")
-	if o.String() != "[bar bar]" {
-		t.Errorf("%s != [bar bar]", o.String())
+	if listOpts := o.GetSlice(); len(listOpts) != 3 || listOpts[0] != "foo" || listOpts[1] != "bar" || listOpts[2] != "bar" {
+		t.Errorf("Expected [[foo bar bar]], got [%v]", listOpts)
 	}
-	if listOpts := o.GetAll(); len(listOpts) != 2 || listOpts[0] != "bar" || listOpts[1] != "bar" {
-		t.Errorf("Expected [[bar bar]], got [%v]", listOpts)
-	}
-	if listOpts := o.GetSlice(); len(listOpts) != 2 || listOpts[0] != "bar" || listOpts[1] != "bar" {
-		t.Errorf("Expected [[bar bar]], got [%v]", listOpts)
-	}
-	if mapListOpts := o.GetMap(); len(mapListOpts) != 1 {
-		t.Errorf("Expected [map[bar:{}]], got [%v]", mapListOpts)
+	if mapListOpts := o.GetMap(); len(mapListOpts) != 2 {
+		t.Errorf("Expected [map[bar:{} foo:{}]], got [%v]", mapListOpts)
 	}
 }
 
@@ -186,9 +178,8 @@ func TestListOptsWithValidator(t *testing.T) {
 	if o.Get("baz") {
 		t.Error(`o.Get("baz") == true`)
 	}
-	o.Delete("valid-option2=2")
-	if o.String() != "" {
-		t.Errorf(`%s != ""`, o.String())
+	if expected := "[valid-option2=2]"; o.String() != expected {
+		t.Errorf(`%s != %q`, o.String(), expected)
 	}
 }
 
@@ -362,52 +353,6 @@ func sampleValidator(val string) (string, error) {
 		return val, nil
 	}
 	return "", fmt.Errorf("invalid key %s", k)
-}
-
-func TestNamedListOpts(t *testing.T) {
-	var v []string
-	o := NewNamedListOptsRef("foo-name", &v, nil)
-
-	o.Set("foo")
-	if o.String() != "[foo]" {
-		t.Errorf("%s != [foo]", o.String())
-	}
-	if o.Name() != "foo-name" {
-		t.Errorf("%s != foo-name", o.Name())
-	}
-	if len(v) != 1 {
-		t.Errorf("expected foo to be in the values, got %v", v)
-	}
-}
-
-func TestNamedMapOpts(t *testing.T) {
-	tmpMap := make(map[string]string)
-	o := NewNamedMapOpts("max-name", tmpMap, nil)
-
-	o.Set("max-size=1")
-	if o.String() != "map[max-size:1]" {
-		t.Errorf("%s != [map[max-size:1]", o.String())
-	}
-	if o.Name() != "max-name" {
-		t.Errorf("%s != max-name", o.Name())
-	}
-	if _, exist := tmpMap["max-size"]; !exist {
-		t.Errorf("expected map-size to be in the values, got %v", tmpMap)
-	}
-}
-
-func TestValidateMACAddress(t *testing.T) {
-	if _, err := ValidateMACAddress(`92:d0:c6:0a:29:33`); err != nil {
-		t.Fatalf("ValidateMACAddress(`92:d0:c6:0a:29:33`) got %s", err)
-	}
-
-	if _, err := ValidateMACAddress(`92:d0:c6:0a:33`); err == nil {
-		t.Fatalf("ValidateMACAddress(`92:d0:c6:0a:33`) succeeded; expected failure on invalid MAC")
-	}
-
-	if _, err := ValidateMACAddress(`random invalid string`); err == nil {
-		t.Fatalf("ValidateMACAddress(`random invalid string`) succeeded; expected failure on invalid MAC")
-	}
 }
 
 func TestValidateLink(t *testing.T) {

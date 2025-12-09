@@ -1,57 +1,125 @@
-#!/bin/sh
+#!/bin/bash
+# vim: set noexpandtab:
+# -*- indent-tabs-mode: t -*-
 set -eu
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types --skip-validator -C api/swagger-gen.yaml \
-	-n ErrorResponse \
-	-n Plugin \
-	-n PluginDevice \
-	-n PluginMount \
-	-n PluginEnv \
-	-n PluginInterfaceType
+generate_model() {
+	local package="$1"
+	shift
+	mapfile
+	swagger generate model --spec=api/swagger.yaml \
+		--target=api --model-package="$package" \
+		--config-file=api/swagger-gen.yaml \
+		--template-dir=api/templates --allow-template-override \
+		"$@" \
+		$(printf -- '--name=%s ' "${MAPFILE[@]}")
+}
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/common --skip-validator -C api/swagger-gen.yaml \
-	-n IDResponse
+generate_operation() {
+	mapfile
+	swagger generate operation --spec=api/swagger.yaml \
+		--target=api --api-package=types --model-package=types \
+		--config-file=api/swagger-gen.yaml \
+		--template-dir=api/templates --allow-template-override \
+		"$@" \
+		$(printf -- '--name=%s ' "${MAPFILE[@]}")
+}
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/storage --skip-validator -C api/swagger-gen.yaml \
-	-n DriverData
+# /==================================================================\
+# |                                                                  |
+# |  ATTENTION:                                                      |
+# |                                                                  |
+# |       Sort model package stanzas and model/operation names       |
+# |                    *** ALPHABETICALLY ***                        |
+# |          to reduce the likelihood of merge conflicts.            |
+# |                                                                  |
+# \==================================================================/
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/container --skip-validator -C api/swagger-gen.yaml \
-	-n ContainerCreateResponse \
-	-n ContainerUpdateResponse \
-	-n ContainerTopResponse \
-	-n ContainerWaitResponse \
-	-n ContainerWaitExitError \
-	-n ChangeType \
-	-n FilesystemChange \
-	-n Port
+#region -------- Models --------
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/image --skip-validator -C api/swagger-gen.yaml \
-	-n ImageDeleteResponseItem
-#-n ImageSummary TODO: Restore when go-swagger is updated
+generate_model types/build <<- 'EOT'
+	BuildCacheDiskUsage
+EOT
+
+generate_model types/common <<- 'EOT'
+	ErrorResponse
+	IDResponse
+EOT
+
+generate_model types/container <<- 'EOT'
+	ChangeType
+	ContainerCreateResponse
+	ContainerTopResponse
+	ContainerUpdateResponse
+	ContainerWaitExitError
+	ContainerWaitResponse
+	ContainersDiskUsage
+	FilesystemChange
+	PortSummary
+EOT
+
+generate_model types/image <<- 'EOT'
+	ImageDeleteResponseItem
+	ImagesDiskUsage
+EOT
+#	ImageSummary
+# TODO: Restore when go-swagger is updated
 # See https://github.com/moby/moby/pull/47526#discussion_r1551800022
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/network --skip-validator -C api/swagger-gen.yaml \
-	-n NetworkCreateResponse
+generate_model types/network --keep-spec-order --additional-initialism=IPAM <<- 'EOT'
+	ConfigReference
+	EndpointResource
+	IPAMStatus
+	Network
+	NetworkConnectRequest
+	NetworkCreateResponse
+	NetworkDisconnectRequest
+	NetworkInspect
+	NetworkStatus
+	NetworkSummary
+	NetworkTaskInfo
+	PeerInfo
+	ServiceInfo
+	SubnetStatus
+EOT
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/volume --skip-validator -C api/swagger-gen.yaml \
-	-n Volume \
-	-n VolumeCreateOptions \
-	-n VolumeListResponse
+generate_model types/plugin <<- 'EOT'
+	Plugin
+	PluginDevice
+	PluginEnv
+	PluginMount
+EOT
 
-swagger generate operation -f api/swagger.yaml \
-	-t api -a types -m types -C api/swagger-gen.yaml \
-	-T api/templates --skip-responses --skip-parameters --skip-validator \
-	-n Authenticate \
-	-n ImageHistory
+generate_model types/registry <<- 'EOT'
+	AuthResponse
+EOT
 
-swagger generate model -f api/swagger.yaml \
-	-t api -m types/swarm --skip-validator -C api/swagger-gen.yaml \
-	-n ServiceCreateResponse \
-	-n ServiceUpdateResponse
+generate_model types/storage <<- 'EOT'
+	DriverData
+	RootFSStorage
+	RootFSStorageSnapshot
+	Storage
+EOT
+
+generate_model types/swarm <<- 'EOT'
+	ServiceCreateResponse
+	ServiceUpdateResponse
+EOT
+
+generate_model types/volume <<- 'EOT'
+	Volume
+	VolumeCreateRequest
+	VolumeListResponse
+	VolumesDiskUsage
+EOT
+
+#endregion
+
+#region -------- Operations --------
+
+generate_operation --skip-responses --skip-parameters <<- 'EOT'
+	Authenticate
+	ImageHistory
+EOT
+
+#endregion

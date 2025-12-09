@@ -5,8 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 // ExecResult represents a result returned from Exec()
@@ -47,9 +46,9 @@ func (res ExecResult) AssertSuccess(t testing.TB) {
 // containing stdout, stderr, and exit code. Note:
 //   - this is a synchronous operation;
 //   - cmd stdin is closed.
-func Exec(ctx context.Context, apiClient client.APIClient, id string, cmd []string, ops ...func(*container.ExecOptions)) (ExecResult, error) {
+func Exec(ctx context.Context, apiClient client.APIClient, id string, cmd []string, ops ...func(*client.ExecCreateOptions)) (ExecResult, error) {
 	// prepare exec
-	execOptions := container.ExecOptions{
+	execOptions := client.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          cmd,
@@ -59,35 +58,35 @@ func Exec(ctx context.Context, apiClient client.APIClient, id string, cmd []stri
 		op(&execOptions)
 	}
 
-	cresp, err := apiClient.ContainerExecCreate(ctx, id, execOptions)
+	res, err := apiClient.ExecCreate(ctx, id, execOptions)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	execID := cresp.ID
+	execID := res.ID
 
 	// run it, with stdout/stderr attached
-	aresp, err := apiClient.ContainerExecAttach(ctx, execID, container.ExecAttachOptions{})
+	aresp, err := apiClient.ExecAttach(ctx, execID, client.ExecAttachOptions{})
 	if err != nil {
 		return ExecResult{}, err
 	}
 
 	// read the output
-	s, err := demultiplexStreams(ctx, aresp)
+	s, err := demultiplexStreams(ctx, aresp.HijackedResponse)
 	if err != nil {
 		return ExecResult{}, err
 	}
 
 	// get the exit code
-	iresp, err := apiClient.ContainerExecInspect(ctx, execID)
+	inspect, err := apiClient.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
 		return ExecResult{}, err
 	}
 
-	return ExecResult{ExitCode: iresp.ExitCode, outBuffer: &s.stdout, errBuffer: &s.stderr}, nil
+	return ExecResult{ExitCode: inspect.ExitCode, outBuffer: &s.stdout, errBuffer: &s.stderr}, nil
 }
 
 // ExecT calls Exec() and aborts the test if an error occurs.
-func ExecT(ctx context.Context, t testing.TB, apiClient client.APIClient, id string, cmd []string, ops ...func(*container.ExecOptions)) ExecResult {
+func ExecT(ctx context.Context, t testing.TB, apiClient client.APIClient, id string, cmd []string, ops ...func(*client.ExecCreateOptions)) ExecResult {
 	t.Helper()
 	res, err := Exec(ctx, apiClient, id, cmd, ops...)
 	if err != nil {

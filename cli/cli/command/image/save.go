@@ -2,26 +2,28 @@ package image
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/containerd/platforms"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/moby/sys/atomicwriter"
-	"github.com/pkg/errors"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
 type saveOptions struct {
 	images   []string
 	output   string
-	platform string
+	platform []string
 }
 
-// NewSaveCommand creates a new `docker save` command
-func NewSaveCommand(dockerCli command.Cli) *cobra.Command {
+// newSaveCommand creates a new "docker image save" command.
+func newSaveCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts saveOptions
 
 	cmd := &cobra.Command{
@@ -30,34 +32,39 @@ func NewSaveCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.images = args
-			return runSave(cmd.Context(), dockerCli, opts)
+			return runSave(cmd.Context(), dockerCLI, opts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker image save, docker save",
 		},
-		ValidArgsFunction: completion.ImageNames(dockerCli, -1),
+		ValidArgsFunction:     completion.ImageNames(dockerCLI, -1),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 
 	flags.StringVarP(&opts.output, "output", "o", "", "Write to a file, instead of STDOUT")
-	flags.StringVar(&opts.platform, "platform", "", `Save only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")`)
+	flags.StringSliceVar(&opts.platform, "platform", []string{}, `Save only the given platform(s). Formatted as a comma-separated list of "os[/arch[/variant]]" (e.g., "linux/amd64,linux/arm64/v8")`)
 	_ = flags.SetAnnotation("platform", "version", []string{"1.48"})
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 	return cmd
 }
 
 // runSave performs a save against the engine based on the specified options
 func runSave(ctx context.Context, dockerCLI command.Cli, opts saveOptions) error {
 	var options []client.ImageSaveOption
-	if opts.platform != "" {
-		p, err := platforms.Parse(opts.platform)
+
+	platformList := []ocispec.Platform{}
+	for _, p := range opts.platform {
+		pp, err := platforms.Parse(p)
 		if err != nil {
-			return errors.Wrap(err, "invalid platform")
+			return fmt.Errorf("invalid platform: %w", err)
 		}
-		// TODO(thaJeztah): change flag-type to support multiple platforms.
-		options = append(options, client.ImageSaveWithPlatforms(p))
+		platformList = append(platformList, pp)
+	}
+	if len(platformList) > 0 {
+		options = append(options, client.ImageSaveWithPlatforms(platformList...))
 	}
 
 	var output io.Writer
@@ -69,7 +76,7 @@ func runSave(ctx context.Context, dockerCLI command.Cli, opts saveOptions) error
 	} else {
 		writer, err := atomicwriter.New(opts.output, 0o600)
 		if err != nil {
-			return errors.Wrap(err, "failed to save image")
+			return fmt.Errorf("failed to save image: %w", err)
 		}
 		defer writer.Close()
 		output = writer

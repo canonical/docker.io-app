@@ -1,4 +1,4 @@
-package network // import "github.com/docker/docker/integration/network"
+package network
 
 import (
 	"bytes"
@@ -11,16 +11,15 @@ import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	networktypes "github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/internal/testutils/networking"
-	"github.com/docker/docker/libnetwork/netlabel"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	networktypes "github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
+	"github.com/moby/moby/v2/daemon/libnetwork/netlabel"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/integration/internal/testutils/networking"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -41,14 +40,14 @@ func TestRunContainerWithBridgeNone(t *testing.T) {
 	c := d.NewClientT(t)
 
 	id1 := container.Run(ctx, t, c)
-	defer c.ContainerRemove(ctx, id1, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, id1, client.ContainerRemoveOptions{Force: true})
 
 	result, err := container.Exec(ctx, c, id1, []string{"ip", "l"})
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(false, strings.Contains(result.Combined(), "eth0")), "There shouldn't be eth0 in container in default(bridge) mode when bridge network is disabled")
 
 	id2 := container.Run(ctx, t, c, container.WithNetworkMode("bridge"))
-	defer c.ContainerRemove(ctx, id2, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, id2, client.ContainerRemoveOptions{Force: true})
 
 	result, err = container.Exec(ctx, c, id2, []string{"ip", "l"})
 	assert.NilError(t, err)
@@ -62,7 +61,7 @@ func TestRunContainerWithBridgeNone(t *testing.T) {
 	assert.NilError(t, err, "Failed to get current process network namespace: %+v", err)
 
 	id3 := container.Run(ctx, t, c, container.WithNetworkMode("host"))
-	defer c.ContainerRemove(ctx, id3, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, id3, client.ContainerRemoveOptions{Force: true})
 
 	result, err = container.Exec(ctx, c, id3, []string{"sh", "-c", nsCommand})
 	assert.NilError(t, err)
@@ -89,17 +88,17 @@ func TestHostIPv4BridgeLabel(t *testing.T) {
 		network.WithOption("com.docker.network.bridge.name", bridgeName),
 	)
 	defer network.RemoveNoError(ctx, t, c, bridgeName)
-	out, err := c.NetworkInspect(ctx, bridgeName, networktypes.InspectOptions{Verbose: true})
+	res, err := c.NetworkInspect(ctx, bridgeName, client.NetworkInspectOptions{Verbose: true})
 	assert.NilError(t, err)
-	assert.Assert(t, len(out.IPAM.Config) > 0)
+	assert.Assert(t, len(res.Network.IPAM.Config) > 0)
 	// Make sure the SNAT rule exists
-	if testEnv.FirewallBackendDriver() == "nftables" {
+	if strings.HasPrefix(testEnv.FirewallBackendDriver(), "nftables") {
 		chain := testutil.RunCommand(ctx, "nft", "--stateless", "list", "chain", "ip", "docker-bridges", "nat-postrouting-out__hostIPv4Bridge").Combined()
 		exp := fmt.Sprintf(`oifname != "hostIPv4Bridge" ip saddr %s counter snat to %s comment "SNAT"`,
-			out.IPAM.Config[0].Subnet, ipv4SNATAddr)
+			res.Network.IPAM.Config[0].Subnet, ipv4SNATAddr)
 		assert.Check(t, is.Contains(chain, exp))
 	} else {
-		testutil.RunCommand(ctx, "iptables", "-t", "nat", "-C", "POSTROUTING", "-s", out.IPAM.Config[0].Subnet, "!", "-o", bridgeName, "-j", "SNAT", "--to-source", ipv4SNATAddr).Assert(t, icmd.Success)
+		testutil.RunCommand(ctx, "iptables", "-t", "nat", "-C", "POSTROUTING", "-s", res.Network.IPAM.Config[0].Subnet.String(), "!", "-o", bridgeName, "-j", "SNAT", "--to-source", ipv4SNATAddr).Assert(t, icmd.Success)
 	}
 }
 
@@ -143,25 +142,23 @@ func TestDefaultNetworkOpts(t *testing.T) {
 
 			if tc.configFrom {
 				// Create a new network config
-				network.CreateNoError(ctx, t, c, "from-net", func(create *networktypes.CreateOptions) {
+				network.CreateNoError(ctx, t, c, "from-net", func(create *client.NetworkCreateOptions) {
 					create.ConfigOnly = true
 					create.Options = map[string]string{
 						"com.docker.network.driver.mtu": fmt.Sprint(tc.mtu),
 					}
 				})
-				defer c.NetworkRemove(ctx, "from-net")
+				defer c.NetworkRemove(ctx, "from-net", client.NetworkRemoveOptions{})
 			}
 
 			// Create a new network
 			networkName := "testnet"
-			networkId := network.CreateNoError(ctx, t, c, networkName, func(create *networktypes.CreateOptions) {
+			networkId := network.CreateNoError(ctx, t, c, networkName, func(create *client.NetworkCreateOptions) {
 				if tc.configFrom {
-					create.ConfigFrom = &networktypes.ConfigReference{
-						Network: "from-net",
-					}
+					create.ConfigFrom = "from-net"
 				}
 			})
-			defer c.NetworkRemove(ctx, networkName)
+			defer c.NetworkRemove(ctx, networkName, client.NetworkRemoveOptions{})
 
 			// Check the MTU of the bridge itself, before any devices are connected. (The
 			// bridge's MTU will be set to the minimum MTU of anything connected to it, but
@@ -174,7 +171,7 @@ func TestDefaultNetworkOpts(t *testing.T) {
 
 			// Start a container to inspect the MTU of its network interface
 			id1 := container.Run(ctx, t, c, container.WithNetworkMode(networkName))
-			defer c.ContainerRemove(ctx, id1, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, id1, client.ContainerRemoveOptions{Force: true})
 
 			result, err := container.Exec(ctx, c, id1, []string{"ip", "l", "show", "eth0"})
 			assert.NilError(t, err)
@@ -196,7 +193,7 @@ func TestForbidDuplicateNetworkNames(t *testing.T) {
 	network.CreateNoError(ctx, t, c, "testnet")
 	defer network.RemoveNoError(ctx, t, c, "testnet")
 
-	_, err := c.NetworkCreate(ctx, "testnet", networktypes.CreateOptions{})
+	_, err := c.NetworkCreate(ctx, "testnet", client.NetworkCreateOptions{})
 	assert.Error(t, err, "Error response from daemon: network with name testnet already exists", "2nd NetworkCreate call should have failed")
 }
 
@@ -260,7 +257,7 @@ func TestCreateWithPriority(t *testing.T) {
 		container.WithNetworkMode("testnet1"),
 		container.WithEndpointSettings("testnet1", &networktypes.EndpointSettings{GwPriority: 10}),
 		container.WithEndpointSettings("testnet2", &networktypes.EndpointSettings{GwPriority: 100}))
-	defer container.Remove(ctx, t, apiClient, ctrID, containertypes.RemoveOptions{Force: true})
+	defer container.Remove(ctx, t, apiClient, ctrID, client.ContainerRemoveOptions{Force: true})
 
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 3, "default via 10.100.30.1 dev")
 	// IPv6 routing table will contain for each interface, one route for the LL
@@ -313,32 +310,44 @@ func TestConnectWithPriority(t *testing.T) {
 		container.WithCmd("sleep", "infinity"),
 		container.WithNetworkMode("testnet1"),
 		container.WithEndpointSettings("testnet1", &networktypes.EndpointSettings{}))
-	defer container.Remove(ctx, t, apiClient, ctrID, containertypes.RemoveOptions{Force: true})
+	defer container.Remove(ctx, t, apiClient, ctrID, client.ContainerRemoveOptions{Force: true})
 
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 2, "default via 10.100.10.1 dev eth0")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 4, "default via fddd:4901:f594::1 dev eth0")
 
 	// testnet5 has a negative priority -- the default gateway should not change.
-	err := apiClient.NetworkConnect(ctx, "testnet5", ctrID, &networktypes.EndpointSettings{GwPriority: -100})
+	_, err := apiClient.NetworkConnect(ctx, "testnet5", client.NetworkConnectOptions{
+		Container:      ctrID,
+		EndpointConfig: &networktypes.EndpointSettings{GwPriority: -100},
+	})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 3, "default via 10.100.10.1 dev eth0")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 7, "default via fddd:4901:f594::1 dev eth0")
 
 	// testnet2 has a higher priority. It should now provide the default gateway.
-	err = apiClient.NetworkConnect(ctx, "testnet2", ctrID, &networktypes.EndpointSettings{GwPriority: 100})
+	_, err = apiClient.NetworkConnect(ctx, "testnet2", client.NetworkConnectOptions{
+		Container:      ctrID,
+		EndpointConfig: &networktypes.EndpointSettings{GwPriority: 100},
+	})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 4, "default via 10.100.20.1 dev eth2")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 10, "default via fd83:7683:7008::1 dev eth2")
 
 	// testnet3 has a lower priority, so testnet2 should still provide the default gateway.
-	err = apiClient.NetworkConnect(ctx, "testnet3", ctrID, &networktypes.EndpointSettings{GwPriority: 10})
+	_, err = apiClient.NetworkConnect(ctx, "testnet3", client.NetworkConnectOptions{
+		Container:      ctrID,
+		EndpointConfig: &networktypes.EndpointSettings{GwPriority: 10},
+	})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 5, "default via 10.100.20.1 dev eth2")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 13, "default via fd83:7683:7008::1 dev eth2")
 
 	// testnet4 has the same priority as testnet3, but it sorts after in
 	// lexicographic order. For now, testnet2 stays the default gateway.
-	err = apiClient.NetworkConnect(ctx, "testnet4", ctrID, &networktypes.EndpointSettings{GwPriority: 10})
+	_, err = apiClient.NetworkConnect(ctx, "testnet4", client.NetworkConnectOptions{
+		Container:      ctrID,
+		EndpointConfig: &networktypes.EndpointSettings{GwPriority: 10},
+	})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 6, "default via 10.100.20.1 dev eth2")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 16, "default via fd83:7683:7008::1 dev eth2")
@@ -353,19 +362,19 @@ func TestConnectWithPriority(t *testing.T) {
 	// Disconnect testnet2, so testnet3 should now provide the default gateway.
 	// When two endpoints have the same priority (eg. testnet3 vs testnet4),
 	// the one that sorts first in lexicographic order is picked.
-	err = apiClient.NetworkDisconnect(ctx, "testnet2", ctrID, true)
+	_, err = apiClient.NetworkDisconnect(ctx, "testnet2", client.NetworkDisconnectOptions{Container: ctrID, Force: true})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 5, "default via 10.100.30.1 dev eth3")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 13, "default via fd72:de0:adad::1 dev eth3")
 
 	// Disconnect testnet3, so testnet4 should now provide the default gateway.
-	err = apiClient.NetworkDisconnect(ctx, "testnet3", ctrID, true)
+	_, err = apiClient.NetworkDisconnect(ctx, "testnet3", client.NetworkDisconnectOptions{Container: ctrID, Force: true})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 4, "default via 10.100.40.1 dev eth4")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 10, "default via fd4c:c927:7d90::1 dev eth4")
 
 	// Disconnect testnet4, so testnet1 should now provide the default gateway.
-	err = apiClient.NetworkDisconnect(ctx, "testnet4", ctrID, true)
+	_, err = apiClient.NetworkDisconnect(ctx, "testnet4", client.NetworkDisconnectOptions{Container: ctrID, Force: true})
 	assert.NilError(t, err)
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET, 3, "default via 10.100.10.1 dev eth0")
 	checkCtrRoutes(t, ctx, apiClient, ctrID, syscall.AF_INET6, 7, "default via fddd:4901:f594::1 dev eth0")
@@ -500,7 +509,7 @@ func TestMixL3IPVlanAndBridge(t *testing.T) {
 				container.WithEndpointSettings(br6NetName, &networktypes.EndpointSettings{}),
 				container.WithEndpointSettings(ipvNetName, &networktypes.EndpointSettings{}),
 			)
-			defer container.Remove(ctx, t, c, ctrId, containertypes.RemoveOptions{Force: true})
+			defer container.Remove(ctx, t, c, ctrId, client.ContainerRemoveOptions{Force: true})
 
 			if tc.liveRestore {
 				d.Restart(t, daemonArgs...)
@@ -512,19 +521,22 @@ func TestMixL3IPVlanAndBridge(t *testing.T) {
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET6, 10, "default via fd6f:36f8:3005::1 dev bds")
 
 			// Disconnect the dual-stack bridge network, expect the ipvlan's default route to be set up.
-			c.NetworkDisconnect(ctx, br46NetName, ctrId, false)
+			c.NetworkDisconnect(ctx, br46NetName, client.NetworkDisconnectOptions{Container: ctrId, Force: false})
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET, 2, "default dev eth")
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET6, 7, "default dev eth")
 
 			// Disconnect the ipvlan, expect the IPv6-only network to be the gateway, with no IPv4 gateway.
 			// (For this to work in the live-restore case the "dstName" of the interface must have been
 			// restored in the osSbox, based on matching the running interface's IPv6 address.)
-			c.NetworkDisconnect(ctx, ipvNetName, ctrId, false)
+			c.NetworkDisconnect(ctx, ipvNetName, client.NetworkDisconnectOptions{Container: ctrId, Force: false})
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET, 0, "")
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET6, 4, "default via fdc9:adaf:b5da::1 dev bss")
 
 			// Reconnect the dual-stack bridge, expect it to be the gateway for both addr families.
-			c.NetworkConnect(ctx, br46NetName, ctrId, &networktypes.EndpointSettings{GwPriority: 1})
+			c.NetworkConnect(ctx, br46NetName, client.NetworkConnectOptions{
+				Container:      ctrId,
+				EndpointConfig: &networktypes.EndpointSettings{GwPriority: 1},
+			})
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET, 2, "default via 192.168.123.1 dev bds")
 			checkCtrRoutes(t, ctx, c, ctrId, syscall.AF_INET6, 7, "default via fd6f:36f8:3005::1 dev bds")
 		})

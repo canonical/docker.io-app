@@ -7,19 +7,21 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
+func newRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "rm SERVICE [SERVICE...]",
 		Aliases: []string{"remove"},
 		Short:   "Remove one or more services",
 		Args:    cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRemove(cmd.Context(), dockerCli, args)
+			return runRemove(cmd.Context(), dockerCLI, args)
 		},
-		ValidArgsFunction: completeServiceNames(dockerCli),
+		ValidArgsFunction:     completeServiceNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 	cmd.Flags()
 
@@ -31,7 +33,7 @@ func runRemove(ctx context.Context, dockerCLI command.Cli, serviceIDs []string) 
 
 	var errs []error
 	for _, id := range serviceIDs {
-		if err := apiClient.ServiceRemove(ctx, id); err != nil {
+		if _, err := apiClient.ServiceRemove(ctx, id, client.ServiceRemoveOptions{}); err != nil {
 			errs = append(errs, err)
 			continue
 		}

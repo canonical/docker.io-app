@@ -1,4 +1,4 @@
-package sysinfo // import "github.com/docker/docker/pkg/sysinfo"
+package sysinfo
 
 import (
 	"context"
@@ -152,15 +152,6 @@ func applyMemoryCgroupInfo(info *SysInfo) {
 	if !info.MemorySwappiness {
 		info.Warnings = append(info.Warnings, "Your kernel does not support memory swappiness")
 	}
-
-	// Option is deprecated, but still accepted on API < v1.42 with cgroups v1,
-	// so setting the field to allow feature detection.
-	info.KernelMemory = cgroupEnabled(mountPoint, "memory.kmem.limit_in_bytes")
-
-	// Option is deprecated in runc, but still accepted in our API, so setting
-	// the field to allow feature detection, but don't warn if it's missing, to
-	// make the daemon logs a bit less noisy.
-	info.KernelMemoryTCP = cgroupEnabled(mountPoint, "memory.kmem.tcp.limit_in_bytes")
 }
 
 // applyCPUCgroupInfo adds the cpu cgroup controller information to the info.

@@ -2,30 +2,30 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/moby/sys/sequential"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
-// CreateOptions specifies some options that are used when creating a config.
-type CreateOptions struct {
-	Name           string
-	TemplateDriver string
-	File           string
-	Labels         opts.ListOpts
+// createOptions specifies some options that are used when creating a config.
+type createOptions struct {
+	name           string
+	templateDriver string
+	file           string
+	labels         opts.ListOpts
 }
 
-func newConfigCreateCommand(dockerCli command.Cli) *cobra.Command {
-	createOpts := CreateOptions{
-		Labels: opts.NewListOpts(opts.ValidateLabel),
+func newConfigCreateCommand(dockerCLI command.Cli) *cobra.Command {
+	createOpts := createOptions{
+		labels: opts.NewListOpts(opts.ValidateLabel),
 	}
 
 	cmd := &cobra.Command{
@@ -33,42 +33,61 @@ func newConfigCreateCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Create a config from a file or STDIN",
 		Args:  cli.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			createOpts.Name = args[0]
-			createOpts.File = args[1]
-			return RunConfigCreate(cmd.Context(), dockerCli, createOpts)
+			createOpts.name = args[0]
+			createOpts.file = args[1]
+			return runCreate(cmd.Context(), dockerCLI, createOpts)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			switch len(args) {
+			case 0:
+				// No completion for the first argument, which is the name for
+				// the new config, but if a non-empty name is given, we return
+				// it as completion to allow "tab"-ing to the next completion.
+				return []string{toComplete}, cobra.ShellCompDirectiveNoFileComp
+			case 1:
+				// Second argument is either "-" or a file to load.
+				//
+				// TODO(thaJeztah): provide completion for "-".
+				return nil, cobra.ShellCompDirectiveNoSpace | cobra.ShellCompDirectiveDefault
+			default:
+				// Command only accepts two arguments.
+				return nil, cobra.ShellCompDirectiveNoSpace | cobra.ShellCompDirectiveNoFileComp
+			}
+		},
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
-	flags.VarP(&createOpts.Labels, "label", "l", "Config labels")
-	flags.StringVar(&createOpts.TemplateDriver, "template-driver", "", "Template driver")
-	flags.SetAnnotation("template-driver", "version", []string{"1.37"})
+	flags.VarP(&createOpts.labels, "label", "l", "Config labels")
+	flags.StringVar(&createOpts.templateDriver, "template-driver", "", "Template driver")
+	_ = flags.SetAnnotation("template-driver", "version", []string{"1.37"})
 
 	return cmd
 }
 
-// RunConfigCreate creates a config with the given options.
-func RunConfigCreate(ctx context.Context, dockerCLI command.Cli, options CreateOptions) error {
+// runCreate creates a config with the given options.
+func runCreate(ctx context.Context, dockerCLI command.Cli, options createOptions) error {
 	apiClient := dockerCLI.Client()
 
-	configData, err := readConfigData(dockerCLI.In(), options.File)
+	configData, err := readConfigData(dockerCLI.In(), options.file)
 	if err != nil {
-		return errors.Errorf("Error reading content from %q: %v", options.File, err)
+		return fmt.Errorf("error reading content from %q: %v", options.file, err)
 	}
 
 	spec := swarm.ConfigSpec{
 		Annotations: swarm.Annotations{
-			Name:   options.Name,
-			Labels: opts.ConvertKVStringsToMap(options.Labels.GetSlice()),
+			Name:   options.name,
+			Labels: opts.ConvertKVStringsToMap(options.labels.GetSlice()),
 		},
 		Data: configData,
 	}
-	if options.TemplateDriver != "" {
+	if options.templateDriver != "" {
 		spec.Templating = &swarm.Driver{
-			Name: options.TemplateDriver,
+			Name: options.templateDriver,
 		}
 	}
-	r, err := apiClient.ConfigCreate(ctx, spec)
+	r, err := apiClient.ConfigCreate(ctx, client.ConfigCreateOptions{
+		Spec: spec,
+	})
 	if err != nil {
 		return err
 	}

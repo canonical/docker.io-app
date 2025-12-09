@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -17,7 +17,7 @@ func TestNewImportCommandErrors(t *testing.T) {
 		name            string
 		args            []string
 		expectedError   string
-		imageImportFunc func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error)
+		imageImportFunc func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error)
 	}{
 		{
 			name:          "wrong-args",
@@ -28,13 +28,13 @@ func TestNewImportCommandErrors(t *testing.T) {
 			name:          "import-failed",
 			args:          []string{"testdata/import-command-success.input.txt"},
 			expectedError: "something went wrong",
-			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
+			imageImportFunc: func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error) {
 				return nil, errors.New("something went wrong")
 			},
 		},
 	}
 	for _, tc := range testCases {
-		cmd := NewImportCommand(test.NewFakeCli(&fakeClient{imageImportFunc: tc.imageImportFunc}))
+		cmd := newImportCommand(test.NewFakeCli(&fakeClient{imageImportFunc: tc.imageImportFunc}))
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
 		cmd.SetArgs(tc.args)
@@ -43,7 +43,7 @@ func TestNewImportCommandErrors(t *testing.T) {
 }
 
 func TestNewImportCommandInvalidFile(t *testing.T) {
-	cmd := NewImportCommand(test.NewFakeCli(&fakeClient{}))
+	cmd := newImportCommand(test.NewFakeCli(&fakeClient{}))
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"testdata/import-command-success.unexistent-file"})
@@ -54,7 +54,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 	testCases := []struct {
 		name            string
 		args            []string
-		imageImportFunc func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error)
+		imageImportFunc func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error)
 	}{
 		{
 			name: "simple",
@@ -67,7 +67,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 		{
 			name: "double",
 			args: []string{"-", "image:local"},
-			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
+			imageImportFunc: func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error) {
 				assert.Check(t, is.Equal("image:local", ref))
 				return io.NopCloser(strings.NewReader("")), nil
 			},
@@ -75,7 +75,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 		{
 			name: "message",
 			args: []string{"--message", "test message", "-"},
-			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
+			imageImportFunc: func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error) {
 				assert.Check(t, is.Equal("test message", options.Message))
 				return io.NopCloser(strings.NewReader("")), nil
 			},
@@ -83,7 +83,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 		{
 			name: "change",
 			args: []string{"--change", "ENV DEBUG=true", "-"},
-			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
+			imageImportFunc: func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error) {
 				assert.Check(t, is.Equal("ENV DEBUG=true", options.Changes[0]))
 				return io.NopCloser(strings.NewReader("")), nil
 			},
@@ -91,7 +91,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 		{
 			name: "change legacy syntax",
 			args: []string{"--change", "ENV DEBUG true", "-"},
-			imageImportFunc: func(source image.ImportSource, ref string, options image.ImportOptions) (io.ReadCloser, error) {
+			imageImportFunc: func(source client.ImageImportSource, ref string, options client.ImageImportOptions) (client.ImageImportResult, error) {
 				assert.Check(t, is.Equal("ENV DEBUG true", options.Changes[0]))
 				return io.NopCloser(strings.NewReader("")), nil
 			},
@@ -99,7 +99,7 @@ func TestNewImportCommandSuccess(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewImportCommand(test.NewFakeCli(&fakeClient{imageImportFunc: tc.imageImportFunc}))
+			cmd := newImportCommand(test.NewFakeCli(&fakeClient{imageImportFunc: tc.imageImportFunc}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)

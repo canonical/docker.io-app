@@ -1,12 +1,20 @@
-package convert // import "github.com/docker/docker/daemon/cluster/convert"
+package convert
 
 import (
+	"maps"
+	"net/netip"
 	"strings"
+	"time"
 
-	"github.com/docker/docker/api/types/network"
-	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/libnetwork/scope"
 	gogotypes "github.com/gogo/protobuf/types"
+	"github.com/moby/moby/api/types/network"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/convert/netextra"
+	"github.com/moby/moby/v2/daemon/internal/netipstringer"
+	"github.com/moby/moby/v2/daemon/internal/netiputil"
+	"github.com/moby/moby/v2/daemon/libnetwork/scope"
+	"github.com/moby/moby/v2/internal/iterutil"
+	"github.com/moby/moby/v2/internal/sliceutil"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 )
 
@@ -14,7 +22,7 @@ func networkAttachmentFromGRPC(na *swarmapi.NetworkAttachment) types.NetworkAtta
 	if na != nil {
 		return types.NetworkAttachment{
 			Network:   networkFromGRPC(na.Network),
-			Addresses: na.Addresses,
+			Addresses: sliceutil.Map(na.Addresses, func(s string) netip.Prefix { a, _ := netip.ParsePrefix(s); return a }),
 		}
 	}
 	return types.NetworkAttachment{}
@@ -80,10 +88,16 @@ func ipamFromGRPC(i *swarmapi.IPAMOptions) *types.IPAMOptions {
 		}
 
 		for _, config := range i.Configs {
+			// Best-effort parse of user suppplied values that have
+			// been round-tripped through Swarm's Raft store. It is
+			// far too late to reject bogus values.
+			subnet, _ := netiputil.ParseCIDR(config.Subnet)
+			iprange, _ := netiputil.ParseCIDR(config.Range)
+			gw, _ := netip.ParseAddr(config.Gateway)
 			ipam.Configs = append(ipam.Configs, types.IPAMConfig{
-				Subnet:  config.Subnet,
-				Range:   config.Range,
-				Gateway: config.Gateway,
+				Subnet:  subnet.Masked(),
+				Range:   iprange.Masked(),
+				Gateway: gw.Unmap(),
 			})
 		}
 	}
@@ -116,9 +130,10 @@ func endpointFromGRPC(e *swarmapi.Endpoint) types.Endpoint {
 		}
 
 		for _, v := range e.VirtualIPs {
+			vip, _ := netip.ParsePrefix(v.Addr)
 			endpoint.VirtualIPs = append(endpoint.VirtualIPs, types.EndpointVirtualIP{
 				NetworkID: v.NetworkID,
-				Addr:      v.Addr,
+				Addr:      vip,
 			})
 		}
 	}
@@ -129,7 +144,7 @@ func endpointFromGRPC(e *swarmapi.Endpoint) types.Endpoint {
 func swarmPortConfigToAPIPortConfig(portConfig *swarmapi.PortConfig) types.PortConfig {
 	return types.PortConfig{
 		Name:          portConfig.Name,
-		Protocol:      types.PortConfigProtocol(strings.ToLower(swarmapi.PortConfig_Protocol_name[int32(portConfig.Protocol)])),
+		Protocol:      network.IPProtocol(strings.ToLower(swarmapi.PortConfig_Protocol_name[int32(portConfig.Protocol)])),
 		PublishMode:   types.PortConfigPublishMode(strings.ToLower(swarmapi.PortConfig_PublishMode_name[int32(portConfig.PublishMode)])),
 		TargetPort:    portConfig.TargetPort,
 		PublishedPort: portConfig.PublishedPort,
@@ -137,7 +152,7 @@ func swarmPortConfigToAPIPortConfig(portConfig *swarmapi.PortConfig) types.PortC
 }
 
 // BasicNetworkFromGRPC converts a grpc Network to a NetworkResource.
-func BasicNetworkFromGRPC(n swarmapi.Network) network.Inspect {
+func BasicNetworkFromGRPC(n swarmapi.Network) network.Network {
 	spec := n.Spec
 	var ipam network.IPAM
 	if n.IPAM != nil {
@@ -147,19 +162,30 @@ func BasicNetworkFromGRPC(n swarmapi.Network) network.Inspect {
 		}
 		ipam.Config = make([]network.IPAMConfig, 0, len(n.IPAM.Configs))
 		for _, ic := range n.IPAM.Configs {
-			ipam.Config = append(ipam.Config, network.IPAMConfig{
-				Subnet:     ic.Subnet,
-				IPRange:    ic.Range,
-				Gateway:    ic.Gateway,
-				AuxAddress: ic.Reserved,
-			})
+			// Best-effort parse of user suppplied values that have
+			// been round-tripped through Swarm's Raft store. It is
+			// far too late to reject bogus values.
+			subnet, _ := netiputil.ParseCIDR(ic.Subnet)
+			iprange, _ := netiputil.ParseCIDR(ic.Range)
+			gw, _ := netip.ParseAddr(ic.Gateway)
+			cfg := network.IPAMConfig{
+				Subnet:  subnet.Masked(),
+				IPRange: iprange.Masked(),
+				Gateway: gw.Unmap(),
+			}
+			cfg.AuxAddress = maps.Collect(iterutil.Map2(maps.All(ic.Reserved), func(k, v string) (string, netip.Addr) {
+				addr, _ := netip.ParseAddr(v)
+				return k, addr.Unmap()
+			}))
+			ipam.Config = append(ipam.Config, cfg)
 		}
 	}
 
-	nr := network.Inspect{
+	nr := network.Network{
 		ID:         n.ID,
 		Name:       n.Spec.Annotations.Name,
 		Scope:      scope.Swarm,
+		EnableIPv4: true,
 		EnableIPv6: spec.Ipv6Enabled,
 		IPAM:       ipam,
 		Internal:   spec.Internal,
@@ -181,6 +207,17 @@ func BasicNetworkFromGRPC(n swarmapi.Network) network.Inspect {
 	}
 
 	return nr
+}
+
+func NetworkInspectFromGRPC(n swarmapi.Network) (network.Inspect, error) {
+	ni := network.Inspect{
+		Network:    BasicNetworkFromGRPC(n),
+		Containers: make(map[string]network.EndpointResource),
+	}
+
+	var err error
+	ni.Status, err = netextra.StatusFrom(n.Extra)
+	return ni, err
 }
 
 // BasicNetworkCreateToGRPC converts a NetworkCreateRequest to a grpc NetworkSpec.
@@ -215,9 +252,9 @@ func BasicNetworkCreateToGRPC(create network.CreateRequest) swarmapi.NetworkSpec
 		ipamSpec := make([]*swarmapi.IPAMConfig, 0, len(create.IPAM.Config))
 		for _, ipamConfig := range create.IPAM.Config {
 			ipamSpec = append(ipamSpec, &swarmapi.IPAMConfig{
-				Subnet:  ipamConfig.Subnet,
-				Range:   ipamConfig.IPRange,
-				Gateway: ipamConfig.Gateway,
+				Subnet:  netipstringer.Prefix(netiputil.Unmap(ipamConfig.Subnet).Masked()),
+				Range:   netipstringer.Prefix(netiputil.Unmap(ipamConfig.IPRange).Masked()),
+				Gateway: netipstringer.Addr(ipamConfig.Gateway.Unmap()),
 			})
 		}
 		ns.IPAM.Configs = ipamSpec
@@ -238,4 +275,48 @@ func IsIngressNetwork(n *swarmapi.Network) bool {
 	// Check if legacy defined ingress network
 	_, ok := n.Spec.Annotations.Labels["com.docker.swarm.internal"]
 	return ok && n.Spec.Annotations.Name == "ingress"
+}
+
+// FilterNetwork adapts [swarmapi.Network] to the
+// [github.com/moby/moby/v2/daemon/network.FilterNetwork] interface.
+type FilterNetwork struct {
+	N *swarmapi.Network
+}
+
+func (nw FilterNetwork) ID() string {
+	return nw.N.ID
+}
+
+func (nw FilterNetwork) Name() string {
+	return nw.N.Spec.Annotations.Name
+}
+
+func (nw FilterNetwork) Driver() string {
+	if nw.N.DriverState != nil {
+		return nw.N.DriverState.Name
+	}
+	return ""
+}
+
+func (nw FilterNetwork) Labels() map[string]string {
+	return nw.N.Spec.Annotations.Labels
+}
+
+func (nw FilterNetwork) Scope() string {
+	return scope.Swarm
+}
+
+func (nw FilterNetwork) Created() time.Time {
+	t, _ := gogotypes.TimestampFromProto(nw.N.Meta.CreatedAt)
+	return t
+}
+
+func (nw FilterNetwork) HasContainerAttachments() bool {
+	// Not tracked in swarmkit
+	return false
+}
+
+func (nw FilterNetwork) HasServiceAttachments() bool {
+	// Not tracked in swarmkit
+	return false
 }

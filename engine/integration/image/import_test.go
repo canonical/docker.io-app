@@ -1,4 +1,4 @@
-package image // import "github.com/docker/docker/integration/image"
+package image
 
 import (
 	"archive/tar"
@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	imagetypes "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/containerd/platforms"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -33,7 +34,7 @@ func TestImportExtremelyLargeImageWorks(t *testing.T) {
 	d.Start(t, "--iptables=false", "--ip6tables=false")
 	defer d.Stop(t)
 
-	client := d.NewClientT(t)
+	apiClient := d.NewClientT(t)
 
 	// Construct an empty tar archive with about 8GB of junk padding at the
 	// end. This should not cause any crashes (the padding should be mostly
@@ -46,10 +47,10 @@ func TestImportExtremelyLargeImageWorks(t *testing.T) {
 	imageRdr := io.MultiReader(&tarBuffer, io.LimitReader(testutil.DevZero, 8*1024*1024*1024))
 	reference := strings.ToLower(t.Name()) + ":v42"
 
-	_, err = client.ImageImport(ctx,
-		imagetypes.ImportSource{Source: imageRdr, SourceName: "-"},
+	_, err = apiClient.ImageImport(ctx,
+		client.ImageImportSource{Source: imageRdr, SourceName: "-"},
 		reference,
-		imagetypes.ImportOptions{})
+		client.ImageImportOptions{})
 	assert.NilError(t, err)
 }
 
@@ -58,7 +59,7 @@ func TestImportWithCustomPlatform(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	// Construct an empty tar archive.
 	var tarBuffer bytes.Buffer
@@ -70,33 +71,30 @@ func TestImportWithCustomPlatform(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		platform string
-		expected image.V1Image
+		platform ocispec.Platform
+		expected ocispec.Platform
 	}{
 		{
-			platform: "",
-			expected: image.V1Image{
+			expected: ocispec.Platform{
 				OS:           runtime.GOOS,
 				Architecture: runtime.GOARCH, // this may fail on armhf due to normalization?
 			},
 		},
 		{
-			platform: runtime.GOOS,
-			expected: image.V1Image{
+			platform: ocispec.Platform{
+				OS: runtime.GOOS,
+			},
+			expected: ocispec.Platform{
 				OS:           runtime.GOOS,
 				Architecture: runtime.GOARCH, // this may fail on armhf due to normalization?
 			},
 		},
 		{
-			platform: strings.ToUpper(runtime.GOOS),
-			expected: image.V1Image{
+			platform: ocispec.Platform{
 				OS:           runtime.GOOS,
-				Architecture: runtime.GOARCH, // this may fail on armhf due to normalization?
+				Architecture: "sparc64",
 			},
-		},
-		{
-			platform: runtime.GOOS + "/sparc64",
-			expected: image.V1Image{
+			expected: ocispec.Platform{
 				OS:           runtime.GOOS,
 				Architecture: "sparc64",
 			},
@@ -104,17 +102,17 @@ func TestImportWithCustomPlatform(t *testing.T) {
 	}
 
 	for i, tc := range tests {
-		t.Run(tc.platform, func(t *testing.T) {
+		t.Run(platforms.Format(tc.platform), func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			reference := "import-with-platform:tc-" + strconv.Itoa(i)
 
-			_, err = client.ImageImport(ctx,
-				imagetypes.ImportSource{Source: imageRdr, SourceName: "-"},
+			_, err = apiClient.ImageImport(ctx,
+				client.ImageImportSource{Source: imageRdr, SourceName: "-"},
 				reference,
-				imagetypes.ImportOptions{Platform: tc.platform})
+				client.ImageImportOptions{Platform: tc.platform})
 			assert.NilError(t, err)
 
-			inspect, err := client.ImageInspect(ctx, reference)
+			inspect, err := apiClient.ImageInspect(ctx, reference)
 			assert.NilError(t, err)
 			assert.Equal(t, inspect.Os, tc.expected.OS)
 			assert.Equal(t, inspect.Architecture, tc.expected.Architecture)
@@ -128,7 +126,7 @@ func TestImportWithCustomPlatformReject(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	// Construct an empty tar archive.
 	var tarBuffer bytes.Buffer
@@ -140,43 +138,51 @@ func TestImportWithCustomPlatformReject(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		platform    string
-		expected    image.V1Image
+		platform    ocispec.Platform
 		expectedErr string
 	}{
 		{
-			platform:    "       ",
+			name: "whitespace-only platform",
+			platform: ocispec.Platform{
+				OS: "       ",
+			},
 			expectedErr: "is an invalid OS component",
 		},
 		{
-			platform:    "/",
-			expectedErr: "is an invalid OS component",
-		},
-		{
-			platform:    "macos",
+			name: "valid, but unsupported os",
+			platform: ocispec.Platform{
+				OS: "macos",
+			},
 			expectedErr: "operating system is not supported",
 		},
 		{
-			platform:    "macos/arm64",
+			name: "valid, but unsupported os/arch",
+			platform: ocispec.Platform{
+				OS:           "macos",
+				Architecture: "arm64",
+			},
 			expectedErr: "operating system is not supported",
 		},
 		{
+			name: "valid, but unsupported os",
 			// TODO: platforms.Normalize() only validates os or arch if a single component is passed,
 			//       but ignores unknown os/arch in other cases. See:
 			//       https://github.com/containerd/containerd/blob/7d4891783aac5adf6cd83f657852574a71875631/platforms/platforms.go#L183-L209
-			platform:    "nintendo64",
+			platform: ocispec.Platform{
+				OS: "nintendo64",
+			},
 			expectedErr: "unknown operating system or architecture",
 		},
 	}
 
 	for i, tc := range tests {
-		t.Run(tc.platform, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			reference := "import-with-platform:tc-" + strconv.Itoa(i)
-			_, err = client.ImageImport(ctx,
-				imagetypes.ImportSource{Source: imageRdr, SourceName: "-"},
+			_, err = apiClient.ImageImport(ctx,
+				client.ImageImportSource{Source: imageRdr, SourceName: "-"},
 				reference,
-				imagetypes.ImportOptions{Platform: tc.platform})
+				client.ImageImportOptions{Platform: tc.platform})
 
 			assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 			assert.Check(t, is.ErrorContains(err, tc.expectedErr))

@@ -6,11 +6,10 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/client"
 
 	"gotest.tools/v3/assert"
-	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
 )
 
@@ -20,7 +19,7 @@ func TestListErrors(t *testing.T) {
 		args          []string
 		flags         map[string]string
 		expectedError string
-		listFunc      func(filter filters.Args) (types.PluginsListResponse, error)
+		listFunc      func(client.PluginListOptions) (client.PluginListResult, error)
 	}{
 		{
 			description:   "too many arguments",
@@ -31,8 +30,8 @@ func TestListErrors(t *testing.T) {
 			description:   "error listing plugins",
 			args:          []string{},
 			expectedError: "error listing plugins",
-			listFunc: func(filter filters.Args) (types.PluginsListResponse, error) {
-				return types.PluginsListResponse{}, errors.New("error listing plugins")
+			listFunc: func(client.PluginListOptions) (client.PluginListResult, error) {
+				return client.PluginListResult{}, errors.New("error listing plugins")
 			},
 		},
 		{
@@ -51,7 +50,7 @@ func TestListErrors(t *testing.T) {
 			cmd := newListCommand(cli)
 			cmd.SetArgs(tc.args)
 			for key, value := range tc.flags {
-				cmd.Flags().Set(key, value)
+				assert.NilError(t, cmd.Flags().Set(key, value))
 			}
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
@@ -61,14 +60,16 @@ func TestListErrors(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	singlePluginListFunc := func(_ filters.Args) (types.PluginsListResponse, error) {
-		return types.PluginsListResponse{
-			{
-				ID:      "id-foo",
-				Name:    "name-foo",
-				Enabled: true,
-				Config: types.PluginConfig{
-					Description: "desc-bar",
+	singlePluginListFunc := func(client.PluginListOptions) (client.PluginListResult, error) {
+		return client.PluginListResult{
+			Items: plugin.ListResponse{
+				{
+					ID:      "id-foo",
+					Name:    "name-foo",
+					Enabled: true,
+					Config: plugin.Config{
+						Description: "desc-bar",
+					},
 				},
 			},
 		}, nil
@@ -79,7 +80,7 @@ func TestList(t *testing.T) {
 		args        []string
 		flags       map[string]string
 		golden      string
-		listFunc    func(filter filters.Args) (types.PluginsListResponse, error)
+		listFunc    func(client.PluginListOptions) (client.PluginListResult, error)
 	}{
 		{
 			description: "list with no additional flags",
@@ -94,9 +95,9 @@ func TestList(t *testing.T) {
 				"filter": "foo=bar",
 			},
 			golden: "plugin-list-without-format.golden",
-			listFunc: func(filter filters.Args) (types.PluginsListResponse, error) {
-				assert.Check(t, is.Equal("bar", filter.Get("foo")[0]))
-				return singlePluginListFunc(filter)
+			listFunc: func(opts client.PluginListOptions) (client.PluginListResult, error) {
+				assert.Check(t, opts.Filters["foo"]["bar"])
+				return singlePluginListFunc(opts)
 			},
 		},
 		{
@@ -116,16 +117,16 @@ func TestList(t *testing.T) {
 				"format":   "{{ .ID }}",
 			},
 			golden: "plugin-list-with-no-trunc-option.golden",
-			listFunc: func(_ filters.Args) (types.PluginsListResponse, error) {
-				return types.PluginsListResponse{
-					{
+			listFunc: func(opts client.PluginListOptions) (client.PluginListResult, error) {
+				return client.PluginListResult{
+					Items: []plugin.Plugin{{
 						ID:      "xyg4z2hiSLO5yTnBJfg4OYia9gKA6Qjd",
 						Name:    "name-foo",
 						Enabled: true,
-						Config: types.PluginConfig{
+						Config: plugin.Config{
 							Description: "desc-bar",
 						},
-					},
+					}},
 				}, nil
 			},
 		},
@@ -145,19 +146,21 @@ func TestList(t *testing.T) {
 				"format": "{{ .Name }}",
 			},
 			golden: "plugin-list-sort.golden",
-			listFunc: func(_ filters.Args) (types.PluginsListResponse, error) {
-				return types.PluginsListResponse{
-					{
-						ID:   "id-1",
-						Name: "plugin-1-foo",
-					},
-					{
-						ID:   "id-2",
-						Name: "plugin-10-foo",
-					},
-					{
-						ID:   "id-3",
-						Name: "plugin-2-foo",
+			listFunc: func(client.PluginListOptions) (client.PluginListResult, error) {
+				return client.PluginListResult{
+					Items: []plugin.Plugin{
+						{
+							ID:   "id-1",
+							Name: "plugin-1-foo",
+						},
+						{
+							ID:   "id-2",
+							Name: "plugin-10-foo",
+						},
+						{
+							ID:   "id-3",
+							Name: "plugin-2-foo",
+						},
 					},
 				}, nil
 			},
@@ -170,7 +173,7 @@ func TestList(t *testing.T) {
 			cmd := newListCommand(cli)
 			cmd.SetArgs(tc.args)
 			for key, value := range tc.flags {
-				cmd.Flags().Set(key, value)
+				assert.NilError(t, cmd.Flags().Set(key, value))
 			}
 			assert.NilError(t, cmd.Execute())
 			golden.Assert(t, cli.OutBuffer().String(), tc.golden)

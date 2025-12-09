@@ -2,16 +2,17 @@ package system
 
 import (
 	"encoding/base64"
-	"net"
+	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli-plugins/metadata"
 	"github.com/docker/cli/internal/test"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
+	registrytypes "github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -48,7 +49,6 @@ var sampleInfoNoSwarm = system.Info{
 	},
 	MemoryLimit:        true,
 	SwapLimit:          true,
-	KernelMemory:       true,
 	CPUCfsPeriod:       true,
 	CPUCfsQuota:        true,
 	CPUShares:          true,
@@ -69,16 +69,12 @@ var sampleInfoNoSwarm = system.Info{
 	Architecture:       "x86_64",
 	IndexServerAddress: "https://index.docker.io/v1/",
 	RegistryConfig: &registrytypes.ServiceConfig{
-		InsecureRegistryCIDRs: []*registrytypes.NetIPNet{
-			{
-				IP:   net.ParseIP("127.0.0.0"),
-				Mask: net.IPv4Mask(255, 0, 0, 0),
-			},
+		InsecureRegistryCIDRs: []netip.Prefix{
+			netip.MustParsePrefix("127.0.0.0/8"),
 		},
 		IndexConfigs: map[string]*registrytypes.IndexInfo{
 			"docker.io": {
 				Name:     "docker.io",
-				Mirrors:  nil,
 				Secure:   true,
 				Official: true,
 			},
@@ -109,22 +105,25 @@ var sampleInfoNoSwarm = system.Info{
 	Isolation:          "",
 	InitBinary:         "docker-init",
 	ContainerdCommit: system.Commit{
-		ID:       "6e23458c129b551d5c9871e5174f6b1b7f6d1170",
-		Expected: "6e23458c129b551d5c9871e5174f6b1b7f6d1170",
+		ID: "6e23458c129b551d5c9871e5174f6b1b7f6d1170",
 	},
 	RuncCommit: system.Commit{
-		ID:       "810190ceaa507aa2727d7ae6f4790c76ec150bd2",
-		Expected: "810190ceaa507aa2727d7ae6f4790c76ec150bd2",
+		ID: "810190ceaa507aa2727d7ae6f4790c76ec150bd2",
 	},
 	InitCommit: system.Commit{
-		ID:       "949e6fa",
-		Expected: "949e6fa",
+		ID: "949e6fa",
 	},
 	SecurityOptions: []string{"name=apparmor", "name=seccomp,profile=default"},
 	DefaultAddressPools: []system.NetworkAddressPool{
 		{
-			Base: "10.123.0.0/16",
+			Base: netip.MustParsePrefix("10.123.0.0/16"),
 			Size: 24,
+		},
+	},
+	FirewallBackend: &system.FirewallInfo{
+		Driver: "nftables+firewalld",
+		Info: [][2]string{
+			{"ReloadedAt", "2025-07-16T16:59:14Z"},
 		},
 	},
 	CDISpecDirs: []string{"/etc/cdi", "/var/run/cdi"},
@@ -221,7 +220,7 @@ var samplePluginsInfo = []pluginmanager.Plugin{
 	{
 		Name: "badplugin",
 		Path: "/path/to/docker-badplugin",
-		Err:  pluginmanager.NewPluginError("something wrong"),
+		Err:  errors.New("something wrong"),
 	},
 }
 
@@ -232,7 +231,6 @@ func TestPrettyPrintInfo(t *testing.T) {
 	infoWithWarningsLinux := sampleInfoNoSwarm
 	infoWithWarningsLinux.MemoryLimit = false
 	infoWithWarningsLinux.SwapLimit = false
-	infoWithWarningsLinux.KernelMemory = false
 	infoWithWarningsLinux.OomKillDisable = false
 	infoWithWarningsLinux.CPUCfsQuota = false
 	infoWithWarningsLinux.CPUCfsPeriod = false

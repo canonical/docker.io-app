@@ -1,15 +1,15 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/internal/metrics"
-	"github.com/docker/docker/layer"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -17,7 +17,7 @@ import (
 // name by walking the image lineage.
 func (i *ImageService) ImageHistory(ctx context.Context, name string, platform *ocispec.Platform) ([]*image.HistoryResponseItem, error) {
 	start := time.Now()
-	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
+	img, err := i.GetImage(ctx, name, imagebackend.GetImageOpts{Platform: platform})
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (i *ImageService) ImageHistory(ctx context.Context, name string, platform *
 
 		if !h.EmptyLayer {
 			if len(img.RootFS.DiffIDs) <= layerCounter {
-				return nil, fmt.Errorf("too many non-empty layers in History section")
+				return nil, errors.New("too many non-empty layers in History section")
 			}
 			rootFS.Append(img.RootFS.DiffIDs[layerCounter])
 			l, err := i.layerStore.Get(rootFS.ChainID())
@@ -78,7 +78,7 @@ func (i *ImageService) ImageHistory(ctx context.Context, name string, platform *
 		if id == "" {
 			break
 		}
-		histImg, err = i.GetImage(ctx, id.String(), backend.GetImageOpts{})
+		histImg, err = i.GetImage(ctx, id.String(), imagebackend.GetImageOpts{})
 		if err != nil {
 			break
 		}

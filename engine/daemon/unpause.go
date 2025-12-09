@@ -1,12 +1,12 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
 )
 
 // ContainerUnpause unpauses a container
@@ -24,7 +24,7 @@ func (daemon *Daemon) containerUnpause(ctr *container.Container) error {
 	defer ctr.Unlock()
 
 	// We cannot unpause the container which is not paused
-	if !ctr.Paused {
+	if !ctr.State.Paused {
 		return fmt.Errorf("Container %s is not paused", ctr.ID)
 	}
 	tsk, err := ctr.GetRunningTask()
@@ -36,7 +36,7 @@ func (daemon *Daemon) containerUnpause(ctr *container.Container) error {
 		return fmt.Errorf("Cannot unpause container %s: %s", ctr.ID, err)
 	}
 
-	ctr.Paused = false
+	ctr.State.Paused = false
 	daemon.setStateCounter(ctr)
 	daemon.updateHealthMonitor(ctr)
 	daemon.LogContainerEvent(ctr, events.ActionUnPause)

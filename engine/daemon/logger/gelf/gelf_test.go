@@ -1,12 +1,12 @@
 //go:build linux
 
-package gelf // import "github.com/docker/docker/daemon/logger/gelf"
+package gelf
 
 import (
 	"net"
 	"testing"
 
-	"github.com/docker/docker/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger"
 )
 
 // Validate parseAddress

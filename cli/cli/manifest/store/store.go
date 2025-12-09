@@ -2,16 +2,17 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/manifest/types"
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
 )
 
 // Store manages local storage of image distribution manifests
@@ -72,7 +73,7 @@ func (*fsStore) getFromFilename(ref reference.Reference, filename string) (types
 			return types.ImageManifest{}, err
 		}
 		if dgst := digest.FromBytes(raw); dgst != manifestInfo.Digest {
-			return types.ImageManifest{}, errors.Errorf("invalid manifest file %v: image manifest digest mismatch (%v != %v)", filename, manifestInfo.Digest, dgst)
+			return types.ImageManifest{}, fmt.Errorf("invalid manifest file %v: image manifest digest mismatch (%v != %v)", filename, manifestInfo.Digest, dgst)
 		}
 		manifestInfo.ImageManifest.Descriptor = ocispec.Descriptor{
 			Digest:    manifestInfo.Digest,
@@ -152,27 +153,6 @@ func makeFilesafeName(ref string) string {
 	return strings.ReplaceAll(fileName, "/", "_")
 }
 
-type notFoundError struct {
-	object string
-}
-
-func newNotFoundError(ref string) *notFoundError {
-	return &notFoundError{object: ref}
-}
-
-func (n *notFoundError) Error() string {
-	return "No such manifest: " + n.object
-}
-
-// NotFound interface
-func (*notFoundError) NotFound() {}
-
-// IsNotFound returns true if the error is a not found error
-func IsNotFound(err error) bool {
-	_, ok := err.(notFound)
-	return ok
-}
-
-type notFound interface {
-	NotFound()
+func newNotFoundError(ref string) error {
+	return errdefs.ErrNotFound.WithMessage("No such manifest: " + ref)
 }

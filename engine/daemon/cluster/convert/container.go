@@ -1,16 +1,18 @@
-package convert // import "github.com/docker/docker/daemon/cluster/convert"
+package convert
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	types "github.com/docker/docker/api/types/swarm"
 	gogotypes "github.com/gogo/protobuf/types"
+	"github.com/moby/moby/api/types/container"
+	mounttypes "github.com/moby/moby/api/types/mount"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/internal/sliceutil"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/pkg/errors"
 )
@@ -47,7 +49,7 @@ func containerSpecFromGRPC(c *swarmapi.ContainerSpec) *types.ContainerSpec {
 
 	if c.DNSConfig != nil {
 		containerSpec.DNSConfig = &types.DNSConfig{
-			Nameservers: c.DNSConfig.Nameservers,
+			Nameservers: sliceutil.Map(c.DNSConfig.Nameservers, func(s string) netip.Addr { a, _ := netip.ParseAddr(s); return a }),
 			Search:      c.DNSConfig.Search,
 			Options:     c.DNSConfig.Options,
 		}
@@ -309,7 +311,7 @@ func containerToGRPC(c *types.ContainerSpec) (*swarmapi.ContainerSpec, error) {
 
 	if c.DNSConfig != nil {
 		containerSpec.DNSConfig = &swarmapi.ContainerSpec_DNSConfig{
-			Nameservers: c.DNSConfig.Nameservers,
+			Nameservers: sliceutil.Map(c.DNSConfig.Nameservers, (netip.Addr).String),
 			Search:      c.DNSConfig.Search,
 			Options:     c.DNSConfig.Options,
 		}

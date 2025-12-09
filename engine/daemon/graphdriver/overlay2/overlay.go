@@ -1,6 +1,6 @@
 //go:build linux
 
-package overlay2 // import "github.com/docker/docker/daemon/graphdriver/overlay2"
+package overlay2
 
 import (
 	"context"
@@ -16,17 +16,17 @@ import (
 
 	"github.com/containerd/continuity/fs"
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/daemon/graphdriver/overlayutils"
-	"github.com/docker/docker/daemon/internal/fstype"
-	"github.com/docker/docker/daemon/internal/mountref"
-	"github.com/docker/docker/internal/containerfs"
-	"github.com/docker/docker/internal/directory"
-	"github.com/docker/docker/quota"
 	"github.com/docker/go-units"
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
 	"github.com/moby/locker"
+	"github.com/moby/moby/v2/daemon/graphdriver"
+	"github.com/moby/moby/v2/daemon/graphdriver/overlayutils"
+	"github.com/moby/moby/v2/daemon/internal/containerfs"
+	"github.com/moby/moby/v2/daemon/internal/directory"
+	"github.com/moby/moby/v2/daemon/internal/fstype"
+	"github.com/moby/moby/v2/daemon/internal/mountref"
+	"github.com/moby/moby/v2/daemon/internal/quota"
 	"github.com/moby/sys/atomicwriter"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/user"
@@ -325,7 +325,7 @@ func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts
 	}
 
 	if _, ok := opts.StorageOpt["size"]; ok && !projectQuotaSupported {
-		return fmt.Errorf("--storage-opt is supported only for overlay over xfs with 'pquota' mount option")
+		return errors.New("--storage-opt is supported only for overlay over xfs with 'pquota' mount option")
 	}
 
 	return d.create(id, parent, opts)
@@ -336,7 +336,7 @@ func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts
 func (d *Driver) Create(id, parent string, opts *graphdriver.CreateOpts) (retErr error) {
 	if opts != nil && len(opts.StorageOpt) != 0 {
 		if _, ok := opts.StorageOpt["size"]; ok {
-			return fmt.Errorf("--storage-opt size is only supported for ReadWrite Layers")
+			return errors.New("--storage-opt size is only supported for ReadWrite Layers")
 		}
 	}
 	return d.create(id, parent, opts)
@@ -485,7 +485,7 @@ func (d *Driver) getLowerDirs(id string) ([]string, error) {
 // Remove cleans the directories that are created for this id.
 func (d *Driver) Remove(id string) error {
 	if id == "" {
-		return fmt.Errorf("refusing to remove the directories: id is empty")
+		return errors.New("refusing to remove the directories: id is empty")
 	}
 	d.locker.Lock(id)
 	defer d.locker.Unlock(id)

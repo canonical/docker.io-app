@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,15 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	volumetypes "github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/docker/pkg/plugins"
-	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/testutil"
-	testdaemon "github.com/docker/docker/testutil/daemon"
-	"github.com/docker/docker/volume"
+	"github.com/moby/moby/api/types/container"
+	volumetypes "github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/v2/daemon/volume"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/daemon"
+	"github.com/moby/moby/v2/internal/testutil"
+	testdaemon "github.com/moby/moby/v2/internal/testutil/daemon"
+	"github.com/moby/moby/v2/pkg/plugins"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -47,21 +47,21 @@ type DockerExternalVolumeSuite struct {
 	*volumePlugin
 }
 
-func (s *DockerExternalVolumeSuite) SetUpTest(ctx context.Context, c *testing.T) {
-	testRequires(c, testEnv.IsLocalDaemon)
-	s.d = daemon.New(c, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
+func (s *DockerExternalVolumeSuite) SetUpTest(ctx context.Context, t *testing.T) {
+	testRequires(t, testEnv.IsLocalDaemon)
+	s.d = daemon.New(t, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
 	s.ec = &eventCounter{}
 }
 
-func (s *DockerExternalVolumeSuite) TearDownTest(ctx context.Context, c *testing.T) {
+func (s *DockerExternalVolumeSuite) TearDownTest(ctx context.Context, t *testing.T) {
 	if s.d != nil {
-		s.d.Stop(c)
-		s.ds.TearDownTest(ctx, c)
+		s.d.Stop(t)
+		s.ds.TearDownTest(ctx, t)
 	}
 }
 
-func (s *DockerExternalVolumeSuite) SetUpSuite(ctx context.Context, c *testing.T) {
-	s.volumePlugin = newVolumePlugin(c, volumePluginName)
+func (s *DockerExternalVolumeSuite) SetUpSuite(ctx context.Context, t *testing.T) {
+	s.volumePlugin = newVolumePlugin(t, volumePluginName)
 }
 
 type volumePlugin struct {
@@ -74,7 +74,7 @@ type vol struct {
 	Name       string
 	Mountpoint string
 	Ninja      bool // hack used to trigger a null volume return on `Get`
-	Status     map[string]interface{}
+	Status     map[string]any
 	Options    map[string]string
 }
 
@@ -104,7 +104,7 @@ func newVolumePlugin(t *testing.T, name string) *volumePlugin {
 		return pr, err
 	}
 
-	send := func(w http.ResponseWriter, data interface{}) {
+	send := func(w http.ResponseWriter, data any) {
 		switch d := data.(type) {
 		case error:
 			http.Error(w, d.Error(), http.StatusInternalServerError)
@@ -133,7 +133,7 @@ func newVolumePlugin(t *testing.T, name string) *volumePlugin {
 			return
 		}
 		_, isNinja := pr.Opts["ninja"]
-		status := map[string]interface{}{"Hello": "world"}
+		status := map[string]any{"Hello": "world"}
 		s.vols[pr.Name] = vol{Name: pr.Name, Ninja: isNinja, Status: status, Options: pr.Opts}
 		send(w, nil)
 	})
@@ -218,7 +218,7 @@ func newVolumePlugin(t *testing.T, name string) *volumePlugin {
 		if v, exists := s.vols[pr.Name]; exists {
 			// Use this to simulate a mount failure
 			if _, exists := v.Options["invalidOption"]; exists {
-				send(w, fmt.Errorf("invalid argument"))
+				send(w, errors.New("invalid argument"))
 				return
 			}
 		}
@@ -274,11 +274,11 @@ func newVolumePlugin(t *testing.T, name string) *volumePlugin {
 	return s
 }
 
-func (s *DockerExternalVolumeSuite) TearDownSuite(ctx context.Context, c *testing.T) {
+func (s *DockerExternalVolumeSuite) TearDownSuite(ctx context.Context, t *testing.T) {
 	s.volumePlugin.Close()
 
 	err := os.RemoveAll("/etc/docker/plugins")
-	assert.NilError(c, err)
+	assert.NilError(t, err)
 }
 
 func (s *DockerExternalVolumeSuite) TestVolumeCLICreateOptionConflict(c *testing.T) {
@@ -476,7 +476,7 @@ func (s *DockerExternalVolumeSuite) TestExternalVolumeDriverList(c *testing.T) {
 func (s *DockerExternalVolumeSuite) TestExternalVolumeDriverGet(c *testing.T) {
 	out, _, err := dockerCmdWithError("volume", "inspect", "dummy")
 	assert.ErrorContains(c, err, "", out)
-	assert.Assert(c, is.Contains(out, "No such volume"))
+	assert.Assert(c, is.Contains(out, "no such volume"))
 	assert.Equal(c, s.ec.gets, 1)
 
 	cli.DockerCmd(c, "volume", "create", "test", "-d", volumePluginName)
@@ -514,7 +514,7 @@ func (s *DockerExternalVolumeSuite) TestExternalVolumeDriverGetEmptyResponse(c *
 
 	out, err = s.d.Cmd("volume", "inspect", "abc2")
 	assert.ErrorContains(c, err, "", out)
-	assert.Assert(c, is.Contains(out, "No such volume"))
+	assert.Assert(c, is.Contains(out, "no such volume"))
 }
 
 // Ensure only cached paths are used in volume list to prevent N+1 calls to `VolumeDriver.Path`
@@ -559,7 +559,7 @@ func (s *DockerExternalVolumeSuite) TestExternalVolumeDriverCapabilities(c *test
 
 func (s *DockerExternalVolumeSuite) TestExternalVolumeDriverOutOfBandDelete(c *testing.T) {
 	ctx := testutil.GetContext(c)
-	driverName := stringid.GenerateRandomID()
+	driverName := strings.ReplaceAll(strings.ToLower(c.Name()), "/", "_")
 	p := newVolumePlugin(c, driverName)
 	defer p.Close()
 

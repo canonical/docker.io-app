@@ -10,28 +10,6 @@ import (
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func TestVisitAll(t *testing.T) {
-	root := &cobra.Command{Use: "root"}
-	sub1 := &cobra.Command{Use: "sub1"}
-	sub1sub1 := &cobra.Command{Use: "sub1sub1"}
-	sub1sub2 := &cobra.Command{Use: "sub1sub2"}
-	sub2 := &cobra.Command{Use: "sub2"}
-
-	root.AddCommand(sub1, sub2)
-	sub1.AddCommand(sub1sub1, sub1sub2)
-
-	// Take the opportunity to test DisableFlagsInUseLine too
-	DisableFlagsInUseLine(root)
-
-	var visited []string
-	VisitAll(root, func(ccmd *cobra.Command) {
-		visited = append(visited, ccmd.Name())
-		assert.Assert(t, ccmd.DisableFlagsInUseLine, "DisableFlagsInUseLine not set on %q", ccmd.Name())
-	})
-	expected := []string{"sub1sub1", "sub1sub2", "sub1", "sub2", "root"}
-	assert.DeepEqual(t, expected, visited)
-}
-
 func TestVendorAndVersion(t *testing.T) {
 	// Non plugin.
 	assert.Equal(t, vendorAndVersion(&cobra.Command{Use: "test"}), "")
@@ -76,6 +54,33 @@ func TestInvalidPlugin(t *testing.T) {
 	sub1.AddCommand(sub1sub1, sub1sub2)
 
 	assert.DeepEqual(t, invalidPlugins(root), []*cobra.Command{sub1}, cmpopts.IgnoreUnexported(cobra.Command{}))
+}
+
+func TestHiddenPlugin(t *testing.T) {
+	root := &cobra.Command{Use: "root"}
+	sub1 := &cobra.Command{
+		Use:    "sub1",
+		Hidden: true,
+		Annotations: map[string]string{
+			metadata.CommandAnnotationPlugin: "true",
+		},
+		Run: func(cmd *cobra.Command, args []string) {},
+	}
+
+	sub1sub1 := &cobra.Command{Use: "sub1sub1"}
+	sub1sub2 := &cobra.Command{Use: "sub1sub2"}
+	sub2 := &cobra.Command{
+		Use: "sub2",
+		Annotations: map[string]string{
+			metadata.CommandAnnotationPlugin: "true",
+		},
+		Run: func(cmd *cobra.Command, args []string) {},
+	}
+
+	root.AddCommand(sub1, sub2)
+	sub1.AddCommand(sub1sub1, sub1sub2)
+
+	assert.DeepEqual(t, allManagementSubCommands(root), []*cobra.Command{sub2}, cmpopts.IgnoreFields(cobra.Command{}, "Run"), cmpopts.IgnoreUnexported(cobra.Command{}))
 }
 
 func TestCommandAliases(t *testing.T) {

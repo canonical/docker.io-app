@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"fmt"
@@ -8,16 +8,16 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api"
-	containertypes "github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/parsers/kernel"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/volume"
+	containertypes "github.com/moby/moby/api/types/container"
+	mounttypes "github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/volume"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/pkg/parsers/kernel"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"gotest.tools/v3/assert"
@@ -63,14 +63,18 @@ func TestContainerNetworkMountsNoChown(t *testing.T) {
 		},
 	}
 
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.New(client.FromEnv)
 	assert.NilError(t, err)
 	defer cli.Close()
 
-	ctrCreate, err := cli.ContainerCreate(ctx, &config, &hostConfig, &network.NetworkingConfig{}, nil, "")
+	ctrCreate, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           &config,
+		HostConfig:       &hostConfig,
+		NetworkingConfig: &network.NetworkingConfig{},
+	})
 	assert.NilError(t, err)
 	// container will exit immediately because of no tty, but we only need the start sequence to test the condition
-	err = cli.ContainerStart(ctx, ctrCreate.ID, containertypes.StartOptions{})
+	_, err = cli.ContainerStart(ctx, ctrCreate.ID, client.ContainerStartOptions{})
 	assert.NilError(t, err)
 
 	// Check that host-located bind mount network file did not change ownership when the container was started
@@ -94,10 +98,11 @@ func TestMountDaemonRoot(t *testing.T) {
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
-	info, err := apiClient.Info(ctx)
+	result, err := apiClient.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	info := result.Info
 
 	for _, test := range []struct {
 		desc        string
@@ -179,10 +184,13 @@ func TestMountDaemonRoot(t *testing.T) {
 
 					ctx := testutil.StartSpan(ctx, t)
 
-					c, err := apiClient.ContainerCreate(ctx, &containertypes.Config{
-						Image: "busybox",
-						Cmd:   []string{"true"},
-					}, hc, nil, nil, "")
+					c, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+						Config: &containertypes.Config{
+							Image: "busybox",
+							Cmd:   []string{"true"},
+						},
+						HostConfig: hc,
+					})
 					if err != nil {
 						if test.expected != "" {
 							t.Fatal(err)
@@ -195,20 +203,20 @@ func TestMountDaemonRoot(t *testing.T) {
 					}
 
 					defer func() {
-						if err := apiClient.ContainerRemove(ctx, c.ID, containertypes.RemoveOptions{Force: true}); err != nil {
+						if _, err := apiClient.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
 							panic(err)
 						}
 					}()
 
-					inspect, err := apiClient.ContainerInspect(ctx, c.ID)
+					inspect, err := apiClient.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 					if err != nil {
 						t.Fatal(err)
 					}
-					if len(inspect.Mounts) != 1 {
-						t.Fatalf("unexpected number of mounts: %+v", inspect.Mounts)
+					if len(inspect.Container.Mounts) != 1 {
+						t.Fatalf("unexpected number of mounts: %+v", inspect.Container.Mounts)
 					}
 
-					m := inspect.Mounts[0]
+					m := inspect.Container.Mounts[0]
 					if m.Propagation != test.expected {
 						t.Fatalf("got unexpected propagation mode, expected %q, got: %v", test.expected, m.Propagation)
 					}
@@ -361,7 +369,7 @@ func TestContainerVolumesMountedAsSlave(t *testing.T) {
 	topCmd := []string{"top"}
 
 	apiClient := testEnv.APIClient()
-	containerID := container.Run(ctx, t, apiClient, container.WithTty(true), container.WithMount(slaveMount), container.WithCmd(topCmd...))
+	containerID := container.Run(ctx, t, apiClient, container.WithTty(true), container.WithMount(slaveMount), container.WithCmd(topCmd...), container.WithSecurityOpt("label=disable"))
 
 	// Bind mount tmpDir2/ onto tmpDir1/mnt1. If mount propagates inside
 	// container then contents of tmpDir2/slave-testfile should become
@@ -410,13 +418,13 @@ func TestContainerVolumeAnonymous(t *testing.T) {
 		assert.Check(t, is.Len(vol.Name, 64), "volume name should be 64 bytes (from stringid.GenerateRandomID())")
 		assert.Check(t, is.Equal(vol.Driver, volume.DefaultDriverName))
 
-		volInspect, err := apiClient.VolumeInspect(ctx, vol.Name)
+		res, err := apiClient.VolumeInspect(ctx, vol.Name, client.VolumeInspectOptions{})
 		assert.NilError(t, err)
 
 		// see [daemon.AnonymousLabel]; we don't want to import the daemon package here.
 		const expectedAnonymousLabel = "com.docker.volume.anonymous"
-		assert.Check(t, is.Contains(volInspect.Labels, expectedAnonymousLabel))
-		assert.Check(t, is.Equal(volInspect.Driver, volume.DefaultDriverName))
+		assert.Check(t, is.Contains(res.Volume.Labels, expectedAnonymousLabel))
+		assert.Check(t, is.Equal(res.Volume.Driver, volume.DefaultDriverName))
 	})
 
 	// Verify that specifying a custom driver is still taken into account.
@@ -430,7 +438,13 @@ func TestContainerVolumeAnonymous(t *testing.T) {
 				},
 			},
 		}))
-		_, err := apiClient.ContainerCreate(ctx, config.Config, config.HostConfig, config.NetworkingConfig, config.Platform, config.Name)
+		_, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Config:           config.Config,
+			HostConfig:       config.HostConfig,
+			NetworkingConfig: config.NetworkingConfig,
+			Platform:         config.Platform,
+			Name:             config.Name,
+		})
 		// We use [testNonExistingPlugin] for this, which produces an error
 		// when used, which we use as indicator that the driver was passed
 		// through. We should have a cleaner way for this, but that would
@@ -466,7 +480,7 @@ func TestContainerCopyLeaksMounts(t *testing.T) {
 
 	mountsBefore := getMounts()
 
-	_, _, err := apiClient.CopyFromContainer(ctx, cid, "/etc/passwd")
+	_, err := apiClient.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: "/etc/passwd"})
 	assert.NilError(t, err)
 
 	mountsAfter := getMounts()
@@ -497,8 +511,8 @@ func TestContainerBindMountReadOnlyDefault(t *testing.T) {
 
 		{clientVersion: "1.43", expectedOut: nonRecursive, name: "older than 1.44 should be non-recursive by default"},
 
-		// TODO: Remove when MinSupportedAPIVersion >= 1.44
-		{clientVersion: api.MinSupportedAPIVersion, expectedOut: nonRecursive, name: "minimum API should be non-recursive by default"},
+		// TODO: Remove when DefaultMinAPIVersion >= 1.44
+		{clientVersion: config.MinAPIVersion, expectedOut: nonRecursive, name: "minimum API should be non-recursive by default"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			apiClient := testEnv.APIClient()
@@ -510,7 +524,7 @@ func TestContainerBindMountReadOnlyDefault(t *testing.T) {
 			skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), minDaemonVersion), "requires API v"+minDaemonVersion)
 
 			if tc.clientVersion != "" {
-				c, err := client.NewClientWithOpts(client.FromEnv, client.WithVersion(tc.clientVersion))
+				c, err := client.New(client.FromEnv, client.WithAPIVersion(tc.clientVersion))
 				assert.NilError(t, err, "failed to create client with version v%s", tc.clientVersion)
 				apiClient = c
 			}
@@ -608,15 +622,15 @@ func TestContainerBindMountRecursivelyReadOnly(t *testing.T) {
 	apiClient := testEnv.APIClient()
 
 	containers := []string{
-		container.Run(ctx, t, apiClient, container.WithMount(ro), container.WithCmd(roVerifier...)),
-		container.Run(ctx, t, apiClient, container.WithBindRaw(roAsStr), container.WithCmd(roVerifier...)),
+		container.Run(ctx, t, apiClient, container.WithMount(ro), container.WithCmd(roVerifier...), container.WithSecurityOpt("label=disable")),
+		container.Run(ctx, t, apiClient, container.WithBindRaw(roAsStr), container.WithCmd(roVerifier...), container.WithSecurityOpt("label=disable")),
 
-		container.Run(ctx, t, apiClient, container.WithMount(nonRecursive), container.WithCmd(nonRecursiveVerifier...)),
+		container.Run(ctx, t, apiClient, container.WithMount(nonRecursive), container.WithCmd(nonRecursiveVerifier...), container.WithSecurityOpt("label=disable")),
 	}
 
 	if rroSupported {
 		containers = append(containers,
-			container.Run(ctx, t, apiClient, container.WithMount(forceRecursive), container.WithCmd(forceRecursiveVerifier...)),
+			container.Run(ctx, t, apiClient, container.WithMount(forceRecursive), container.WithCmd(forceRecursiveVerifier...), container.WithSecurityOpt("label=disable")),
 		)
 	}
 

@@ -1,11 +1,11 @@
-package environment // import "github.com/docker/docker/integration-cli/environment"
+package environment
 
 import (
 	"context"
 	"os"
 	"os/exec"
 
-	"github.com/docker/docker/testutil/environment"
+	"github.com/moby/moby/v2/internal/testutil/environment"
 )
 
 // DefaultClientBinary is the name of the docker binary

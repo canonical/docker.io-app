@@ -1,60 +1,40 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func TestSecretListUnsupported(t *testing.T) {
-	client := &Client{
-		version: "1.24",
-		client:  &http.Client{},
-	}
-	_, err := client.SecretList(context.Background(), swarm.SecretListOptions{})
-	assert.Check(t, is.Error(err, `"secret list" requires API version 1.25, but the Docker daemon API version is 1.24`))
-}
-
 func TestSecretListError(t *testing.T) {
-	client := &Client{
-		version: "1.25",
-		client:  newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.SecretList(context.Background(), swarm.SecretListOptions{})
+	_, err = client.SecretList(t.Context(), SecretListOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 func TestSecretList(t *testing.T) {
-	const expectedURL = "/v1.25/secrets"
+	const expectedURL = "/secrets"
 
 	listCases := []struct {
-		options             swarm.SecretListOptions
+		options             SecretListOptions
 		expectedQueryParams map[string]string
 	}{
 		{
-			options: swarm.SecretListOptions{},
+			options: SecretListOptions{},
 			expectedQueryParams: map[string]string{
 				"filters": "",
 			},
 		},
 		{
-			options: swarm.SecretListOptions{
-				Filters: filters.NewArgs(
-					filters.Arg("label", "label1"),
-					filters.Arg("label", "label2"),
-				),
+			options: SecretListOptions{
+				Filters: make(Filters).Add("label", "label1", "label2"),
 			},
 			expectedQueryParams: map[string]string{
 				"filters": `{"label":{"label1":true,"label2":true}}`,
@@ -62,39 +42,27 @@ func TestSecretList(t *testing.T) {
 		},
 	}
 	for _, listCase := range listCases {
-		client := &Client{
-			version: "1.25",
-			client: newMockClient(func(req *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(req.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+		client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+				return nil, err
+			}
+			query := req.URL.Query()
+			for key, expected := range listCase.expectedQueryParams {
+				actual := query.Get(key)
+				if actual != expected {
+					return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
 				}
-				query := req.URL.Query()
-				for key, expected := range listCase.expectedQueryParams {
-					actual := query.Get(key)
-					if actual != expected {
-						return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
-					}
-				}
-				content, err := json.Marshal([]swarm.Secret{
-					{
-						ID: "secret_id1",
-					},
-					{
-						ID: "secret_id2",
-					},
-				})
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			}),
-		}
+			}
 
-		secrets, err := client.SecretList(context.Background(), listCase.options)
+			return mockJSONResponse(http.StatusOK, nil, []swarm.Secret{
+				{ID: "secret_id1"},
+				{ID: "secret_id2"},
+			})(req)
+		}))
 		assert.NilError(t, err)
-		assert.Check(t, is.Len(secrets, 2))
+
+		res, err := client.SecretList(t.Context(), listCase.options)
+		assert.NilError(t, err)
+		assert.Check(t, is.Len(res.Items, 2))
 	}
 }

@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"bytes"
@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -100,20 +100,20 @@ func TestNetworkLoopbackNat(t *testing.T) {
 
 	poll.WaitOn(t, container.IsStopped(ctx, apiClient, cID))
 
-	body, err := apiClient.ContainerLogs(ctx, cID, containertypes.LogsOptions{
+	logs, err := apiClient.ContainerLogs(ctx, cID, client.ContainerLogsOptions{
 		ShowStdout: true,
 	})
 	assert.NilError(t, err)
-	defer body.Close()
+	defer logs.Close()
 
 	var b bytes.Buffer
-	_, err = io.Copy(&b, body)
+	_, err = io.Copy(&b, logs)
 	assert.NilError(t, err)
 
 	assert.Check(t, is.Equal(msg, strings.TrimSpace(b.String())))
 }
 
-func startServerContainer(ctx context.Context, t *testing.T, msg string, port int) string {
+func startServerContainer(ctx context.Context, t *testing.T, msg string, port uint16) string {
 	t.Helper()
 	apiClient := testEnv.APIClient()
 
@@ -122,8 +122,8 @@ func startServerContainer(ctx context.Context, t *testing.T, msg string, port in
 		container.WithCmd("sh", "-c", fmt.Sprintf("echo %q | nc -lp %d", msg, port)),
 		container.WithExposedPorts(fmt.Sprintf("%d/tcp", port)),
 		func(c *container.TestContainerConfig) {
-			c.HostConfig.PortBindings = nat.PortMap{
-				nat.Port(fmt.Sprintf("%d/tcp", port)): []nat.PortBinding{
+			c.HostConfig.PortBindings = network.PortMap{
+				network.MustParsePort(fmt.Sprintf("%d/tcp", port)): []network.PortBinding{
 					{
 						HostPort: fmt.Sprintf("%d", port),
 					},

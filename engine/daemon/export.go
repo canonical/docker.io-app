@@ -1,16 +1,17 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/errdefs"
 )
 
 // ContainerExport writes the contents of the container to the given
@@ -22,15 +23,15 @@ func (daemon *Daemon) ContainerExport(ctx context.Context, name string, out io.W
 	}
 
 	if isWindows && ctr.ImagePlatform.OS == "windows" {
-		return fmt.Errorf("the daemon on this operating system does not support exporting Windows containers")
+		return errors.New("the daemon on this operating system does not support exporting Windows containers")
 	}
 
-	if ctr.IsDead() {
+	if ctr.State.IsDead() {
 		err := fmt.Errorf("You cannot export container %s which is Dead", ctr.ID)
 		return errdefs.Conflict(err)
 	}
 
-	if ctr.IsRemovalInProgress() {
+	if ctr.State.IsRemovalInProgress() {
 		err := fmt.Errorf("You cannot export container %s which is being removed", ctr.ID)
 		return errdefs.Conflict(err)
 	}

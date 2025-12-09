@@ -1,11 +1,12 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package image
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -17,26 +18,22 @@ import (
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/jsonstream"
 	"github.com/docker/cli/internal/tui"
-	"github.com/docker/docker/api/types/auxprogress"
-	"github.com/docker/docker/api/types/image"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/registry"
+	"github.com/moby/moby/api/types/auxprogress"
+	"github.com/moby/moby/client"
 	"github.com/morikuni/aec"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
 type pushOptions struct {
-	all       bool
-	remote    string
-	untrusted bool
-	quiet     bool
-	platform  string
+	all      bool
+	remote   string
+	quiet    bool
+	platform string
 }
 
-// NewPushCommand creates a new `docker push` command
-func NewPushCommand(dockerCli command.Cli) *cobra.Command {
+// newPushCommand creates a new `docker push` command
+func newPushCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts pushOptions
 
 	cmd := &cobra.Command{
@@ -45,19 +42,23 @@ func NewPushCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.remote = args[0]
-			return runPush(cmd.Context(), dockerCli, opts)
+			return runPush(cmd.Context(), dockerCLI, opts)
 		},
 		Annotations: map[string]string{
 			"category-top": "6",
 			"aliases":      "docker image push, docker push",
 		},
-		ValidArgsFunction: completion.ImageNames(dockerCli, 1),
+		ValidArgsFunction:     completion.ImageNames(dockerCLI, 1),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 	flags.BoolVarP(&opts.all, "all-tags", "a", false, "Push all tags of an image to the repository")
 	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress verbose output")
-	command.AddTrustSigningFlags(flags, &opts.untrusted, dockerCli.ContentTrustEnabled())
+
+	// TODO(thaJeztah): DEPRECATED: remove in v29.1 or v30
+	flags.Bool("disable-content-trust", true, "Skip image verification (deprecated)")
+	_ = flags.MarkDeprecated("disable-content-trust", "support for docker content trust was removed")
 
 	// Don't default to DOCKER_DEFAULT_PLATFORM env variable, always default to
 	// pushing the image as-is. This also avoids forcing the platform selection
@@ -68,7 +69,7 @@ Image index won't be pushed, meaning that other manifests, including attestation
 'os[/arch[/variant]]': Explicit platform (eg. linux/amd64)`)
 	flags.SetAnnotation("platform", "version", []string{"1.46"})
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 
 	return cmd
 }
@@ -92,9 +93,11 @@ To push the complete multi-platform image, remove the --platform flag.
 	}
 
 	ref, err := reference.ParseNormalizedNamed(opts.remote)
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
+	}
+
+	switch {
 	case opts.all && !reference.IsNameOnly(ref):
 		return errors.New("tag can't be used with --all-tags/-a")
 	case !opts.all && reference.IsNameOnly(ref):
@@ -104,44 +107,33 @@ To push the complete multi-platform image, remove the --platform flag.
 		}
 	}
 
-	// Resolve the Repository name from fqn to RepositoryInfo
-	repoInfo, _ := registry.ParseRepositoryInfo(ref)
-
 	// Resolve the Auth config relevant for this server
-	authConfig := command.ResolveAuthConfig(dockerCli.ConfigFile(), repoInfo.Index)
-	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
+	encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCli.ConfigFile(), ref.String())
 	if err != nil {
 		return err
 	}
-	requestPrivilege := command.RegistryAuthenticationPrivilegedFunc(dockerCli, repoInfo.Index, "push")
-	options := image.PushOptions{
+
+	responseBody, err := dockerCli.Client().ImagePush(ctx, reference.FamiliarString(ref), client.ImagePushOptions{
 		All:           opts.all,
 		RegistryAuth:  encodedAuth,
-		PrivilegeFunc: requestPrivilege,
+		PrivilegeFunc: nil,
 		Platform:      platform,
-	}
-
-	responseBody, err := dockerCli.Client().ImagePush(ctx, reference.FamiliarString(ref), options)
+	})
 	if err != nil {
 		return err
 	}
 
 	defer func() {
+		_ = responseBody.Close()
 		for _, note := range notes {
 			out.PrintNote(note)
 		}
 	}()
 
-	defer responseBody.Close()
-	if !opts.untrusted {
-		// TODO pushTrustedReference currently doesn't respect `--quiet`
-		return pushTrustedReference(ctx, dockerCli, repoInfo, ref, authConfig, responseBody)
-	}
-
 	if opts.quiet {
 		err = jsonstream.Display(ctx, responseBody, streams.NewOut(io.Discard), jsonstream.WithAuxCallback(handleAux()))
 		if err == nil {
-			fmt.Fprintln(dockerCli.Out(), ref.String())
+			_, _ = fmt.Fprintln(dockerCli.Out(), ref.String())
 		}
 		return err
 	}

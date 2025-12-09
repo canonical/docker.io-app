@@ -2,14 +2,16 @@ package containerd
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	c8dimages "github.com/containerd/containerd/v2/core/images"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	imagetype "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/internal/metrics"
+	imagetype "github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -44,20 +46,33 @@ func (i *ImageService) ImageHistory(ctx context.Context, name string, platform *
 
 	var (
 		history []*imagetype.HistoryResponseItem
-		sizes   []int64
 	)
 	s := i.client.SnapshotService(i.snapshotter)
 
 	diffIDs := ociImage.RootFS.DiffIDs
+
+	sizes := make([]int64, len(diffIDs))
 	for i := range diffIDs {
 		chainID := identity.ChainID(diffIDs[0 : i+1]).String()
 
 		use, err := s.Usage(ctx, chainID)
 		if err != nil {
-			return nil, err
+			if !cerrdefs.IsNotFound(err) {
+				return nil, fmt.Errorf("%w: failed to calculate disk usage of chain: %w", cerrdefs.ErrInternal, err)
+			}
+
+			log.G(ctx).WithFields(log.Fields{
+				"error":    err,
+				"chainID":  chainID,
+				"name":     name,
+				"platform": platform,
+			}).Warn("failed to calculate disk usage of chain - snapshot not found")
+
+			sizes[i] = 0
+			continue
 		}
 
-		sizes = append(sizes, use.Size)
+		sizes[i] = use.Size
 	}
 
 	for _, h := range ociImage.History {
