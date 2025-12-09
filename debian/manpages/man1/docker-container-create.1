@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Dec 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-container-create - Create a new container
@@ -225,10 +225,6 @@ apply to bind mounts..
 	Limit write rate (IO per second) to a device
 
 .PP
-\fB--disable-content-trust\fP[=true]
-	Skip image verification
-
-.PP
 \fB--dns\fP=
 	Set custom DNS servers
 
@@ -317,11 +313,11 @@ apply to bind mounts..
 	Maximum IOps limit for the system drive (Windows only)
 
 .PP
-\fB--ip\fP=""
+\fB--ip\fP=
 	IPv4 address (e.g., 172.30.100.104)
 
 .PP
-\fB--ip6\fP=""
+\fB--ip6\fP=
 	IPv6 address (e.g., 2001:db8::33)
 
 .PP
@@ -331,10 +327,6 @@ apply to bind mounts..
 .PP
 \fB--isolation\fP=""
 	Container isolation technology
-
-.PP
-\fB--kernel-memory\fP=0
-	Kernel memory limit
 
 .PP
 \fB-l\fP, \fB--label\fP=

@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Dec 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-image-load - Load an image from a tar archive or STDIN
@@ -45,8 +45,8 @@ fedora              latest              58394af37342        7 weeks ago         
 	Read from tar archive file, instead of STDIN
 
 .PP
-\fB--platform\fP=""
-	Load only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")
+\fB--platform\fP=[]
+	Load only the given platform(s). Formatted as a comma-separated list of "os[/arch[/variant]]" (e.g., "linux/amd64,linux/arm64/v8").
 
 .PP
 \fB-q\fP, \fB--quiet\fP[=false]

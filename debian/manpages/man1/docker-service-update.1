@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Dec 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-service-update - Update a service
@@ -196,6 +196,14 @@ Update a service
 .PP
 \fB--max-concurrent\fP=
 	Number of job tasks to run concurrently (default equal to --replicas)
+
+.PP
+\fB--memory-swap\fP=0
+	Swap Bytes (-1 for unlimited)
+
+.PP
+\fB--memory-swappiness\fP=-1
+	Tune memory swappiness (0-100), -1 to reset to default
 
 .PP
 \fB--mount-add\fP=

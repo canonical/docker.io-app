@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jun 2025" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Dec 2025" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-container-commit - Create a new image from a container's changes
@@ -62,8 +62,8 @@ $ docker container commit -c="ENV DEBUG=true" 98bd7fc99854 debug-image
 	Commit message
 
 .PP
-\fB-p\fP, \fB--pause\fP[=true]
-	Pause container during commit
+\fB--no-pause\fP[=false]
+	Disable pausing container during commit
 
 
 .SH SEE ALSO
