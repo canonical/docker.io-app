@@ -20,7 +20,7 @@ if ! command -v "$TEST_CLIENT_BINARY" &> /dev/null; then
 fi
 
 # This is a temporary hack for split-binary mode. It can be removed once
-# https://github.com/docker/docker/pull/22134 is merged into docker master
+# https://github.com/moby/moby/pull/22134 is merged into docker master
 if [ "$(go env GOOS)" = 'windows' ]; then
 	return
 fi
@@ -40,8 +40,11 @@ fi
 # intentionally open a couple bogus file descriptors to help test that they get scrubbed in containers
 exec 41>&1 42>&2
 
-export DOCKER_GRAPHDRIVER=${DOCKER_GRAPHDRIVER:-vfs}
+export DOCKER_GRAPHDRIVER=${DOCKER_GRAPHDRIVER:-native}
 export DOCKER_USERLANDPROXY=${DOCKER_USERLANDPROXY:-true}
+
+# Allow testing old API versions
+export DOCKER_MIN_API_VERSION=1.24
 
 # example usage: DOCKER_STORAGE_OPTS="dm.basesize=20G,dm.loopdatasize=200G"
 storage_params=""
@@ -66,6 +69,13 @@ if [ "$DOCKER_EXPERIMENTAL" ]; then
 fi
 
 dockerd="dockerd"
+
+# When running with the nftables backend, dockerd will not enable IP forwarding (by default, it
+# will error on network creation if forwarding is not enabled).
+if [ "$DOCKER_FIREWALL_BACKEND" = "nftables" ]; then
+	sysctl -w net.ipv4.ip_forward=1 > /dev/null
+	sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null
+fi
 
 if [ -n "$DOCKER_ROOTLESS" ]; then
 	if [ -z "$TEST_SKIP_INTEGRATION_CLI" ]; then
@@ -112,12 +122,21 @@ if [ -z "$DOCKER_TEST_HOST" ]; then
 	(
 		echo "Starting dockerd"
 		[ -n "$TESTDEBUG" ] && set -x
+		if [ -n "${FIREWALLD:-}" ] && [ "${DOCKER_FIREWALL_BACKEND:-}" == "iptables" ]; then
+			# Networking integration tests start their own daemon to have fine control over the configuration of the
+			# daemon-under-test. Two daemons running with firewalld integration enabled would race against each other
+			# when the firewalld reload signal is dispatched, and would result in iptables disappearing unexpectedly
+			# from the point of view of the daemon-under-test. So, disable firewalld integration on this daemon, as it's
+			# only used to load frozen images.
+			export DOCKER_TEST_NO_FIREWALLD="true"
+		fi
 		exec \
 			${dockerd} --debug \
 			--host "$DOCKER_HOST" \
 			--storage-driver "$DOCKER_GRAPHDRIVER" \
 			--pidfile "$DEST/docker.pid" \
 			--userland-proxy="$DOCKER_USERLANDPROXY" \
+			--firewall-backend="$DOCKER_FIREWALL_BACKEND" \
 			${storage_params} \
 			${extra_params} \
 			&> "$DEST/docker.log"

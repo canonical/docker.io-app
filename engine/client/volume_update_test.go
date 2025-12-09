@@ -1,60 +1,52 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/swarm"
-	volumetypes "github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestVolumeUpdateError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	err := client.VolumeUpdate(context.Background(), "volume", swarm.Version{}, volumetypes.UpdateOptions{})
+	_, err = client.VolumeUpdate(t.Context(), "volume", VolumeUpdateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	err = client.VolumeUpdate(context.Background(), "", swarm.Version{}, volumetypes.UpdateOptions{})
+	_, err = client.VolumeUpdate(t.Context(), "", VolumeUpdateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	err = client.VolumeUpdate(context.Background(), "    ", swarm.Version{}, volumetypes.UpdateOptions{})
+	_, err = client.VolumeUpdate(t.Context(), "    ", VolumeUpdateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
 
 func TestVolumeUpdate(t *testing.T) {
-	expectedURL := "/volumes/test1"
-	expectedVersion := "version=10"
+	const (
+		expectedURL     = "/volumes/test1"
+		expectedVersion = "version=10"
+	)
 
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			if req.Method != http.MethodPut {
-				return nil, fmt.Errorf("expected PUT method, got %s", req.Method)
-			}
-			if !strings.Contains(req.URL.RawQuery, expectedVersion) {
-				return nil, fmt.Errorf("expected query to contain '%s', got '%s'", expectedVersion, req.URL.RawQuery)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte("body"))),
-			}, nil
-		}),
-	}
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		if err := assertRequest(req, http.MethodPut, expectedURL); err != nil {
+			return nil, err
+		}
+		if !strings.Contains(req.URL.RawQuery, expectedVersion) {
+			return nil, fmt.Errorf("expected query to contain '%s', got '%s'", expectedVersion, req.URL.RawQuery)
+		}
+		return mockResponse(http.StatusOK, nil, "body")(req)
+	}))
+	assert.NilError(t, err)
 
-	err := client.VolumeUpdate(context.Background(), "test1", swarm.Version{Index: uint64(10)}, volumetypes.UpdateOptions{})
+	_, err = client.VolumeUpdate(t.Context(), "test1", VolumeUpdateOptions{
+		Version: swarm.Version{Index: uint64(10)},
+	})
 	assert.NilError(t, err)
 }

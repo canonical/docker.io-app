@@ -1,10 +1,11 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,12 +13,13 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/build"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/testutil/fakecontext"
 	"github.com/moby/go-archive"
+	"github.com/moby/moby/api/types/build"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/fakecontext"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -29,11 +31,13 @@ func TestCopyFromContainerPathDoesNotExist(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	cid := container.Create(ctx, t, apiClient)
 
-	_, _, err := apiClient.CopyFromContainer(ctx, cid, "/dne")
+	_, err := apiClient.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: "/dne"})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.Check(t, is.ErrorContains(err, "Could not find the file /dne in container "+cid))
 }
 
+// TestCopyFromContainerPathIsNotDir tests that an error is returned when
+// trying to create a directory on a path that's a file.
 func TestCopyFromContainerPathIsNotDir(t *testing.T) {
 	skip.If(t, testEnv.UsingSnapshotter(), "FIXME: https://github.com/moby/moby/issues/47107")
 	ctx := setupTest(t)
@@ -41,14 +45,29 @@ func TestCopyFromContainerPathIsNotDir(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	cid := container.Create(ctx, t, apiClient)
 
-	path := "/etc/passwd/"
-	expected := "not a directory"
+	// Pick a path that already exists as a file; on Linux "/etc/passwd"
+	// is expected to be there, so we pick that for convenience.
+	existingFile := "/etc/passwd/"
+	expected := []string{"not a directory"}
 	if testEnv.DaemonInfo.OSType == "windows" {
-		path = "c:/windows/system32/drivers/etc/hosts/"
-		expected = "The filename, directory name, or volume label syntax is incorrect."
+		existingFile = "c:/windows/system32/drivers/etc/hosts/"
+
+		// Depending on the version of Windows, this produces a "ERROR_INVALID_NAME" (Windows < 2025),
+		// or a "ERROR_DIRECTORY" (Windows 2025); https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+		expected = []string{
+			"The directory name is invalid.",                                     // ERROR_DIRECTORY
+			"The filename, directory name, or volume label syntax is incorrect.", // ERROR_INVALID_NAME
+		}
 	}
-	_, _, err := apiClient.CopyFromContainer(ctx, cid, path)
-	assert.ErrorContains(t, err, expected)
+	_, err := apiClient.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: existingFile})
+	var found bool
+	for _, expErr := range expected {
+		if err != nil && strings.Contains(err.Error(), expErr) {
+			found = true
+			break
+		}
+	}
+	assert.Check(t, found, "Expected error to be one of %v, but got %v", expected, err)
 }
 
 func TestCopyToContainerPathDoesNotExist(t *testing.T) {
@@ -57,7 +76,7 @@ func TestCopyToContainerPathDoesNotExist(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	cid := container.Create(ctx, t, apiClient)
 
-	err := apiClient.CopyToContainer(ctx, cid, "/dne", nil, containertypes.CopyToContainerOptions{})
+	_, err := apiClient.CopyToContainer(ctx, cid, client.CopyToContainerOptions{DestinationPath: "/dne", Content: bytes.NewReader([]byte(""))})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.Check(t, is.ErrorContains(err, "Could not find the file /dne in container "+cid))
 }
@@ -70,23 +89,22 @@ func TestCopyEmptyFile(t *testing.T) {
 
 	// empty content
 	dstDir, _ := makeEmptyArchive(t)
-	err := apiClient.CopyToContainer(ctx, cid, dstDir, bytes.NewReader([]byte("")), containertypes.CopyToContainerOptions{})
+	_, err := apiClient.CopyToContainer(ctx, cid, client.CopyToContainerOptions{DestinationPath: dstDir, Content: bytes.NewReader([]byte(""))})
 	assert.NilError(t, err)
 
 	// tar with empty file
 	dstDir, preparedArchive := makeEmptyArchive(t)
-	err = apiClient.CopyToContainer(ctx, cid, dstDir, preparedArchive, containertypes.CopyToContainerOptions{})
+	_, err = apiClient.CopyToContainer(ctx, cid, client.CopyToContainerOptions{DestinationPath: dstDir, Content: preparedArchive})
 	assert.NilError(t, err)
 
 	// tar with empty file archive mode
 	dstDir, preparedArchive = makeEmptyArchive(t)
-	err = apiClient.CopyToContainer(ctx, cid, dstDir, preparedArchive, containertypes.CopyToContainerOptions{
-		CopyUIDGID: true,
-	})
+	_, err = apiClient.CopyToContainer(ctx, cid, client.CopyToContainerOptions{DestinationPath: dstDir, Content: preparedArchive, CopyUIDGID: true})
 	assert.NilError(t, err)
 
 	// copy from empty file
-	rdr, _, err := apiClient.CopyFromContainer(ctx, cid, dstDir)
+	res, err := apiClient.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: dstDir})
+	rdr := res.Content
 	assert.NilError(t, err)
 	defer rdr.Close()
 }
@@ -167,13 +185,11 @@ func TestCopyToContainerCopyUIDGID(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
 			cID := container.Run(ctx, t, apiClient, container.WithImage(imageID), container.WithUser(tc.user))
-			defer container.Remove(ctx, t, apiClient, cID, containertypes.RemoveOptions{Force: true})
+			defer container.Remove(ctx, t, apiClient, cID, client.ContainerRemoveOptions{Force: true})
 
 			// tar with empty file
 			dstDir, preparedArchive := makeEmptyArchive(t)
-			err := apiClient.CopyToContainer(ctx, cID, dstDir, preparedArchive, containertypes.CopyToContainerOptions{
-				CopyUIDGID: true,
-			})
+			_, err := apiClient.CopyToContainer(ctx, cID, client.CopyToContainerOptions{DestinationPath: dstDir, Content: preparedArchive, CopyUIDGID: true})
 			assert.NilError(t, err)
 
 			res, err := container.Exec(ctx, apiClient, cID, []string{"stat", "-c", "%u:%g", "/empty-file.txt"})
@@ -195,11 +211,11 @@ func makeTestImage(ctx context.Context, t *testing.T) (imageID string) {
 	`))
 	defer buildCtx.Close()
 
-	resp, err := apiClient.ImageBuild(ctx, buildCtx.AsTarReader(t), build.ImageBuildOptions{})
+	resp, err := apiClient.ImageBuild(ctx, buildCtx.AsTarReader(t), client.ImageBuildOptions{})
 	assert.NilError(t, err)
 	defer resp.Body.Close()
 
-	err = jsonmessage.DisplayJSONMessagesStream(resp.Body, io.Discard, 0, false, func(msg jsonmessage.JSONMessage) {
+	err = jsonmessage.DisplayJSONMessagesStream(resp.Body, io.Discard, 0, false, func(msg jsonstream.Message) {
 		var r build.Result
 		assert.NilError(t, json.Unmarshal(*msg.Aux, &r))
 		imageID = r.ID
@@ -246,7 +262,7 @@ func TestCopyToContainerPathIsNotDir(t *testing.T) {
 	if testEnv.DaemonInfo.OSType == "windows" {
 		path = "c:/windows/system32/drivers/etc/hosts/"
 	}
-	err := apiClient.CopyToContainer(ctx, cid, path, nil, containertypes.CopyToContainerOptions{})
+	_, err := apiClient.CopyToContainer(ctx, cid, client.CopyToContainerOptions{DestinationPath: path})
 	assert.Check(t, is.ErrorContains(err, "not a directory"))
 }
 
@@ -269,12 +285,12 @@ func TestCopyFromContainer(t *testing.T) {
 	`))
 	defer buildCtx.Close()
 
-	resp, err := apiClient.ImageBuild(ctx, buildCtx.AsTarReader(t), build.ImageBuildOptions{})
+	resp, err := apiClient.ImageBuild(ctx, buildCtx.AsTarReader(t), client.ImageBuildOptions{})
 	assert.NilError(t, err)
 	defer resp.Body.Close()
 
 	var imageID string
-	err = jsonmessage.DisplayJSONMessagesStream(resp.Body, io.Discard, 0, false, func(msg jsonmessage.JSONMessage) {
+	err = jsonmessage.DisplayJSONMessagesStream(resp.Body, io.Discard, 0, false, func(msg jsonstream.Message) {
 		var r build.Result
 		assert.NilError(t, json.Unmarshal(*msg.Aux, &r))
 		imageID = r.ID
@@ -309,7 +325,8 @@ func TestCopyFromContainer(t *testing.T) {
 		{"bar/notarget", map[string]string{"notarget": ""}},
 	} {
 		t.Run(x.src, func(t *testing.T) {
-			rdr, _, err := apiClient.CopyFromContainer(ctx, cid, x.src)
+			res, err := apiClient.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: x.src})
+			rdr := res.Content
 			assert.NilError(t, err)
 			defer rdr.Close()
 
@@ -318,7 +335,7 @@ func TestCopyFromContainer(t *testing.T) {
 			tr := tar.NewReader(rdr)
 			for numFound < len(x.expect) {
 				h, err := tr.Next()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				assert.NilError(t, err)

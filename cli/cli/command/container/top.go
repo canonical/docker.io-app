@@ -9,6 +9,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter/tabwriter"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +19,8 @@ type topOptions struct {
 	args []string
 }
 
-// NewTopCommand creates a new cobra.Command for `docker top`
-func NewTopCommand(dockerCli command.Cli) *cobra.Command {
+// newTopCommand creates a new cobra.Command for "docker container top",
+func newTopCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts topOptions
 
 	cmd := &cobra.Command{
@@ -29,12 +30,13 @@ func NewTopCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.container = args[0]
 			opts.args = args[1:]
-			return runTop(cmd.Context(), dockerCli, &opts)
+			return runTop(cmd.Context(), dockerCLI, &opts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker container top, docker top",
 		},
-		ValidArgsFunction: completion.ContainerNames(dockerCli, false),
+		ValidArgsFunction:     completion.ContainerNames(dockerCLI, false),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -44,17 +46,19 @@ func NewTopCommand(dockerCli command.Cli) *cobra.Command {
 }
 
 func runTop(ctx context.Context, dockerCli command.Cli, opts *topOptions) error {
-	procList, err := dockerCli.Client().ContainerTop(ctx, opts.container, opts.args)
+	procList, err := dockerCli.Client().ContainerTop(ctx, opts.container, client.ContainerTopOptions{
+		Arguments: opts.args,
+	})
 	if err != nil {
 		return err
 	}
 
 	w := tabwriter.NewWriter(dockerCli.Out(), 20, 1, 3, ' ', 0)
-	fmt.Fprintln(w, strings.Join(procList.Titles, "\t"))
+	_, _ = fmt.Fprintln(w, strings.Join(procList.Titles, "\t"))
 
 	for _, proc := range procList.Processes {
-		fmt.Fprintln(w, strings.Join(proc, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(proc, "\t"))
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }

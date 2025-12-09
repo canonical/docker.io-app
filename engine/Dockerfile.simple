@@ -5,18 +5,17 @@
 
 # This represents the bare minimum required to build and test Docker.
 
-ARG GO_VERSION=1.24.3
+ARG GO_VERSION=1.25.5
 
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 
 FROM ${GOLANG_IMAGE}
-ENV GO111MODULE=off
 ENV GOTOOLCHAIN=local
 
 # Compile and runtime deps
-# https://github.com/docker/docker/blob/master/project/PACKAGERS.md#build-dependencies
-# https://github.com/docker/docker/blob/master/project/PACKAGERS.md#runtime-dependencies
+# https://github.com/moby/moby/blob/master/project/PACKAGERS.md#build-dependencies
+# https://github.com/moby/moby/blob/master/project/PACKAGERS.md#runtime-dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
 		build-essential \
 		curl \

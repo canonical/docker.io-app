@@ -1,70 +1,75 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestContainerLogsNotFoundError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusNotFound, "Not found")),
-	}
-	_, err := client.ContainerLogs(context.Background(), "container_id", container.LogsOptions{})
+	client, err := New(
+		WithMockClient(errorMock(http.StatusNotFound, "Not found")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ContainerLogs(t.Context(), "container_id", ContainerLogsOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 
-	_, err = client.ContainerLogs(context.Background(), "", container.LogsOptions{})
+	_, err = client.ContainerLogs(t.Context(), "", ContainerLogsOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	_, err = client.ContainerLogs(context.Background(), "    ", container.LogsOptions{})
+	_, err = client.ContainerLogs(t.Context(), "    ", ContainerLogsOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
 
 func TestContainerLogsError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	_, err := client.ContainerLogs(context.Background(), "container_id", container.LogsOptions{})
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ContainerLogs(t.Context(), "container_id", ContainerLogsOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	_, err = client.ContainerLogs(context.Background(), "container_id", container.LogsOptions{
+	_, err = client.ContainerLogs(t.Context(), "container_id", ContainerLogsOptions{
 		Since: "2006-01-02TZ",
 	})
 	assert.Check(t, is.ErrorContains(err, `parsing time "2006-01-02TZ"`))
-	_, err = client.ContainerLogs(context.Background(), "container_id", container.LogsOptions{
+	_, err = client.ContainerLogs(t.Context(), "container_id", ContainerLogsOptions{
 		Until: "2006-01-02TZ",
 	})
 	assert.Check(t, is.ErrorContains(err, `parsing time "2006-01-02TZ"`))
 }
 
 func TestContainerLogs(t *testing.T) {
-	expectedURL := "/containers/container_id/logs"
+	const expectedURL = "/containers/container_id/logs"
 	cases := []struct {
-		options             container.LogsOptions
+		doc                 string
+		options             ContainerLogsOptions
 		expectedQueryParams map[string]string
 		expectedError       string
 	}{
 		{
+			doc: "no options",
 			expectedQueryParams: map[string]string{
 				"tail": "",
 			},
 		},
 		{
-			options: container.LogsOptions{
+			doc: "tail",
+			options: ContainerLogsOptions{
 				Tail: "any",
 			},
 			expectedQueryParams: map[string]string{
@@ -72,7 +77,8 @@ func TestContainerLogs(t *testing.T) {
 			},
 		},
 		{
-			options: container.LogsOptions{
+			doc: "all options",
+			options: ContainerLogsOptions{
 				ShowStdout: true,
 				ShowStderr: true,
 				Timestamps: true,
@@ -89,8 +95,9 @@ func TestContainerLogs(t *testing.T) {
 			},
 		},
 		{
-			options: container.LogsOptions{
-				// timestamp will be passed as is
+			doc: "since",
+			options: ContainerLogsOptions{
+				// timestamp is passed as-is
 				Since: "1136073600.000000001",
 			},
 			expectedQueryParams: map[string]string{
@@ -99,8 +106,9 @@ func TestContainerLogs(t *testing.T) {
 			},
 		},
 		{
-			options: container.LogsOptions{
-				// timestamp will be passed as is
+			doc: "until",
+			options: ContainerLogsOptions{
+				// timestamp is passed as-is
 				Until: "1136073600.000000001",
 			},
 			expectedQueryParams: map[string]string{
@@ -109,65 +117,71 @@ func TestContainerLogs(t *testing.T) {
 			},
 		},
 		{
-			options: container.LogsOptions{
-				// An complete invalid date will not be passed
+			doc: "invalid since",
+			options: ContainerLogsOptions{
+				// invalid dates are not passed.
 				Since: "invalid value",
 			},
 			expectedError: `invalid value for "since": failed to parse value as time or duration: "invalid value"`,
 		},
 		{
-			options: container.LogsOptions{
-				// An complete invalid date will not be passed
+			doc: "invalid until",
+			options: ContainerLogsOptions{
+				// invalid dates are not passed.
 				Until: "invalid value",
 			},
 			expectedError: `invalid value for "until": failed to parse value as time or duration: "invalid value"`,
 		},
 	}
-	for _, logCase := range cases {
-		client := &Client{
-			client: newMockClient(func(r *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(r.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("expected URL '%s', got '%s'", expectedURL, r.URL)
-				}
-				// Check query parameters
-				query := r.URL.Query()
-				for key, expected := range logCase.expectedQueryParams {
-					actual := query.Get(key)
-					if actual != expected {
-						return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
+	for _, tc := range cases {
+		t.Run(tc.doc, func(t *testing.T) {
+			client, err := New(
+				WithMockClient(func(req *http.Request) (*http.Response, error) {
+					if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+						return nil, err
 					}
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader([]byte("response"))),
-				}, nil
-			}),
-		}
-		body, err := client.ContainerLogs(context.Background(), "container_id", logCase.options)
-		if logCase.expectedError != "" {
-			assert.Check(t, is.Error(err, logCase.expectedError))
-			continue
-		}
-		assert.NilError(t, err)
-		defer body.Close()
-		content, err := io.ReadAll(body)
-		assert.NilError(t, err)
-		assert.Check(t, is.Contains(string(content), "response"))
+					// Check query parameters
+					query := req.URL.Query()
+					for key, expected := range tc.expectedQueryParams {
+						actual := query.Get(key)
+						if actual != expected {
+							return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
+						}
+					}
+					return mockResponse(http.StatusOK, nil, "response")(req)
+				}),
+			)
+			assert.NilError(t, err)
+			res, err := client.ContainerLogs(t.Context(), "container_id", tc.options)
+			if tc.expectedError != "" {
+				assert.Check(t, is.Error(err, tc.expectedError))
+				return
+			}
+			assert.NilError(t, err)
+			defer func() { _ = res.Close() }()
+			content, err := io.ReadAll(res)
+			assert.NilError(t, err)
+			assert.Check(t, is.Contains(string(content), "response"))
+		})
 	}
 }
 
 func ExampleClient_ContainerLogs_withTimeout() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	client, _ := NewClientWithOpts(FromEnv)
-	reader, err := client.ContainerLogs(ctx, "container_id", container.LogsOptions{})
+	client, err := New(FromEnv)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	_, err = io.Copy(os.Stdout, reader)
-	if err != nil && err != io.EOF {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := client.ContainerLogs(ctx, "container_id", ContainerLogsOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer res.Close()
+
+	_, err = io.Copy(os.Stdout, res)
+	if err != nil && !errors.Is(err, io.EOF) {
 		log.Fatal(err)
 	}
 }

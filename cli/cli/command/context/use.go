@@ -6,7 +6,7 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/context/store"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -17,15 +17,16 @@ func newUseCommand(dockerCLI command.Cli) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			return RunUse(dockerCLI, name)
+			return runUse(dockerCLI, name)
 		},
-		ValidArgsFunction: completeContextNames(dockerCLI, 1, false),
+		ValidArgsFunction:     completeContextNames(dockerCLI, 1, false),
+		DisableFlagsInUseLine: true,
 	}
 	return cmd
 }
 
-// RunUse set the current Docker context
-func RunUse(dockerCLI command.Cli, name string) error {
+// runUse set the current Docker context
+func runUse(dockerCLI command.Cli, name string) error {
 	// configValue uses an empty string for "default"
 	var configValue string
 	if name != command.DefaultContextName {

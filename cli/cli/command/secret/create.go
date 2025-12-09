@@ -2,15 +2,16 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/moby/sys/sequential"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +23,7 @@ type createOptions struct {
 	labels         opts.ListOpts
 }
 
-func newSecretCreateCommand(dockerCli command.Cli) *cobra.Command {
+func newSecretCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	options := createOptions{
 		labels: opts.NewListOpts(opts.ValidateLabel),
 	}
@@ -36,8 +37,26 @@ func newSecretCreateCommand(dockerCli command.Cli) *cobra.Command {
 			if len(args) == 2 {
 				options.file = args[1]
 			}
-			return runSecretCreate(cmd.Context(), dockerCli, options)
+			return runSecretCreate(cmd.Context(), dockerCLI, options)
 		},
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			switch len(args) {
+			case 0:
+				// No completion for the first argument, which is the name for
+				// the new secret, but if a non-empty name is given, we return
+				// it as completion to allow "tab"-ing to the next completion.
+				return []string{toComplete}, cobra.ShellCompDirectiveNoFileComp
+			case 1:
+				// Second argument is either "-" or a file to load.
+				//
+				// TODO(thaJeztah): provide completion for "-".
+				return nil, cobra.ShellCompDirectiveNoSpace | cobra.ShellCompDirectiveDefault
+			default:
+				// Command only accepts two arguments.
+				return nil, cobra.ShellCompDirectiveNoSpace | cobra.ShellCompDirectiveNoFileComp
+			}
+		},
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
 	flags.VarP(&options.labels, "label", "l", "Secret labels")
@@ -49,17 +68,17 @@ func newSecretCreateCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-func runSecretCreate(ctx context.Context, dockerCli command.Cli, options createOptions) error {
-	client := dockerCli.Client()
+func runSecretCreate(ctx context.Context, dockerCLI command.Cli, options createOptions) error {
+	apiClient := dockerCLI.Client()
 
 	var secretData []byte
 	if options.driver != "" {
 		if options.file != "" {
-			return errors.Errorf("When using secret driver secret data must be empty")
+			return errors.New("when using secret driver secret data must be empty")
 		}
 	} else {
 		var err error
-		secretData, err = readSecretData(dockerCli.In(), options.file)
+		secretData, err = readSecretData(dockerCLI.In(), options.file)
 		if err != nil {
 			return err
 		}
@@ -82,12 +101,14 @@ func runSecretCreate(ctx context.Context, dockerCli command.Cli, options createO
 			Name: options.templateDriver,
 		}
 	}
-	r, err := client.SecretCreate(ctx, spec)
+	r, err := apiClient.SecretCreate(ctx, client.SecretCreateOptions{
+		Spec: spec,
+	})
 	if err != nil {
 		return err
 	}
 
-	_, _ = fmt.Fprintln(dockerCli.Out(), r.ID)
+	_, _ = fmt.Fprintln(dockerCLI.Out(), r.ID)
 	return nil
 }
 

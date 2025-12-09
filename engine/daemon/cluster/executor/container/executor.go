@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/daemon/cluster/executor/container"
+package container
 
 import (
 	"context"
@@ -8,15 +8,15 @@ import (
 	"sync"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/daemon/cluster/controllers/plugin"
-	"github.com/docker/docker/daemon/cluster/convert"
-	executorpkg "github.com/docker/docker/daemon/cluster/executor"
-	clustertypes "github.com/docker/docker/daemon/cluster/provider"
-	"github.com/docker/docker/libnetwork"
-	networktypes "github.com/docker/docker/libnetwork/types"
+	"github.com/moby/moby/api/types/network"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/controllers/plugin"
+	"github.com/moby/moby/v2/daemon/cluster/convert"
+	executorpkg "github.com/moby/moby/v2/daemon/cluster/executor"
+	clustertypes "github.com/moby/moby/v2/daemon/cluster/provider"
+	"github.com/moby/moby/v2/daemon/internal/filters"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	networktypes "github.com/moby/moby/v2/daemon/libnetwork/types"
 	"github.com/moby/swarmkit/v2/agent"
 	"github.com/moby/swarmkit/v2/agent/exec"
 	"github.com/moby/swarmkit/v2/api"
@@ -214,30 +214,27 @@ func (e *executor) Configure(ctx context.Context, node *api.Node) error {
 	if ingressNA == nil {
 		e.backend.ReleaseIngress()
 	} else {
-		options := network.CreateOptions{
+		networkCreateRequest := network.CreateRequest{
+			Name:   ingressNA.Network.Spec.Annotations.Name,
 			Driver: ingressNA.Network.DriverState.Name,
 			IPAM: &network.IPAM{
 				Driver: ingressNA.Network.IPAM.Driver.Name,
 			},
-			Options: ingressNA.Network.DriverState.Options,
 			Ingress: true,
+			Options: ingressNA.Network.DriverState.Options,
 		}
 
 		for _, ic := range ingressNA.Network.IPAM.Configs {
-			c := network.IPAMConfig{
-				Subnet:  ic.Subnet,
-				IPRange: ic.Range,
-				Gateway: ic.Gateway,
+			c, err := ipamConfig(ic)
+			if err != nil {
+				swarmlog.G(ctx).WithError(err).Warn("invalid IPAM config for Swarm ingress network")
 			}
-			options.IPAM.Config = append(options.IPAM.Config, c)
+			networkCreateRequest.IPAM.Config = append(networkCreateRequest.IPAM.Config, c)
 		}
 
 		_, err := e.backend.SetupIngress(clustertypes.NetworkCreateRequest{
-			ID: ingressNA.Network.ID,
-			CreateRequest: network.CreateRequest{
-				Name:          ingressNA.Network.Spec.Annotations.Name,
-				CreateOptions: options,
-			},
+			ID:            ingressNA.Network.ID,
+			CreateRequest: networkCreateRequest,
 		}, ingressNA.Addresses[0])
 		if err != nil {
 			return err

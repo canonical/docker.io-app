@@ -1,37 +1,35 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/api/types/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestContainerListError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	_, err := client.ContainerList(context.Background(), container.ListOptions{})
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ContainerList(t.Context(), ContainerListOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 func TestContainerList(t *testing.T) {
-	expectedURL := "/containers/json"
-	expectedFilters := `{"before":{"container":true},"label":{"label1":true,"label2":true}}`
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+	const (
+		expectedURL     = "/containers/json"
+		expectedFilters = `{"before":{"container":true},"label":{"label1":true,"label2":true}}`
+	)
+	client, err := New(
+		WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+				return nil, err
 			}
 			query := req.URL.Query()
 			all := query.Get("all")
@@ -58,36 +56,23 @@ func TestContainerList(t *testing.T) {
 			if fltrs != expectedFilters {
 				return nil, fmt.Errorf("expected filters incoherent '%v' with actual filters %v", expectedFilters, fltrs)
 			}
-
-			b, err := json.Marshal([]container.Summary{
-				{
-					ID: "container_id1",
-				},
-				{
-					ID: "container_id2",
-				},
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(b)),
-			}, nil
+			return mockJSONResponse(http.StatusOK, nil, []container.Summary{
+				{ID: "container_id1"},
+				{ID: "container_id2"},
+			})(req)
 		}),
-	}
+	)
+	assert.NilError(t, err)
 
-	containers, err := client.ContainerList(context.Background(), container.ListOptions{
+	list, err := client.ContainerList(t.Context(), ContainerListOptions{
 		Size:  true,
 		All:   true,
 		Since: "container",
-		Filters: filters.NewArgs(
-			filters.Arg("label", "label1"),
-			filters.Arg("label", "label2"),
-			filters.Arg("before", "container"),
-		),
+		Filters: make(Filters).
+			Add("label", "label1").
+			Add("label", "label2").
+			Add("before", "container"),
 	})
 	assert.NilError(t, err)
-	assert.Check(t, is.Len(containers, 2))
+	assert.Check(t, is.Len(list.Items, 2))
 }

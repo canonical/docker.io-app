@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -15,7 +15,7 @@ func TestPluginDisableErrors(t *testing.T) {
 	testCases := []struct {
 		args              []string
 		expectedError     string
-		pluginDisableFunc func(name string, disableOptions types.PluginDisableOptions) error
+		pluginDisableFunc func(name string, disableOptions client.PluginDisableOptions) (client.PluginDisableResult, error)
 	}{
 		{
 			args:          []string{},
@@ -28,8 +28,8 @@ func TestPluginDisableErrors(t *testing.T) {
 		{
 			args:          []string{"plugin-foo"},
 			expectedError: "error disabling plugin",
-			pluginDisableFunc: func(name string, disableOptions types.PluginDisableOptions) error {
-				return errors.New("error disabling plugin")
+			pluginDisableFunc: func(name string, disableOptions client.PluginDisableOptions) (client.PluginDisableResult, error) {
+				return client.PluginDisableResult{}, errors.New("error disabling plugin")
 			},
 		},
 	}
@@ -48,8 +48,8 @@ func TestPluginDisableErrors(t *testing.T) {
 
 func TestPluginDisable(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		pluginDisableFunc: func(name string, disableOptions types.PluginDisableOptions) error {
-			return nil
+		pluginDisableFunc: func(name string, disableOptions client.PluginDisableOptions) (client.PluginDisableResult, error) {
+			return client.PluginDisableResult{}, nil
 		},
 	})
 	cmd := newDisableCommand(cli)

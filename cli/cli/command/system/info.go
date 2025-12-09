@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package system
 
@@ -14,17 +14,17 @@ import (
 	"github.com/docker/cli/cli"
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/debug"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/internal/lazyregexp"
+	"github.com/docker/cli/internal/registry"
 	"github.com/docker/cli/templates"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/registry"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/security"
 	"github.com/spf13/cobra"
 )
 
@@ -59,8 +59,8 @@ func (i *dockerInfo) clientPlatform() string {
 	return ""
 }
 
-// NewInfoCommand creates a new cobra.Command for `docker info`
-func NewInfoCommand(dockerCli command.Cli) *cobra.Command {
+// newInfoCommand creates a new cobra.Command for `docker info`
+func newInfoCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts infoOptions
 
 	cmd := &cobra.Command{
@@ -68,13 +68,14 @@ func NewInfoCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Display system-wide information",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInfo(cmd.Context(), cmd, dockerCli, &opts)
+			return runInfo(cmd.Context(), cmd, dockerCLI, &opts)
 		},
 		Annotations: map[string]string{
 			"category-top": "12",
 			"aliases":      "docker system info, docker info",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	cmd.Flags().StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
@@ -116,7 +117,7 @@ func runInfo(ctx context.Context, cmd *cobra.Command, dockerCli command.Cli, opt
 // if a connection error occurs, it will be returned as an error.
 // other errors are appended to the info.ServerErrors field.
 func addServerInfo(ctx context.Context, dockerCli command.Cli, format string, info *dockerInfo) error {
-	dinfo, err := dockerCli.Client().Info(ctx)
+	res, err := dockerCli.Client().Info(ctx, client.InfoOptions{})
 	if err != nil {
 		// if no format is provided and we have an error, don't print the server info
 		if format == "" {
@@ -136,7 +137,7 @@ func addServerInfo(ctx context.Context, dockerCli command.Cli, format string, in
 	}
 
 	// only assign the server info if we have no error
-	info.Info = &dinfo
+	info.Info = &res.Info
 	return nil
 }
 
@@ -162,7 +163,7 @@ func needsServerInfo(template string, info dockerInfo) bool {
 	}
 
 	// A template is provided and has at least one field set.
-	tmpl, err := templates.NewParse("", template)
+	tmpl, err := templates.Parse(template)
 	if err != nil {
 		// ignore parsing errors here, and let regular code handle them
 		return true
@@ -201,9 +202,7 @@ func prettyPrintInfo(streams command.Streams, info dockerInfo) error {
 	fprintln(streams.Out())
 	fprintln(streams.Out(), "Server:")
 	if info.Info != nil {
-		for _, err := range prettyPrintServerInfo(streams, &info) {
-			info.ServerErrors = append(info.ServerErrors, err.Error())
-		}
+		prettyPrintServerInfo(streams, &info)
 	}
 	for _, err := range info.ServerErrors {
 		fprintln(streams.Err(), "ERROR:", err)
@@ -239,8 +238,7 @@ func prettyPrintClientInfo(streams command.Streams, info clientInfo) {
 }
 
 //nolint:gocyclo
-func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) []error {
-	var errs []error
+func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) {
 	output := streams.Out()
 
 	fprintln(output, " Containers:", info.Containers)
@@ -305,17 +303,14 @@ func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) []error {
 		fprintln(output, " containerd version:", info.ContainerdCommit.ID)
 		fprintln(output, " runc version:", info.RuncCommit.ID)
 		fprintln(output, " init version:", info.InitCommit.ID)
-		if len(info.SecurityOptions) != 0 {
-			if kvs, err := system.DecodeSecurityOptions(info.SecurityOptions); err != nil {
-				errs = append(errs, err)
-			} else {
-				fprintln(output, " Security Options:")
-				for _, so := range kvs {
-					fprintln(output, "  "+so.Name)
-					for _, o := range so.Options {
-						if o.Key == "profile" {
-							fprintln(output, "   Profile:", o.Value)
-						}
+		secopts := security.DecodeOptions(info.SecurityOptions)
+		if len(secopts) != 0 {
+			fprintln(output, " Security Options:")
+			for _, so := range secopts {
+				fprintln(output, "  "+so.Name)
+				for _, o := range so.Options {
+					if o.Key == "profile" {
+						fprintln(output, "   Profile:", o.Value)
 					}
 				}
 			}
@@ -371,9 +366,8 @@ func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) []error {
 			}
 		}
 
-		for _, registryConfig := range info.RegistryConfig.InsecureRegistryCIDRs {
-			mask, _ := registryConfig.Mask.Size()
-			fprintf(output, "  %s/%d\n", registryConfig.IP.String(), mask)
+		for _, cidr := range info.RegistryConfig.InsecureRegistryCIDRs {
+			fprintf(output, "  %s\n", cidr)
 		}
 	}
 
@@ -396,12 +390,17 @@ func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) []error {
 		}
 	}
 
+	if info.FirewallBackend != nil {
+		fprintln(output, " Firewall Backend:", info.FirewallBackend.Driver)
+		for _, v := range info.FirewallBackend.Info {
+			fprintf(output, "  %s: %s\n", v[0], v[1])
+		}
+	}
+
 	fprintln(output)
 	for _, w := range info.Warnings {
 		fprintln(streams.Err(), w)
 	}
-
-	return errs
 }
 
 //nolint:gocyclo
@@ -421,7 +420,7 @@ func printSwarmInfo(output io.Writer, info system.Info) {
 		var strAddrPool strings.Builder
 		if info.Swarm.Cluster.DefaultAddrPool != nil {
 			for _, p := range info.Swarm.Cluster.DefaultAddrPool {
-				strAddrPool.WriteString(p + "  ")
+				strAddrPool.WriteString(p.String() + "  ")
 			}
 			fprintln(output, "  Default Address Pool:", strAddrPool.String())
 			fprintln(output, "  SubnetSize:", info.Swarm.Cluster.SubnetSize)

@@ -40,6 +40,8 @@ Create a new service
 | `--log-driver`                                      | `string`          |              | Logging driver for service                                                                          |
 | `--log-opt`                                         | `list`            |              | Logging driver options                                                                              |
 | `--max-concurrent`                                  | `uint`            |              | Number of job tasks to run concurrently (default equal to --replicas)                               |
+| `--memory-swap`                                     | `bytes`           | `0`          | Swap Bytes (-1 for unlimited)                                                                       |
+| `--memory-swappiness`                               | `int64`           | `-1`         | Tune memory swappiness (0-100), -1 to reset to default                                              |
 | `--mode`                                            | `string`          | `replicated` | Service mode (`replicated`, `global`, `replicated-job`, `global-job`)                               |
 | [`--mount`](#mount)                                 | `mount`           |              | Attach a filesystem mount to the service                                                            |
 | `--name`                                            | `string`          |              | Service name                                                                                        |
@@ -453,20 +455,6 @@ The following options can only be used for bind mounts (`type=bind`):
         Otherwise the Engine raises an error.</li>
       </ul>
       When the option is not specified, the default behavior correponds to setting <tt>enabled</tt>.
-    </td>
-  </tr>
-  <tr>
-    <td><b>bind-nonrecursive</b></td>
-    <td>
-      <tt>bind-nonrecursive</tt> is deprecated since Docker Engine v25.0.
-      Use <tt>bind-recursive</tt>instead.<br />
-      <br />
-      A value is optional:<br />
-      <br />
-      <ul>
-        <li><tt>true</tt> or <tt>1</tt>:  Equivalent to <tt>bind-recursive=disabled</tt>.</li>
-        <li><tt>false</tt> or <tt>0</tt>: Equivalent to <tt>bind-recursive=enabled</tt>.</li>
-      </ul>
     </td>
   </tr>
 </table>

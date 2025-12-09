@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/cli/internal/test/notary"
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/client"
 
 	"gotest.tools/v3/assert"
 )
@@ -18,7 +17,7 @@ func TestInstallErrors(t *testing.T) {
 		description   string
 		args          []string
 		expectedError string
-		installFunc   func(name string, options types.PluginInstallOptions) (io.ReadCloser, error)
+		installFunc   func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error)
 	}{
 		{
 			description:   "insufficient number of arguments",
@@ -32,23 +31,15 @@ func TestInstallErrors(t *testing.T) {
 		},
 		{
 			description:   "invalid plugin name",
-			args:          []string{"UPPERCASE_REPONAME"},
+			args:          []string{"UPPERCASE_REPO_NAME"},
 			expectedError: "invalid",
 		},
 		{
 			description:   "installation error",
 			args:          []string{"foo"},
 			expectedError: "error installing plugin",
-			installFunc: func(name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
-				return nil, errors.New("error installing plugin")
-			},
-		},
-		{
-			description:   "installation error due to missing image",
-			args:          []string{"foo"},
-			expectedError: "docker image pull",
-			installFunc: func(name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
-				return nil, errors.New("(image) when fetching")
+			installFunc: func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error) {
+				return client.PluginInstallResult{}, errors.New("error installing plugin")
 			},
 		},
 	}
@@ -65,72 +56,28 @@ func TestInstallErrors(t *testing.T) {
 	}
 }
 
-func TestInstallContentTrustErrors(t *testing.T) {
-	testCases := []struct {
-		description   string
-		args          []string
-		expectedError string
-		notaryFunc    test.NotaryClientFuncType
-	}{
-		{
-			description:   "install plugin, offline notary server",
-			args:          []string{"plugin:tag"},
-			expectedError: "client is offline",
-			notaryFunc:    notary.GetOfflineNotaryRepository,
-		},
-		{
-			description:   "install plugin, uninitialized notary server",
-			args:          []string{"plugin:tag"},
-			expectedError: "remote trust data does not exist",
-			notaryFunc:    notary.GetUninitializedNotaryRepository,
-		},
-		{
-			description:   "install plugin, empty notary server",
-			args:          []string{"plugin:tag"},
-			expectedError: "No valid trust data for tag",
-			notaryFunc:    notary.GetEmptyTargetsNotaryRepository,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			cli := test.NewFakeCli(&fakeClient{
-				pluginInstallFunc: func(name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
-					return nil, errors.New("should not try to install plugin")
-				},
-			}, test.EnableContentTrust)
-			cli.SetNotaryClient(tc.notaryFunc)
-			cmd := newInstallCommand(cli)
-			cmd.SetArgs(tc.args)
-			cmd.SetOut(io.Discard)
-			cmd.SetErr(io.Discard)
-			assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
-		})
-	}
-}
-
 func TestInstall(t *testing.T) {
 	testCases := []struct {
 		description    string
 		args           []string
 		expectedOutput string
-		installFunc    func(name string, options types.PluginInstallOptions) (io.ReadCloser, error)
+		installFunc    func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error)
 	}{
 		{
 			description:    "install with no additional flags",
 			args:           []string{"foo"},
 			expectedOutput: "Installed plugin foo\n",
-			installFunc: func(name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
-				return io.NopCloser(strings.NewReader("")), nil
+			installFunc: func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error) {
+				return client.PluginInstallResult{ReadCloser: io.NopCloser(strings.NewReader(""))}, nil
 			},
 		},
 		{
 			description:    "install with disable flag",
 			args:           []string{"--disable", "foo"},
 			expectedOutput: "Installed plugin foo\n",
-			installFunc: func(name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
+			installFunc: func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error) {
 				assert.Check(t, options.Disabled)
-				return io.NopCloser(strings.NewReader("")), nil
+				return client.PluginInstallResult{ReadCloser: io.NopCloser(strings.NewReader(""))}, nil
 			},
 		},
 	}

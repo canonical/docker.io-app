@@ -1,11 +1,11 @@
-package events // import "github.com/docker/docker/daemon/events"
+package events
 
 import (
 	"sync"
 	"time"
 
-	eventtypes "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/internal/metrics"
+	eventtypes "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
 	"github.com/moby/pubsub"
 )
 
@@ -33,7 +33,7 @@ func New() *Events {
 // last events, a channel in which you can expect new events (in form
 // of interface{}, so you need type assertion), and a function to call
 // to stop the stream of events.
-func (e *Events) Subscribe() ([]eventtypes.Message, chan interface{}, func()) {
+func (e *Events) Subscribe() ([]eventtypes.Message, chan any, func()) {
 	metrics.EventSubscribers.Inc()
 	e.mu.Lock()
 	current := make([]eventtypes.Message, len(e.events))
@@ -50,18 +50,18 @@ func (e *Events) Subscribe() ([]eventtypes.Message, chan interface{}, func()) {
 // SubscribeTopic adds new listener to events, returns slice of 256 stored
 // last events, a channel in which you can expect new events (in form
 // of interface{}, so you need type assertion).
-func (e *Events) SubscribeTopic(since, until time.Time, ef *Filter) ([]eventtypes.Message, chan interface{}) {
+func (e *Events) SubscribeTopic(since, until time.Time, ef *Filter) ([]eventtypes.Message, chan any) {
 	metrics.EventSubscribers.Inc()
 	e.mu.Lock()
 
-	var topic func(m interface{}) bool
+	var topic func(m any) bool
 	if ef != nil && ef.filter.Len() > 0 {
-		topic = func(m interface{}) bool { return ef.Include(m.(eventtypes.Message)) }
+		topic = func(m any) bool { return ef.Include(m.(eventtypes.Message)) }
 	}
 
 	buffered := e.loadBufferedEvents(since, until, topic)
 
-	var ch chan interface{}
+	var ch chan any
 	if topic != nil {
 		ch = e.pub.SubscribeTopic(topic)
 	} else {
@@ -74,7 +74,7 @@ func (e *Events) SubscribeTopic(since, until time.Time, ef *Filter) ([]eventtype
 }
 
 // Evict evicts listener from pubsub
-func (e *Events) Evict(l chan interface{}) {
+func (e *Events) Evict(l chan any) {
 	metrics.EventSubscribers.Dec()
 	e.pub.Evict(l)
 }
@@ -82,29 +82,14 @@ func (e *Events) Evict(l chan interface{}) {
 // Log creates a local scope message and publishes it
 func (e *Events) Log(action eventtypes.Action, eventType eventtypes.Type, actor eventtypes.Actor) {
 	now := time.Now().UTC()
-	jm := eventtypes.Message{
+	e.PublishMessage(eventtypes.Message{
 		Action:   action,
 		Type:     eventType,
 		Actor:    actor,
 		Scope:    "local",
 		Time:     now.Unix(),
 		TimeNano: now.UnixNano(),
-	}
-
-	// fill deprecated fields for container and images
-	switch eventType {
-	case eventtypes.ContainerEventType:
-		jm.ID = actor.ID
-		jm.Status = string(action)
-		jm.From = actor.Attributes["image"]
-	case eventtypes.ImageEventType:
-		jm.ID = actor.ID
-		jm.Status = string(action)
-	default:
-		// TODO(thaJeztah): make switch exhaustive
-	}
-
-	e.PublishMessage(jm)
+	})
 }
 
 // PublishMessage broadcasts event to listeners. Each listener has 100 milliseconds to
@@ -133,7 +118,7 @@ func (e *Events) SubscribersCount() int {
 // and returns those that were emitted between two specific dates.
 // It uses `time.Unix(seconds, nanoseconds)` to generate valid dates with those arguments.
 // It filters those buffered messages with a topic function if it's not nil, otherwise it adds all messages.
-func (e *Events) loadBufferedEvents(since, until time.Time, topic func(interface{}) bool) []eventtypes.Message {
+func (e *Events) loadBufferedEvents(since, until time.Time, topic func(any) bool) []eventtypes.Message {
 	var buffered []eventtypes.Message
 	if since.IsZero() && until.IsZero() {
 		return buffered
@@ -165,4 +150,10 @@ func (e *Events) loadBufferedEvents(since, until time.Time, topic func(interface
 		}
 	}
 	return buffered
+}
+
+// Close all the channels returned to event subscribers.
+func (e *Events) Close() error {
+	e.pub.Close()
+	return nil
 }

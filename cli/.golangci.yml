@@ -5,7 +5,7 @@ run:
   # which causes it to fallback to go1.17 semantics.
   #
   # TODO(thaJeztah): update "usetesting" settings to enable go1.24 features once our minimum version is go1.24
-  go: "1.24.3"
+  go: "1.25.5"
 
   timeout: 5m
 
@@ -86,6 +86,8 @@ linters:
               desc: Use github.com/moby/sys/userns instead.
             - pkg: "github.com/containerd/containerd/platforms"
               desc: The containerd platforms package was migrated to a separate module. Use github.com/containerd/platforms instead.
+            - pkg: "github.com/docker/docker/errdefs"
+              desc: Use github.com/containerd/errdefs instead.
             - pkg: "github.com/docker/docker/pkg/system"
               desc: This package should not be used unless strictly necessary.
             - pkg: "github.com/docker/distribution/uuid"
@@ -124,10 +126,9 @@ linters:
       no-unaliased: true
 
       alias:
-        # Enforce alias to prevent it accidentally being used instead of our
-        # own errdefs package (or vice-versa).
-        - pkg: github.com/containerd/errdefs
-          alias: cerrdefs
+          # Should no longer be aliased, because we no longer allow moby/docker errdefs.
+        - pkg: "github.com/docker/docker/errdefs"
+          alias: ""
         - pkg: github.com/opencontainers/image-spec/specs-go/v1
           alias: ocispec
           # Enforce that gotest.tools/v3/assert/cmp is always aliased as "is"
@@ -153,6 +154,7 @@ linters:
           arguments: [200]
         - name: unused-receiver   # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unused-receiver
         - name: use-any           # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#use-any
+        - name: use-errors-new    # https://github.com/mgechev/revive/blob/HEAD/RULES_DESCRIPTIONS.md#use-errors-new
 
     usetesting:
       os-chdir: false           # FIXME(thaJeztah): Disable `os.Chdir()` detections; should be automatically disabled on Go < 1.24; see https://github.com/docker/cli/pull/5835#issuecomment-2665302478
@@ -218,6 +220,14 @@ linters:
       # Ignore for cli/command/formatter/tabwriter, which is forked from go stdlib, so we want to align with it.
       - text: '^(ST1020|ST1022): comment on exported'
         path: "cli/command/formatter/tabwriter"
+        linters:
+          - staticcheck
+
+      # Ignore deprecation linting for cli/command/stack/*.
+      #
+      # FIXME(thaJeztah): remove exception once these functions are un-exported or internal; see https://github.com/docker/cli/pull/6389
+      - text: '^(SA1019): '
+        path: "cli/command/stack"
         linters:
           - staticcheck
 

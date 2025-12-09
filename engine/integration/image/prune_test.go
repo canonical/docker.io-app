@@ -4,14 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/internal/testutils/specialimage"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	iimage "github.com/moby/moby/v2/integration/internal/image"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
+	"github.com/moby/moby/v2/internal/testutil/specialimage"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -29,9 +28,8 @@ func TestPruneDontDeleteUsedDangling(t *testing.T) {
 	defer d.Stop(t)
 
 	apiClient := d.NewClientT(t)
-	defer apiClient.Close()
 
-	danglingID := specialimage.Load(ctx, t, apiClient, specialimage.Dangling)
+	danglingID := iimage.Load(ctx, t, apiClient, specialimage.Dangling)
 
 	_, err := apiClient.ImageInspect(ctx, danglingID)
 	assert.NilError(t, err, "Test dangling image doesn't exist")
@@ -40,10 +38,12 @@ func TestPruneDontDeleteUsedDangling(t *testing.T) {
 		container.WithImage(danglingID),
 		container.WithCmd("sleep", "60"))
 
-	pruned, err := apiClient.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "true")))
+	res, err := apiClient.ImagePrune(ctx, client.ImagePruneOptions{
+		Filters: make(client.Filters).Add("dangling", "true"),
+	})
 	assert.NilError(t, err)
 
-	for _, deleted := range pruned.ImagesDeleted {
+	for _, deleted := range res.Report.ImagesDeleted {
 		if strings.Contains(deleted.Deleted, danglingID) || strings.Contains(deleted.Untagged, danglingID) {
 			t.Errorf("used dangling image %s shouldn't be deleted", danglingID)
 		}
@@ -64,7 +64,6 @@ func TestPruneLexographicalOrder(t *testing.T) {
 	defer d.Stop(t)
 
 	apiClient := d.NewClientT(t)
-	defer apiClient.Close()
 
 	d.LoadBusybox(ctx, t)
 
@@ -75,24 +74,26 @@ func TestPruneLexographicalOrder(t *testing.T) {
 
 	tags := []string{"h", "a", "j", "o", "s", "q", "w", "e", "r", "t"}
 	for _, tag := range tags {
-		err = apiClient.ImageTag(ctx, id, "busybox:"+tag)
+		_, err = apiClient.ImageTag(ctx, client.ImageTagOptions{Source: id, Target: "busybox:" + tag})
 		assert.NilError(t, err)
 	}
-	err = apiClient.ImageTag(ctx, id, "busybox:z")
+	_, err = apiClient.ImageTag(ctx, client.ImageTagOptions{Source: id, Target: "busybox:z"})
 	assert.NilError(t, err)
 
-	_, err = apiClient.ImageRemove(ctx, "busybox:latest", image.RemoveOptions{Force: true})
+	_, err = apiClient.ImageRemove(ctx, "busybox:latest", client.ImageRemoveOptions{Force: true})
 	assert.NilError(t, err)
 
 	// run container
 	cid := container.Create(ctx, t, apiClient, container.WithImage(id))
-	defer container.Remove(ctx, t, apiClient, cid, containertypes.RemoveOptions{Force: true})
+	defer container.Remove(ctx, t, apiClient, cid, client.ContainerRemoveOptions{Force: true})
 
-	pruned, err := apiClient.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "false")))
+	res, err := apiClient.ImagePrune(ctx, client.ImagePruneOptions{
+		Filters: make(client.Filters).Add("dangling", "false"),
+	})
 	assert.NilError(t, err)
 
-	assert.Check(t, is.Len(pruned.ImagesDeleted, len(tags)))
-	for _, p := range pruned.ImagesDeleted {
+	assert.Check(t, is.Len(res.Report.ImagesDeleted, len(tags)))
+	for _, p := range res.Report.ImagesDeleted {
 		assert.Check(t, is.Equal(p.Deleted, ""))
 		assert.Check(t, p.Untagged != "busybox:z")
 	}
@@ -126,7 +127,8 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 			// busybox:other tag pointing to the same image.
 			name: "two tags",
 			prepare: func(t *testing.T, d *daemon.Daemon, apiClient *client.Client) error {
-				return apiClient.ImageTag(ctx, "busybox:latest", "busybox:a")
+				_, err := apiClient.ImageTag(ctx, client.ImageTagOptions{Source: "busybox:latest", Target: "busybox:a"})
+				return err
 			},
 			check: func(t *testing.T, apiClient *client.Client, pruned image.PruneReport) {
 				if assert.Check(t, is.Len(pruned.ImagesDeleted, 1)) {
@@ -144,29 +146,29 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 	} {
 		for _, tc := range []struct {
 			name    string
-			imageID func(t *testing.T, inspect image.InspectResponse) string
+			imageID func(t *testing.T, inspect client.ImageInspectResult) string
 		}{
 			{
 				name: "full id",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					return inspect.ID
 				},
 			},
 			{
 				name: "full id without sha256 prefix",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					return strings.TrimPrefix(inspect.ID, "sha256:")
 				},
 			},
 			{
 				name: "truncated id (without sha256 prefix)",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					return strings.TrimPrefix(inspect.ID, "sha256:")[:8]
 				},
 			},
 			{
 				name: "repo and digest without tag",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					skip.If(t, !testEnv.UsingSnapshotter())
 
 					return "busybox@" + inspect.ID
@@ -174,7 +176,7 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 			},
 			{
 				name: "tagged and digested",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					skip.If(t, !testEnv.UsingSnapshotter())
 
 					return "busybox:latest@" + inspect.ID
@@ -182,7 +184,7 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 			},
 			{
 				name: "repo digest",
-				imageID: func(t *testing.T, inspect image.InspectResponse) string {
+				imageID: func(t *testing.T, inspect client.ImageInspectResult) string {
 					// graphdriver won't have a repo digest
 					skip.If(t, len(inspect.RepoDigests) == 0, "no repo digest")
 
@@ -197,7 +199,6 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 				defer d.Stop(t)
 
 				apiClient := d.NewClientT(t)
-				defer apiClient.Close()
 
 				d.LoadBusybox(ctx, t)
 
@@ -209,19 +210,21 @@ func TestPruneDontDeleteUsedImage(t *testing.T) {
 				inspect, err := apiClient.ImageInspect(ctx, "busybox:latest")
 				assert.NilError(t, err)
 
-				image := tc.imageID(t, inspect)
-				t.Log(image)
+				img := tc.imageID(t, inspect)
+				t.Log(img)
 
 				cid := container.Run(ctx, t, apiClient,
-					container.WithImage(image),
+					container.WithImage(img),
 					container.WithCmd("sleep", "60"))
-				defer container.Remove(ctx, t, apiClient, cid, containertypes.RemoveOptions{Force: true})
+				defer container.Remove(ctx, t, apiClient, cid, client.ContainerRemoveOptions{Force: true})
 
 				// dangling=false also prunes unused images
-				pruned, err := apiClient.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "false")))
+				res, err := apiClient.ImagePrune(ctx, client.ImagePruneOptions{
+					Filters: make(client.Filters).Add("dangling", "false"),
+				})
 				assert.NilError(t, err)
 
-				env.check(t, apiClient, pruned)
+				env.check(t, apiClient, res.Report)
 			})
 		}
 	}

@@ -14,12 +14,12 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
-	"github.com/docker/docker/container"
-	daemonevents "github.com/docker/docker/daemon/events"
-	dimages "github.com/docker/docker/daemon/images"
-	"github.com/docker/docker/daemon/snapshotter"
-	"github.com/docker/docker/distribution"
-	"github.com/docker/docker/errdefs"
+	"github.com/moby/moby/v2/daemon/container"
+	daemonevents "github.com/moby/moby/v2/daemon/events"
+	dimages "github.com/moby/moby/v2/daemon/images"
+	"github.com/moby/moby/v2/daemon/internal/distribution"
+	"github.com/moby/moby/v2/daemon/snapshotter"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/user"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -98,7 +98,15 @@ func (i *ImageService) CountImages(ctx context.Context) int {
 		return 0
 	}
 
-	return len(imgs)
+	uniqueImages := map[digest.Digest]struct{}{}
+	for _, i := range imgs {
+		dgst := i.Target().Digest
+		if _, ok := uniqueImages[dgst]; !ok {
+			uniqueImages[dgst] = struct{}{}
+		}
+	}
+
+	return len(uniqueImages)
 }
 
 // LayerStoreStatus returns the status for each layer store

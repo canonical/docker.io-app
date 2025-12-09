@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -75,17 +77,34 @@ func (c *Cache) uploadV2(ctx context.Context, url string, b Blob) error {
 
 func (ce *Entry) downloadV2(ctx context.Context) ReaderAtCloser {
 	return toReaderAtCloser(func(offset int64) (io.ReadCloser, error) {
-		client, err := blockblob.NewClientWithNoCredential(ce.URL, azureOptions)
-		if err != nil {
-			return nil, errors.WithStack(err)
+		var retried bool
+		for {
+			client, err := blockblob.NewClientWithNoCredential(ce.URL, azureOptions)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			resp, err := client.DownloadStream(ctx, &blob.DownloadStreamOptions{
+				Range: blob.HTTPRange{Offset: offset},
+			})
+			if err != nil {
+				if !retried {
+					// the URL might have expired, so we try to load it again
+					retried = true
+					var respErr *azcore.ResponseError
+					if errors.As(err, &respErr) {
+						if respErr.StatusCode == http.StatusForbidden || respErr.StatusCode == http.StatusUnauthorized {
+							Log("reload download URL because error %v", err)
+							if err := ce.reload(ctx); err != nil {
+								return nil, errors.WithStack(err)
+							}
+							continue // retry with the new URL
+						}
+					}
+				}
+				return nil, errors.WithStack(err)
+			}
+			return resp.Body, nil
 		}
-		resp, err := client.DownloadStream(ctx, &blob.DownloadStreamOptions{
-			Range: blob.HTTPRange{Offset: offset},
-		})
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		return resp.Body, nil
 	})
 }
 
@@ -186,6 +205,15 @@ func (c *Cache) loadV2(ctx context.Context, keys ...string) (*Entry, error) {
 	ce.URL = val.SignedDownloadURL
 	ce.IsAzureBlob = true
 	ce.client = c.opt.Client
+	ce.reload = func(ctx context.Context) error {
+		v, err := c.loadV2(ctx, keys...)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		ce.URL = v.URL
+		ce.Key = v.Key
+		return nil
+	}
 
 	return &ce, nil
 }
@@ -204,5 +232,5 @@ func (c *Cache) newRequestV2(url string, body func() io.Reader) *request {
 }
 
 func (c *Cache) urlV2(p string) string {
-	return c.URL + "twirp/github.actions.results.api.v1.CacheService/" + p
+	return strings.TrimRight(c.URL, "/") + "/twirp/github.actions.results.api.v1.CacheService/" + p
 }

@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"context"
@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/request"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -37,18 +37,18 @@ func TestUpdateMemory(t *testing.T) {
 		setMemorySwap int64 = 524288000
 	)
 
-	_, err := apiClient.ContainerUpdate(ctx, cID, containertypes.UpdateConfig{
-		Resources: containertypes.Resources{
+	_, err := apiClient.ContainerUpdate(ctx, cID, client.ContainerUpdateOptions{
+		Resources: &containertypes.Resources{
 			Memory:     setMemory,
 			MemorySwap: setMemorySwap,
 		},
 	})
 	assert.NilError(t, err)
 
-	inspect, err := apiClient.ContainerInspect(ctx, cID)
+	inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(setMemory, inspect.HostConfig.Memory))
-	assert.Check(t, is.Equal(setMemorySwap, inspect.HostConfig.MemorySwap))
+	assert.Check(t, is.Equal(setMemory, inspect.Container.HostConfig.Memory))
+	assert.Check(t, is.Equal(setMemorySwap, inspect.Container.HostConfig.MemorySwap))
 
 	memoryFile := "/sys/fs/cgroup/memory/memory.limit_in_bytes"
 	if testEnv.DaemonInfo.CgroupVersion == "2" {
@@ -100,25 +100,25 @@ func TestUpdateCPUQuota(t *testing.T) {
 			// On v2, specifying CPUQuota without CPUPeriod is currently broken:
 			// https://github.com/opencontainers/runc/issues/2456
 			// As a workaround we set them together.
-			_, err := apiClient.ContainerUpdate(ctx, cID, containertypes.UpdateConfig{
-				Resources: containertypes.Resources{
+			_, err := apiClient.ContainerUpdate(ctx, cID, client.ContainerUpdateOptions{
+				Resources: &containertypes.Resources{
 					CPUQuota:  test.update,
 					CPUPeriod: 100000,
 				},
 			})
 			assert.NilError(t, err)
 		} else {
-			_, err := apiClient.ContainerUpdate(ctx, cID, containertypes.UpdateConfig{
-				Resources: containertypes.Resources{
+			_, err := apiClient.ContainerUpdate(ctx, cID, client.ContainerUpdateOptions{
+				Resources: &containertypes.Resources{
 					CPUQuota: test.update,
 				},
 			})
 			assert.NilError(t, err)
 		}
 
-		inspect, err := apiClient.ContainerInspect(ctx, cID)
+		inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 		assert.NilError(t, err)
-		assert.Check(t, is.Equal(test.update, inspect.HostConfig.CPUQuota))
+		assert.Check(t, is.Equal(test.update, inspect.Container.HostConfig.CPUQuota))
 
 		if testEnv.DaemonInfo.CgroupVersion == "2" {
 			res, err := container.Exec(ctx, apiClient, cID,
@@ -153,7 +153,7 @@ func TestUpdatePidsLimit(t *testing.T) {
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
-	oldAPIClient := request.NewAPIClient(t, client.WithVersion("1.24"))
+	oldAPIClient := request.NewAPIClient(t, client.WithAPIVersion("1.24"))
 
 	intPtr := func(i int64) *int64 {
 		return &i
@@ -185,17 +185,17 @@ func TestUpdatePidsLimit(t *testing.T) {
 			// Using "network=host" to speed up creation (13.96s vs 6.54s)
 			cID := container.Run(ctx, t, apiClient, container.WithPidsLimit(test.initial), container.WithNetworkMode("host"))
 
-			_, err := c.ContainerUpdate(ctx, cID, containertypes.UpdateConfig{
-				Resources: containertypes.Resources{
+			_, err := c.ContainerUpdate(ctx, cID, client.ContainerUpdateOptions{
+				Resources: &containertypes.Resources{
 					PidsLimit: test.update,
 				},
 			})
 			assert.NilError(t, err)
 
-			inspect, err := c.ContainerInspect(ctx, cID)
+			inspect, err := c.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 			assert.NilError(t, err)
-			assert.Assert(t, inspect.HostConfig.Resources.PidsLimit != nil)
-			assert.Equal(t, *inspect.HostConfig.Resources.PidsLimit, test.expect)
+			assert.Assert(t, inspect.Container.HostConfig.Resources.PidsLimit != nil)
+			assert.Equal(t, *inspect.Container.HostConfig.Resources.PidsLimit, test.expect)
 
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()

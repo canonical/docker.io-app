@@ -3,83 +3,80 @@ package plugin
 import (
 	"context"
 	"io"
+	"net/http"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type fakeClient struct {
 	client.Client
-	pluginCreateFunc  func(createContext io.Reader, createOptions types.PluginCreateOptions) error
-	pluginDisableFunc func(name string, disableOptions types.PluginDisableOptions) error
-	pluginEnableFunc  func(name string, options types.PluginEnableOptions) error
-	pluginRemoveFunc  func(name string, options types.PluginRemoveOptions) error
-	pluginInstallFunc func(name string, options types.PluginInstallOptions) (io.ReadCloser, error)
-	pluginListFunc    func(filter filters.Args) (types.PluginsListResponse, error)
-	pluginInspectFunc func(name string) (*types.Plugin, []byte, error)
-	pluginUpgradeFunc func(name string, options types.PluginInstallOptions) (io.ReadCloser, error)
+	pluginCreateFunc  func(createContext io.Reader, options client.PluginCreateOptions) (client.PluginCreateResult, error)
+	pluginDisableFunc func(name string, options client.PluginDisableOptions) (client.PluginDisableResult, error)
+	pluginEnableFunc  func(name string, options client.PluginEnableOptions) (client.PluginEnableResult, error)
+	pluginRemoveFunc  func(name string, options client.PluginRemoveOptions) (client.PluginRemoveResult, error)
+	pluginInstallFunc func(name string, options client.PluginInstallOptions) (client.PluginInstallResult, error)
+	pluginListFunc    func(options client.PluginListOptions) (client.PluginListResult, error)
+	pluginInspectFunc func(name string) (client.PluginInspectResult, error)
+	pluginUpgradeFunc func(name string, options client.PluginUpgradeOptions) (client.PluginUpgradeResult, error)
 }
 
-func (c *fakeClient) PluginCreate(_ context.Context, createContext io.Reader, createOptions types.PluginCreateOptions) error {
+func (c *fakeClient) PluginCreate(_ context.Context, createContext io.Reader, options client.PluginCreateOptions) (client.PluginCreateResult, error) {
 	if c.pluginCreateFunc != nil {
-		return c.pluginCreateFunc(createContext, createOptions)
+		return c.pluginCreateFunc(createContext, options)
 	}
-	return nil
+	return client.PluginCreateResult{}, nil
 }
 
-func (c *fakeClient) PluginEnable(_ context.Context, name string, enableOptions types.PluginEnableOptions) error {
+func (c *fakeClient) PluginEnable(_ context.Context, name string, options client.PluginEnableOptions) (client.PluginEnableResult, error) {
 	if c.pluginEnableFunc != nil {
-		return c.pluginEnableFunc(name, enableOptions)
+		return c.pluginEnableFunc(name, options)
 	}
-	return nil
+	return client.PluginEnableResult{}, nil
 }
 
-func (c *fakeClient) PluginDisable(_ context.Context, name string, disableOptions types.PluginDisableOptions) error {
+func (c *fakeClient) PluginDisable(_ context.Context, name string, options client.PluginDisableOptions) (client.PluginDisableResult, error) {
 	if c.pluginDisableFunc != nil {
-		return c.pluginDisableFunc(name, disableOptions)
+		return c.pluginDisableFunc(name, options)
 	}
-	return nil
+	return client.PluginDisableResult{}, nil
 }
 
-func (c *fakeClient) PluginRemove(_ context.Context, name string, removeOptions types.PluginRemoveOptions) error {
+func (c *fakeClient) PluginRemove(_ context.Context, name string, options client.PluginRemoveOptions) (client.PluginRemoveResult, error) {
 	if c.pluginRemoveFunc != nil {
-		return c.pluginRemoveFunc(name, removeOptions)
+		return c.pluginRemoveFunc(name, options)
 	}
-	return nil
+	return client.PluginRemoveResult{}, nil
 }
 
-func (c *fakeClient) PluginInstall(_ context.Context, name string, installOptions types.PluginInstallOptions) (io.ReadCloser, error) {
+func (c *fakeClient) PluginInstall(_ context.Context, name string, options client.PluginInstallOptions) (client.PluginInstallResult, error) {
 	if c.pluginInstallFunc != nil {
-		return c.pluginInstallFunc(name, installOptions)
+		return c.pluginInstallFunc(name, options)
 	}
-	return nil, nil
+	return client.PluginInstallResult{}, nil
 }
 
-func (c *fakeClient) PluginList(_ context.Context, filter filters.Args) (types.PluginsListResponse, error) {
+func (c *fakeClient) PluginList(_ context.Context, options client.PluginListOptions) (client.PluginListResult, error) {
 	if c.pluginListFunc != nil {
-		return c.pluginListFunc(filter)
+		return c.pluginListFunc(options)
 	}
-
-	return types.PluginsListResponse{}, nil
+	return client.PluginListResult{}, nil
 }
 
-func (c *fakeClient) PluginInspectWithRaw(_ context.Context, name string) (*types.Plugin, []byte, error) {
+func (c *fakeClient) PluginInspect(_ context.Context, name string, _ client.PluginInspectOptions) (client.PluginInspectResult, error) {
 	if c.pluginInspectFunc != nil {
 		return c.pluginInspectFunc(name)
 	}
-
-	return nil, nil, nil
+	return client.PluginInspectResult{}, nil
 }
 
-func (*fakeClient) Info(context.Context) (system.Info, error) {
-	return system.Info{}, nil
+func (*fakeClient) Info(context.Context, client.InfoOptions) (client.SystemInfoResult, error) {
+	return client.SystemInfoResult{}, nil
 }
 
-func (c *fakeClient) PluginUpgrade(_ context.Context, name string, options types.PluginInstallOptions) (io.ReadCloser, error) {
+func (c *fakeClient) PluginUpgrade(_ context.Context, name string, options client.PluginUpgradeOptions) (client.PluginUpgradeResult, error) {
 	if c.pluginUpgradeFunc != nil {
 		return c.pluginUpgradeFunc(name, options)
 	}
-	return nil, nil
+	// FIXME(thaJeztah): how to mock this?
+	return http.NoBody, nil
 }

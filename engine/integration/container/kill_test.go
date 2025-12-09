@@ -1,13 +1,14 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"runtime"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/request"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -19,12 +20,16 @@ func TestKillContainerInvalidSignal(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	id := container.Run(ctx, t, apiClient)
 
-	err := apiClient.ContainerKill(ctx, id, "0")
+	_, err := apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{
+		Signal: "0",
+	})
 	assert.ErrorContains(t, err, "Error response from daemon:")
 	assert.ErrorContains(t, err, "nvalid signal: 0") // match "(I|i)nvalid" case-insensitive to allow testing against older daemons.
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateRunning))
 
-	err = apiClient.ContainerKill(ctx, id, "SIG42")
+	_, err = apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{
+		Signal: "SIG42",
+	})
 	assert.ErrorContains(t, err, "Error response from daemon:")
 	assert.ErrorContains(t, err, "nvalid signal: SIG42") // match "(I|i)nvalid" case-insensitive to allow testing against older daemons.
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateRunning))
@@ -70,7 +75,9 @@ func TestKillContainer(t *testing.T) {
 			skip.If(t, testEnv.DaemonInfo.OSType == tc.skipOs, "Windows does not support SIGWINCH")
 			ctx := testutil.StartSpan(ctx, t)
 			id := container.Run(ctx, t, apiClient)
-			err := apiClient.ContainerKill(ctx, id, tc.signal)
+			_, err := apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{
+				Signal: tc.signal,
+			})
 			assert.NilError(t, err)
 
 			poll.WaitOn(t, container.IsInState(ctx, apiClient, id, tc.status), pollOpts...)
@@ -85,17 +92,17 @@ func TestKillWithStopSignalAndRestartPolicies(t *testing.T) {
 	testCases := []struct {
 		doc        string
 		stopsignal string
-		status     string
+		status     containertypes.ContainerState
 	}{
 		{
 			doc:        "same-signal-disables-restart-policy",
 			stopsignal: "TERM",
-			status:     "exited",
+			status:     containertypes.StateExited,
 		},
 		{
 			doc:        "different-signal-keep-restart-policy",
 			stopsignal: "CONT",
-			status:     "running",
+			status:     containertypes.StateRunning,
 		},
 	}
 
@@ -111,8 +118,11 @@ func TestKillWithStopSignalAndRestartPolicies(t *testing.T) {
 				container.WithRestartPolicy(containertypes.RestartPolicyAlways),
 				func(c *container.TestContainerConfig) {
 					c.Config.StopSignal = tc.stopsignal
-				})
-			err := apiClient.ContainerKill(ctx, id, "TERM")
+				},
+			)
+			_, err := apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{
+				Signal: "TERM",
+			})
 			assert.NilError(t, err)
 
 			poll.WaitOn(t, container.IsInState(ctx, apiClient, id, tc.status), pollOpts...)
@@ -124,7 +134,7 @@ func TestKillStoppedContainer(t *testing.T) {
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 	id := container.Create(ctx, t, apiClient)
-	err := apiClient.ContainerKill(ctx, id, "SIGKILL")
+	_, err := apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{})
 	assert.ErrorContains(t, err, "")
 	assert.ErrorContains(t, err, "is not running")
 }
@@ -140,7 +150,7 @@ func TestKillDifferentUserContainer(t *testing.T) {
 		c.Config.User = "daemon"
 	})
 
-	err := apiClient.ContainerKill(ctx, id, "SIGKILL")
+	_, err := apiClient.ContainerKill(ctx, id, client.ContainerKillOptions{})
 	assert.NilError(t, err)
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, id, containertypes.StateExited))
 }
@@ -160,9 +170,9 @@ func TestInspectOomKilledTrue(t *testing.T) {
 
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
 
-	inspect, err := apiClient.ContainerInspect(ctx, cID)
+	inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(true, inspect.State.OOMKilled))
+	assert.Check(t, is.Equal(true, inspect.Container.State.OOMKilled))
 }
 
 func TestInspectOomKilledFalse(t *testing.T) {
@@ -175,7 +185,7 @@ func TestInspectOomKilledFalse(t *testing.T) {
 
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
 
-	inspect, err := apiClient.ContainerInspect(ctx, cID)
+	inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(false, inspect.State.OOMKilled))
+	assert.Check(t, is.Equal(false, inspect.Container.State.OOMKilled))
 }

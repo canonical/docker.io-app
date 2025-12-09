@@ -1,13 +1,12 @@
 package containerd
 
 import (
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
-	"github.com/docker/go-connections/nat"
-	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
-	"github.com/opencontainers/go-digest"
+	"slices"
+
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/v2/daemon/internal/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -16,43 +15,30 @@ import (
 // - V1Image.ContainerConfig
 // - V1Image.Container
 // - Details
-func dockerOciImageToDockerImagePartial(id image.ID, img imagespec.DockerOCIImage) *image.Image {
+func dockerOciImageToDockerImagePartial(id image.ID, img dockerspec.DockerOCIImage) *image.Image {
 	v1Image := image.V1Image{
-		DockerVersion: dockerversion.Version,
-		Config:        dockerOCIImageConfigToContainerConfig(img.Config),
-		Architecture:  img.Platform.Architecture,
-		Variant:       img.Platform.Variant,
-		OS:            img.Platform.OS,
-		Author:        img.Author,
-		Created:       img.Created,
-	}
-
-	rootFS := &image.RootFS{
-		Type: img.RootFS.Type,
-	}
-	for _, diffId := range img.RootFS.DiffIDs {
-		rootFS.DiffIDs = append(rootFS.DiffIDs, layer.DiffID(diffId))
+		Config:       dockerOCIImageConfigToContainerConfig(img.Config),
+		Architecture: img.Platform.Architecture,
+		Variant:      img.Platform.Variant,
+		OS:           img.Platform.OS,
+		Author:       img.Author,
+		Created:      img.Created,
 	}
 
 	out := image.NewImage(id)
 	out.V1Image = v1Image
-	out.RootFS = rootFS
+	out.RootFS = &image.RootFS{
+		Type:    img.RootFS.Type,
+		DiffIDs: slices.Clone(img.RootFS.DiffIDs),
+	}
 	out.History = img.History
 	out.OSFeatures = img.OSFeatures
 	out.OSVersion = img.OSVersion
 	return out
 }
 
-func dockerImageToDockerOCIImage(img image.Image) imagespec.DockerOCIImage {
-	rootfs := ocispec.RootFS{
-		Type:    img.RootFS.Type,
-		DiffIDs: []digest.Digest{},
-	}
-	for _, diffId := range img.RootFS.DiffIDs {
-		rootfs.DiffIDs = append(rootfs.DiffIDs, digest.Digest(diffId))
-	}
-
-	return imagespec.DockerOCIImage{
+func dockerImageToDockerOCIImage(img image.Image) dockerspec.DockerOCIImage {
+	return dockerspec.DockerOCIImage{
 		Image: ocispec.Image{
 			Created: img.Created,
 			Author:  img.Author,
@@ -63,16 +49,19 @@ func dockerImageToDockerOCIImage(img image.Image) imagespec.DockerOCIImage {
 				OSVersion:    img.OSVersion,
 				OSFeatures:   img.OSFeatures,
 			},
-			RootFS:  rootfs,
+			RootFS: ocispec.RootFS{
+				Type:    img.RootFS.Type,
+				DiffIDs: slices.Clone(img.RootFS.DiffIDs),
+			},
 			History: img.History,
 		},
 		Config: containerConfigToDockerOCIImageConfig(img.Config),
 	}
 }
 
-func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.DockerOCIImageConfig {
+func containerConfigToDockerOCIImageConfig(cfg *container.Config) dockerspec.DockerOCIImageConfig {
 	var ociCfg ocispec.ImageConfig
-	var ext imagespec.DockerOCIImageConfigExt
+	var ext dockerspec.DockerOCIImageConfigExt
 
 	if cfg != nil {
 		ociCfg = ocispec.ImageConfig{
@@ -89,8 +78,8 @@ func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.Dock
 
 		if len(cfg.ExposedPorts) > 0 {
 			ociCfg.ExposedPorts = map[string]struct{}{}
-			for k, v := range cfg.ExposedPorts {
-				ociCfg.ExposedPorts[string(k)] = v
+			for k := range cfg.ExposedPorts {
+				ociCfg.ExposedPorts[k.String()] = struct{}{}
 			}
 		}
 		ext.Healthcheck = cfg.Healthcheck
@@ -98,16 +87,18 @@ func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.Dock
 		ext.Shell = cfg.Shell
 	}
 
-	return imagespec.DockerOCIImageConfig{
+	return dockerspec.DockerOCIImageConfig{
 		ImageConfig:             ociCfg,
 		DockerOCIImageConfigExt: ext,
 	}
 }
 
-func dockerOCIImageConfigToContainerConfig(cfg imagespec.DockerOCIImageConfig) *container.Config {
-	exposedPorts := make(nat.PortSet, len(cfg.ExposedPorts))
-	for k, v := range cfg.ExposedPorts {
-		exposedPorts[nat.Port(k)] = v
+func dockerOCIImageConfigToContainerConfig(cfg dockerspec.DockerOCIImageConfig) *container.Config {
+	exposedPorts := make(network.PortSet, len(cfg.ExposedPorts))
+	for k := range cfg.ExposedPorts {
+		if p, err := network.ParsePort(k); err == nil {
+			exposedPorts[p] = struct{}{}
+		}
 	}
 
 	return &container.Config{

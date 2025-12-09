@@ -1,12 +1,8 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -15,18 +11,17 @@ import (
 )
 
 func TestVolumeRemoveError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	err := client.VolumeRemove(context.Background(), "volume_id", false)
+	_, err = client.VolumeRemove(t.Context(), "volume_id", VolumeRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	err = client.VolumeRemove(context.Background(), "", false)
+	_, err = client.VolumeRemove(t.Context(), "", VolumeRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	err = client.VolumeRemove(context.Background(), "    ", false)
+	_, err = client.VolumeRemove(t.Context(), "    ", VolumeRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
@@ -36,31 +31,28 @@ func TestVolumeRemoveError(t *testing.T) {
 //
 // Regression test for https://github.com/docker/cli/issues/4890
 func TestVolumeRemoveConnectionError(t *testing.T) {
-	client, err := NewClientWithOpts(WithAPIVersionNegotiation(), WithHost("tcp://no-such-host.invalid"))
+	client, err := New(WithHost("tcp://no-such-host.invalid"))
 	assert.NilError(t, err)
 
-	err = client.VolumeRemove(context.Background(), "volume_id", false)
+	_, err = client.VolumeRemove(t.Context(), "volume_id", VolumeRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, IsErrConnectionFailed))
 }
 
 func TestVolumeRemove(t *testing.T) {
-	expectedURL := "/volumes/volume_id"
+	const expectedURL = "/volumes/volume_id"
 
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			if req.Method != http.MethodDelete {
-				return nil, fmt.Errorf("expected DELETE method, got %s", req.Method)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte("body"))),
-			}, nil
-		}),
-	}
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		if err := assertRequest(req, http.MethodDelete, expectedURL); err != nil {
+			return nil, err
+		}
+		if v := req.URL.Query().Get("force"); v != "1" {
+			return nil, fmt.Errorf("expected force=1, got %s", v)
+		}
 
-	err := client.VolumeRemove(context.Background(), "volume_id", false)
+		return mockResponse(http.StatusOK, nil, "body")(req)
+	}))
+	assert.NilError(t, err)
+
+	_, err = client.VolumeRemove(t.Context(), "volume_id", VolumeRemoveOptions{Force: true})
 	assert.NilError(t, err)
 }

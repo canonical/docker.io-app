@@ -1,28 +1,21 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestServiceListError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.ServiceList(context.Background(), swarm.ServiceListOptions{})
+	_, err = client.ServiceList(t.Context(), ServiceListOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
@@ -30,21 +23,18 @@ func TestServiceList(t *testing.T) {
 	const expectedURL = "/services"
 
 	listCases := []struct {
-		options             swarm.ServiceListOptions
+		options             ServiceListOptions
 		expectedQueryParams map[string]string
 	}{
 		{
-			options: swarm.ServiceListOptions{},
+			options: ServiceListOptions{},
 			expectedQueryParams: map[string]string{
 				"filters": "",
 			},
 		},
 		{
-			options: swarm.ServiceListOptions{
-				Filters: filters.NewArgs(
-					filters.Arg("label", "label1"),
-					filters.Arg("label", "label2"),
-				),
+			options: ServiceListOptions{
+				Filters: make(Filters).Add("label", "label1", "label2"),
 			},
 			expectedQueryParams: map[string]string{
 				"filters": `{"label":{"label1":true,"label2":true}}`,
@@ -52,38 +42,27 @@ func TestServiceList(t *testing.T) {
 		},
 	}
 	for _, listCase := range listCases {
-		client := &Client{
-			client: newMockClient(func(req *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(req.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+		client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
+				return nil, err
+			}
+			query := req.URL.Query()
+			for key, expected := range listCase.expectedQueryParams {
+				actual := query.Get(key)
+				if actual != expected {
+					return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
 				}
-				query := req.URL.Query()
-				for key, expected := range listCase.expectedQueryParams {
-					actual := query.Get(key)
-					if actual != expected {
-						return nil, fmt.Errorf("%s not set in URL query properly. Expected '%s', got %s", key, expected, actual)
-					}
-				}
-				content, err := json.Marshal([]swarm.Service{
-					{
-						ID: "service_id1",
-					},
-					{
-						ID: "service_id2",
-					},
-				})
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			}),
-		}
+			}
 
-		services, err := client.ServiceList(context.Background(), listCase.options)
+			return mockJSONResponse(http.StatusOK, nil, []swarm.Service{
+				{ID: "service_id1"},
+				{ID: "service_id2"},
+			})(req)
+		}))
 		assert.NilError(t, err)
-		assert.Check(t, is.Len(services, 2))
+
+		list, err := client.ServiceList(t.Context(), listCase.options)
+		assert.NilError(t, err)
+		assert.Check(t, is.Len(list.Items, 2))
 	}
 }

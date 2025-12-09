@@ -1,26 +1,43 @@
 # syntax=docker/dockerfile:1
 
 ARG BASE_VARIANT=alpine
-ARG ALPINE_VERSION=3.21
+
+# ALPINE_VERSION sets the version of the alpine base image to use, including for the golang image.
+# It must be a supported tag in the docker.io/library/alpine image repository
+# that's also available as alpine image variant for the Golang version used.
+ARG ALPINE_VERSION=3.22
 ARG BASE_DEBIAN_DISTRO=bookworm
 
-ARG GO_VERSION=1.24.3
-ARG XX_VERSION=1.6.1
-ARG GOVERSIONINFO_VERSION=v1.4.1
-ARG GOTESTSUM_VERSION=v1.12.0
+ARG GO_VERSION=1.25.5
+
+# XX_VERSION specifies the version of the xx utility to use.
+# It must be a valid tag in the docker.io/tonistiigi/xx image repository.
+ARG XX_VERSION=1.7.0
+
+# GOVERSIONINFO_VERSION is the version of GoVersionInfo to install.
+# It must be a valid tag from https://github.com/josephspurrier/goversioninfo
+ARG GOVERSIONINFO_VERSION=v1.5.0
+
+# GOTESTSUM_VERSION sets the version of gotestsum to install in the dev container.
+# It must be a valid tag in the https://github.com/gotestyourself/gotestsum repository.
+ARG GOTESTSUM_VERSION=v1.13.0
 
 # BUILDX_VERSION sets the version of buildx to use for the e2e tests.
 # It must be a tag in the docker.io/docker/buildx-bin image repository
 # on Docker Hub.
-ARG BUILDX_VERSION=0.24.0
-ARG COMPOSE_VERSION=v2.36.2
+ARG BUILDX_VERSION=0.29.1
+
+# COMPOSE_VERSION is the version of compose to install in the dev container.
+# It must be a tag in the docker.io/docker/compose-bin image repository
+# on Docker Hub.
+ARG COMPOSE_VERSION=v2.40.0
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS build-base-alpine
 ENV GOTOOLCHAIN=local
 COPY --link --from=xx / /
-RUN apk add --no-cache bash clang lld llvm file git
+RUN apk add --no-cache bash clang lld llvm file git git-daemon
 WORKDIR /go/src/github.com/docker/cli
 
 FROM build-base-alpine AS build-alpine
@@ -80,7 +97,7 @@ ENV GO111MODULE=auto
 RUN --mount=type=bind,target=.,rw \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg/mod \
-    gotestsum -- -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/')
+    gotestsum -- -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/|/cmd/docker-trust')
 
 FROM scratch AS test-coverage
 COPY --from=test /tmp/coverage.txt /coverage.txt
@@ -105,10 +122,6 @@ FROM docker/buildx-bin:${BUILDX_VERSION}   AS buildx
 FROM docker/compose-bin:${COMPOSE_VERSION} AS compose
 
 FROM e2e-base-${BASE_VARIANT} AS e2e
-ARG NOTARY_VERSION=v0.6.1
-ADD --chmod=0755 https://github.com/theupdateframework/notary/releases/download/${NOTARY_VERSION}/notary-Linux-amd64 /usr/local/bin/notary
-COPY --link e2e/testdata/notary/root-ca.cert /usr/share/ca-certificates/notary.cert
-RUN echo 'notary.cert' >> /etc/ca-certificates.conf && update-ca-certificates
 COPY --link --from=gotestsum /out/gotestsum /usr/bin/gotestsum
 COPY --link --from=build /out ./build/
 COPY --link --from=build-plugins /out ./build/

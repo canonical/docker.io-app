@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package node
 
@@ -12,6 +12,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ type inspectOptions struct {
 	pretty  bool
 }
 
-func newInspectCommand(dockerCli command.Cli) *cobra.Command {
+func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts inspectOptions
 
 	cmd := &cobra.Command{
@@ -30,9 +31,10 @@ func newInspectCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.nodeIds = args
-			return runInspect(cmd.Context(), dockerCli, opts)
+			return runInspect(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: completeNodeNames(dockerCli),
+		ValidArgsFunction:     completeNodeNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -41,35 +43,34 @@ func newInspectCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-func runInspect(ctx context.Context, dockerCli command.Cli, opts inspectOptions) error {
-	client := dockerCli.Client()
+func runInspect(ctx context.Context, dockerCLI command.Cli, opts inspectOptions) error {
+	apiClient := dockerCLI.Client()
 
 	if opts.pretty {
 		opts.format = "pretty"
 	}
 
 	getRef := func(ref string) (any, []byte, error) {
-		nodeRef, err := Reference(ctx, client, ref)
+		nodeRef, err := Reference(ctx, apiClient, ref)
 		if err != nil {
 			return nil, nil, err
 		}
-		node, _, err := client.NodeInspectWithRaw(ctx, nodeRef)
-		return node, nil, err
+		res, err := apiClient.NodeInspect(ctx, nodeRef, client.NodeInspectOptions{})
+		return res.Node, res.Raw, err
 	}
-	f := opts.format
 
 	// check if the user is trying to apply a template to the pretty format, which
 	// is not supported
-	if strings.HasPrefix(f, "pretty") && f != "pretty" {
+	if strings.HasPrefix(opts.format, "pretty") && opts.format != "pretty" {
 		return errors.New("cannot supply extra formatting options to the pretty template")
 	}
 
 	nodeCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewFormat(f, false),
+		Output: dockerCLI.Out(),
+		Format: newFormat(opts.format, false),
 	}
 
-	if err := InspectFormatWrite(nodeCtx, opts.nodeIds, getRef); err != nil {
+	if err := inspectFormatWrite(nodeCtx, opts.nodeIds, getRef); err != nil {
 		return cli.StatusError{StatusCode: 1, Status: err.Error()}
 	}
 	return nil

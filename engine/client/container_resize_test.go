@@ -1,40 +1,34 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"io"
 	"math"
 	"net/http"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestContainerResizeError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	err := client.ContainerResize(context.Background(), "container_id", container.ResizeOptions{})
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
+	_, err = client.ContainerResize(t.Context(), "container_id", ContainerResizeOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	err = client.ContainerResize(context.Background(), "", container.ResizeOptions{})
+	_, err = client.ContainerResize(t.Context(), "", ContainerResizeOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	err = client.ContainerResize(context.Background(), "    ", container.ResizeOptions{})
+	_, err = client.ContainerResize(t.Context(), "    ", ContainerResizeOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
 
-func TestContainerExecResizeError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	err := client.ContainerExecResize(context.Background(), "exec_id", container.ResizeOptions{})
+func TestExecResizeError(t *testing.T) {
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
+	_, err = client.ExecResize(t.Context(), "exec_id", ExecResizeOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
@@ -43,18 +37,18 @@ func TestContainerResize(t *testing.T) {
 
 	tests := []struct {
 		doc                           string
-		opts                          container.ResizeOptions
+		opts                          ContainerResizeOptions
 		expectedHeight, expectedWidth string
 	}{
 		{
 			doc:            "zero width height", // valid, but not very useful
-			opts:           container.ResizeOptions{},
+			opts:           ContainerResizeOptions{},
 			expectedWidth:  "0",
 			expectedHeight: "0",
 		},
 		{
 			doc: "valid resize",
-			opts: container.ResizeOptions{
+			opts: ContainerResizeOptions{
 				Height: 500,
 				Width:  600,
 			},
@@ -63,7 +57,7 @@ func TestContainerResize(t *testing.T) {
 		},
 		{
 			doc: "larger than maxint64",
-			opts: container.ResizeOptions{
+			opts: ContainerResizeOptions{
 				Height: math.MaxInt64 + 1,
 				Width:  math.MaxInt64 + 2,
 			},
@@ -73,31 +67,30 @@ func TestContainerResize(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
-			client := &Client{
-				client: newMockClient(resizeTransport(t, expectedURL, tc.expectedHeight, tc.expectedWidth)),
-			}
-			err := client.ContainerResize(context.Background(), "container_id", tc.opts)
+			client, err := New(WithMockClient(resizeTransport(t, expectedURL, tc.expectedHeight, tc.expectedWidth)))
+			assert.NilError(t, err)
+			_, err = client.ContainerResize(t.Context(), "container_id", tc.opts)
 			assert.NilError(t, err)
 		})
 	}
 }
 
-func TestContainerExecResize(t *testing.T) {
+func TestExecResize(t *testing.T) {
 	const expectedURL = "/exec/exec_id/resize"
 	tests := []struct {
 		doc                           string
-		opts                          container.ResizeOptions
+		opts                          ExecResizeOptions
 		expectedHeight, expectedWidth string
 	}{
 		{
 			doc:            "zero width height", // valid, but not very useful
-			opts:           container.ResizeOptions{},
+			opts:           ExecResizeOptions{},
 			expectedWidth:  "0",
 			expectedHeight: "0",
 		},
 		{
 			doc: "valid resize",
-			opts: container.ResizeOptions{
+			opts: ExecResizeOptions{
 				Height: 500,
 				Width:  600,
 			},
@@ -106,7 +99,7 @@ func TestContainerExecResize(t *testing.T) {
 		},
 		{
 			doc: "larger than maxint64",
-			opts: container.ResizeOptions{
+			opts: ExecResizeOptions{
 				Height: math.MaxInt64 + 1,
 				Width:  math.MaxInt64 + 2,
 			},
@@ -116,10 +109,9 @@ func TestContainerExecResize(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
-			client := &Client{
-				client: newMockClient(resizeTransport(t, expectedURL, tc.expectedHeight, tc.expectedWidth)),
-			}
-			err := client.ContainerExecResize(context.Background(), "exec_id", tc.opts)
+			client, err := New(WithMockClient(resizeTransport(t, expectedURL, tc.expectedHeight, tc.expectedWidth)))
+			assert.NilError(t, err)
+			_, err = client.ExecResize(t.Context(), "exec_id", tc.opts)
 			assert.NilError(t, err)
 		})
 	}
@@ -127,14 +119,11 @@ func TestContainerExecResize(t *testing.T) {
 
 func resizeTransport(t *testing.T, expectedURL, expectedHeight, expectedWidth string) func(req *http.Request) (*http.Response, error) {
 	return func(req *http.Request) (*http.Response, error) {
-		assert.Check(t, is.Equal(req.URL.Path, expectedURL))
+		assert.Check(t, assertRequest(req, http.MethodPost, expectedURL))
 
 		query := req.URL.Query()
 		assert.Check(t, is.Equal(query.Get("h"), expectedHeight))
 		assert.Check(t, is.Equal(query.Get("w"), expectedWidth))
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte(""))),
-		}, nil
+		return mockResponse(http.StatusOK, nil, "")(req)
 	}
 }

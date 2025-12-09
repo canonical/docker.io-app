@@ -1,4 +1,4 @@
-package config // import "github.com/docker/docker/daemon/config"
+package config
 
 import (
 	"encoding/json"
@@ -11,11 +11,11 @@ import (
 	"testing"
 
 	"dario.cat/mergo"
-	"github.com/docker/docker/api"
-	"github.com/docker/docker/libnetwork/ipamutils"
-	"github.com/docker/docker/opts"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/v2/daemon/libnetwork/ipamutils"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	"github.com/moby/moby/v2/daemon/pkg/registry"
 	"github.com/spf13/pflag"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/unicode"
@@ -94,7 +94,7 @@ func TestDaemonConfigurationInvalidUnicode(t *testing.T) {
 }
 
 func TestFindConfigurationConflicts(t *testing.T) {
-	config := map[string]interface{}{"authorization-plugins": "foobar"}
+	config := map[string]any{"authorization-plugins": "foobar"}
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 
 	flags.String("authorization-plugins", "", "")
@@ -103,7 +103,7 @@ func TestFindConfigurationConflicts(t *testing.T) {
 }
 
 func TestFindConfigurationConflictsWithNamedOptions(t *testing.T) {
-	config := map[string]interface{}{"hosts": []string{"qwer"}}
+	config := map[string]any{"hosts": []string{"qwer"}}
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 
 	var hosts []string
@@ -195,7 +195,7 @@ func TestDaemonConfigurationMergeDefaultAddressPools(t *testing.T) {
 }
 
 func TestFindConfigurationConflictsWithUnknownKeys(t *testing.T) {
-	config := map[string]interface{}{"tls-verify": "true"}
+	config := map[string]any{"tls-verify": "true"}
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 
 	flags.Bool("tlsverify", false, "")
@@ -205,7 +205,7 @@ func TestFindConfigurationConflictsWithUnknownKeys(t *testing.T) {
 
 func TestFindConfigurationConflictsWithMergedValues(t *testing.T) {
 	var hosts []string
-	config := map[string]interface{}{"hosts": "tcp://127.0.0.1:2345"}
+	config := map[string]any{"hosts": "tcp://127.0.0.1:2345"}
 	flags := pflag.NewFlagSet("base", pflag.ContinueOnError)
 	flags.VarP(opts.NewNamedListOptsRef("hosts", &hosts, nil), "host", "H", "")
 
@@ -367,7 +367,7 @@ func TestValidateConfigurationErrors(t *testing.T) {
 			name: "with invalid log-level",
 			config: &Config{
 				CommonConfig: CommonConfig{
-					LogLevel: "foobar",
+					DaemonLogConfig: DaemonLogConfig{LogLevel: "foobar"},
 				},
 			},
 			expectedErr: "invalid logging level: foobar",
@@ -427,6 +427,17 @@ func TestValidateConfigurationErrors(t *testing.T) {
 			},
 			platform:    "windows",
 			expectedErr: "invalid exec-opt (native.cgroupdriver=systemd): option 'native.cgroupdriver' is only supported on linux",
+		},
+		{
+			name: "invalid mirror",
+			config: &Config{
+				CommonConfig: CommonConfig{
+					ServiceOptions: registry.ServiceOptions{
+						Mirrors: []string{"ftp://example.com"},
+					},
+				},
+			},
+			expectedErr: `invalid mirror: unsupported scheme "ftp" in "ftp://example.com": must use either 'https://' or 'http://'`,
 		},
 	}
 	for _, tc := range testCases {
@@ -564,7 +575,7 @@ func TestValidateConfiguration(t *testing.T) {
 			field: "LogLevel",
 			config: &Config{
 				CommonConfig: CommonConfig{
-					LogLevel: "warn",
+					DaemonLogConfig: DaemonLogConfig{LogLevel: "warn"},
 				},
 			},
 		},
@@ -622,7 +633,7 @@ func TestValidateMinAPIVersion(t *testing.T) {
 		},
 		{
 			doc:   "current version",
-			input: api.DefaultVersion,
+			input: MaxAPIVersion,
 		},
 	}
 
@@ -638,6 +649,26 @@ func TestValidateMinAPIVersion(t *testing.T) {
 	}
 }
 
+func TestConfigDNS(t *testing.T) {
+	tests := []struct {
+		doc   string
+		input string
+	}{
+		{
+			doc:   "IPv6s with scope IDs",
+			input: `{"dns": ["::1%eth0", "::1%2"]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
+			var cfg Config
+			err := json.Unmarshal([]byte(tc.input), &cfg)
+			assert.Check(t, err == nil, "type: %T", err)
+		})
+	}
+}
+
 func TestConfigInvalidDNS(t *testing.T) {
 	tests := []struct {
 		doc         string
@@ -647,12 +678,17 @@ func TestConfigInvalidDNS(t *testing.T) {
 		{
 			doc:         "single DNS, invalid IP-address",
 			input:       `{"dns": ["1.1.1.1o"]}`,
-			expectedErr: `invalid IP address: 1.1.1.1o`,
+			expectedErr: `ParseAddr("1.1.1.1o"): unexpected character (at "o")`,
 		},
 		{
 			doc:         "multiple DNS, invalid IP-address",
 			input:       `{"dns": ["2.2.2.2", "1.1.1.1o"]}`,
-			expectedErr: `invalid IP address: 1.1.1.1o`,
+			expectedErr: `ParseAddr("1.1.1.1o"): unexpected character (at "o")`,
+		},
+		{
+			doc:         "IPv4 with scope ID",
+			input:       `{"dns": ["1.1.1.1%eth0"]}`,
+			expectedErr: `ParseAddr("1.1.1.1%eth0"): unexpected character (at "%eth0")`,
 		},
 	}
 
@@ -660,7 +696,7 @@ func TestConfigInvalidDNS(t *testing.T) {
 		t.Run(tc.doc, func(t *testing.T) {
 			var cfg Config
 			err := json.Unmarshal([]byte(tc.input), &cfg)
-			assert.Check(t, is.Error(err, tc.expectedErr))
+			assert.Check(t, is.Error(err, tc.expectedErr), "type: %T", err)
 		})
 	}
 }

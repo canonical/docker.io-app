@@ -2,16 +2,15 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
-	"github.com/hashicorp/go-multierror"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 )
 
@@ -22,15 +21,15 @@ type cdiHandler struct {
 // RegisterCDIDriver registers the CDI device driver.
 // The driver injects CDI devices into an incoming OCI spec and is called for DeviceRequests associated with CDI devices.
 // If the list of CDI spec directories is empty, the driver is not registered.
-func RegisterCDIDriver(cdiSpecDirs ...string) {
-	driver := newCDIDeviceDriver(cdiSpecDirs...)
-
+func RegisterCDIDriver(cdiSpecDirs ...string) *cdi.Cache {
+	driver, cache := newCDIDeviceDriver(cdiSpecDirs...)
 	registerDeviceDriver("cdi", driver)
+	return cache
 }
 
 // newCDIDeviceDriver creates a new CDI device driver.
 // If the creation of the CDI cache fails, a driver is returned that will return an error on an injection request.
-func newCDIDeviceDriver(cdiSpecDirs ...string) *deviceDriver {
+func newCDIDeviceDriver(cdiSpecDirs ...string) (*deviceDriver, *cdi.Cache) {
 	cache, err := createCDICache(cdiSpecDirs...)
 	if err != nil {
 		log.G(context.TODO()).WithError(err).Error("Failed to create CDI cache")
@@ -48,7 +47,7 @@ func newCDIDeviceDriver(cdiSpecDirs ...string) *deviceDriver {
 					Warnings: []string{fmt.Sprintf("CDI cache initialization failed: %v", err)},
 				}, nil
 			},
-		}
+		}, nil
 	}
 
 	// We construct a spec updates that injects CDI devices into the OCI spec using the initialized registry.
@@ -59,19 +58,29 @@ func newCDIDeviceDriver(cdiSpecDirs ...string) *deviceDriver {
 	return &deviceDriver{
 		updateSpec:  c.injectCDIDevices,
 		ListDevices: c.listDevices,
-	}
+	}, cache
 }
 
 // createCDICache creates a CDI cache for the specified CDI specification directories.
 // If the list of CDI specification directories is empty or the creation of the CDI cache fails, an error is returned.
 func createCDICache(cdiSpecDirs ...string) (*cdi.Cache, error) {
 	if len(cdiSpecDirs) == 0 {
-		return nil, fmt.Errorf("no CDI specification directories specified")
+		return nil, errors.New("no CDI specification directories specified")
 	}
 
 	cache, err := cdi.NewCache(cdi.WithSpecDirs(cdiSpecDirs...))
 	if err != nil {
 		return nil, fmt.Errorf("CDI registry initialization failure: %w", err)
+	}
+
+	for dir, errs := range cache.GetErrors() {
+		for _, err := range errs {
+			if errors.Is(err, os.ErrNotExist) {
+				log.L.WithField("dir", dir).Infof("CDI directory does not exist, skipping: %v", err)
+				continue
+			}
+			log.L.WithField("dir", dir).Warnf("CDI setup error: %+v", err)
+		}
 	}
 
 	return cache, nil
@@ -108,11 +117,11 @@ func (c *cdiHandler) injectCDIDevices(s *specs.Spec, dev *deviceInstance) error 
 
 // getErrors returns a single error representation of errors that may have occurred while refreshing the CDI registry.
 func (c *cdiHandler) getErrors() error {
-	var err *multierror.Error
-	for _, errs := range c.registry.GetErrors() {
-		err = multierror.Append(err, errs...)
+	var errs []error
+	for _, es := range c.registry.GetErrors() {
+		errs = append(errs, es...)
 	}
-	return err.ErrorOrNil()
+	return errors.Join(errs...)
 }
 
 // listDevices uses the CDI cache to list all discovered CDI devices.

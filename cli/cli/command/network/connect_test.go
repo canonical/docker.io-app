@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/network"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -15,7 +18,7 @@ import (
 func TestNetworkConnectErrors(t *testing.T) {
 	testCases := []struct {
 		args               []string
-		networkConnectFunc func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error
+		networkConnectFunc func(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
 		expectedError      string
 	}{
 		{
@@ -23,8 +26,8 @@ func TestNetworkConnectErrors(t *testing.T) {
 		},
 		{
 			args: []string{"toto", "titi"},
-			networkConnectFunc: func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error {
-				return errors.New("error connecting network")
+			networkConnectFunc: func(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
+				return client.NetworkConnectResult{}, errors.New("error connecting network")
 			},
 			expectedError: "error connecting network",
 		},
@@ -46,9 +49,9 @@ func TestNetworkConnectErrors(t *testing.T) {
 func TestNetworkConnectWithFlags(t *testing.T) {
 	expectedConfig := &network.EndpointSettings{
 		IPAMConfig: &network.EndpointIPAMConfig{
-			IPv4Address:  "192.168.4.1",
-			IPv6Address:  "fdef:f401:8da0:1234::5678",
-			LinkLocalIPs: []string{"169.254.42.42"},
+			IPv4Address:  netip.MustParseAddr("192.168.4.1"),
+			IPv6Address:  netip.MustParseAddr("fdef:f401:8da0:1234::5678"),
+			LinkLocalIPs: []netip.Addr{netip.MustParseAddr("169.254.42.42")},
 		},
 		Links:   []string{"otherctr"},
 		Aliases: []string{"poor-yorick"},
@@ -59,9 +62,9 @@ func TestNetworkConnectWithFlags(t *testing.T) {
 		GwPriority: 100,
 	}
 	cli := test.NewFakeCli(&fakeClient{
-		networkConnectFunc: func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error {
-			assert.Check(t, is.DeepEqual(expectedConfig, config))
-			return nil
+		networkConnectFunc: func(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
+			assert.Check(t, is.DeepEqual(expectedConfig, options.EndpointConfig, cmpopts.EquateComparable(netip.Addr{})))
+			return client.NetworkConnectResult{}, nil
 		},
 	})
 	args := []string{"mynet", "myctr"}

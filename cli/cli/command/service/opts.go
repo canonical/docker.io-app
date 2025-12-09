@@ -1,11 +1,13 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,15 +15,13 @@ import (
 
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/opts/swarmopts"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
 	gogotypes "github.com/gogo/protobuf/types"
 	"github.com/google/shlex"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/moby/swarmkit/v2/api"
 	"github.com/moby/swarmkit/v2/api/defaults"
-	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
 
@@ -101,7 +101,7 @@ func (o *placementPrefOpts) Set(value string) error {
 		return errors.New(`placement preference must be of the format "<strategy>=<arg>"`)
 	}
 	if strategy != "spread" {
-		return errors.Errorf("unsupported placement preference %s (only spread is supported)", strategy)
+		return fmt.Errorf("unsupported placement preference %s (only spread is supported)", strategy)
 	}
 
 	o.prefs = append(o.prefs, swarm.PlacementPreference{
@@ -164,9 +164,9 @@ func updateConfigFromDefaults(defaultUpdateConfig *api.UpdateConfig) *swarm.Upda
 		Parallelism:     defaultUpdateConfig.Parallelism,
 		Delay:           defaultUpdateConfig.Delay,
 		Monitor:         defaultMonitor,
-		FailureAction:   defaultFailureAction,
+		FailureAction:   swarm.FailureAction(defaultFailureAction),
 		MaxFailureRatio: defaultUpdateConfig.MaxFailureRatio,
-		Order:           defaultOrder(defaultUpdateConfig.Order),
+		Order:           swarm.UpdateOrder(defaultOrder(defaultUpdateConfig.Order)),
 	}
 }
 
@@ -187,13 +187,13 @@ func (o updateOptions) updateConfig(flags *pflag.FlagSet) *swarm.UpdateConfig {
 		updateConfig.Monitor = o.monitor
 	}
 	if flags.Changed(flagUpdateFailureAction) {
-		updateConfig.FailureAction = o.onFailure
+		updateConfig.FailureAction = swarm.FailureAction(o.onFailure)
 	}
 	if flags.Changed(flagUpdateMaxFailureRatio) {
 		updateConfig.MaxFailureRatio = o.maxFailureRatio.Value()
 	}
 	if flags.Changed(flagUpdateOrder) {
-		updateConfig.Order = o.order
+		updateConfig.Order = swarm.UpdateOrder(o.order)
 	}
 
 	return updateConfig
@@ -216,13 +216,13 @@ func (o updateOptions) rollbackConfig(flags *pflag.FlagSet) *swarm.UpdateConfig 
 		updateConfig.Monitor = o.monitor
 	}
 	if flags.Changed(flagRollbackFailureAction) {
-		updateConfig.FailureAction = o.onFailure
+		updateConfig.FailureAction = swarm.FailureAction(o.onFailure)
 	}
 	if flags.Changed(flagRollbackMaxFailureRatio) {
 		updateConfig.MaxFailureRatio = o.maxFailureRatio.Value()
 	}
 	if flags.Changed(flagRollbackOrder) {
-		updateConfig.Order = o.order
+		updateConfig.Order = swarm.UpdateOrder(o.order)
 	}
 
 	return updateConfig
@@ -235,15 +235,17 @@ type resourceOptions struct {
 	resCPU              opts.NanoCPUs
 	resMemBytes         opts.MemBytes
 	resGenericResources []string
+	swapBytes           opts.MemBytes
+	memSwappiness       int64
 }
 
-func (r *resourceOptions) ToResourceRequirements() (*swarm.ResourceRequirements, error) {
+func (r *resourceOptions) ToResourceRequirements(flags *pflag.FlagSet) (*swarm.ResourceRequirements, error) {
 	generic, err := ParseGenericResources(r.resGenericResources)
 	if err != nil {
 		return nil, err
 	}
 
-	return &swarm.ResourceRequirements{
+	resreq := &swarm.ResourceRequirements{
 		Limits: &swarm.Limit{
 			NanoCPUs:    r.limitCPU.Value(),
 			MemoryBytes: r.limitMemBytes.Value(),
@@ -254,7 +256,20 @@ func (r *resourceOptions) ToResourceRequirements() (*swarm.ResourceRequirements,
 			MemoryBytes:      r.resMemBytes.Value(),
 			GenericResources: generic,
 		},
-	}, nil
+	}
+
+	// SwapBytes and MemorySwappiness are *int64 (pointers), so we need to have
+	// a variable we can take a pointer to. Additionally, we need to ensure
+	// that these values are only set if they are set as options.
+	if flags.Changed(flagSwapBytes) {
+		swapBytes := r.swapBytes.Value()
+		resreq.SwapBytes = &swapBytes
+	}
+	if flags.Changed(flagMemSwappiness) {
+		resreq.MemorySwappiness = &r.memSwappiness
+	}
+
+	return resreq, nil
 }
 
 type restartPolicyOptions struct {
@@ -286,11 +301,11 @@ func defaultRestartPolicy() *swarm.RestartPolicy {
 func defaultRestartCondition() swarm.RestartPolicyCondition {
 	switch defaults.Service.Task.Restart.Condition {
 	case api.RestartOnNone:
-		return "none"
+		return swarm.RestartPolicyConditionNone
 	case api.RestartOnFailure:
-		return "on-failure"
+		return swarm.RestartPolicyConditionOnFailure
 	case api.RestartOnAny:
-		return "any"
+		return swarm.RestartPolicyConditionAny
 	default:
 		return ""
 	}
@@ -299,9 +314,9 @@ func defaultRestartCondition() swarm.RestartPolicyCondition {
 func defaultOrder(order api.UpdateConfig_UpdateOrder) string {
 	switch order {
 	case api.UpdateConfig_STOP_FIRST:
-		return "stop-first"
+		return string(swarm.UpdateOrderStopFirst)
 	case api.UpdateConfig_START_FIRST:
-		return "start-first"
+		return string(swarm.UpdateOrderStartFirst)
 	default:
 		return ""
 	}
@@ -335,11 +350,31 @@ type credentialSpecOpt struct {
 	source string
 }
 
+type credentialSpecType string
+
+const (
+	credentialSpecConfig   credentialSpecType = "config"
+	credentialSpecFile     credentialSpecType = "file"
+	credentialSpecRegistry credentialSpecType = "registry"
+)
+
 func (c *credentialSpecOpt) Set(value string) error {
+	// TODO(thaJeztah): should c.source always be set, even if we may error further down?
 	c.source = value
-	c.value = &swarm.CredentialSpec{}
-	switch {
-	case strings.HasPrefix(value, "config://"):
+	if value == "" {
+		// if the value of the flag is an empty string, that means there is no
+		// CredentialSpec needed. This is useful for removing a CredentialSpec
+		// during a service update.
+		c.value = &swarm.CredentialSpec{}
+		return nil
+	}
+
+	scheme, val, ok := strings.Cut(value, "://")
+	if !ok {
+		scheme = ""
+	}
+	switch credentialSpecType(scheme) {
+	case credentialSpecConfig:
 		// NOTE(dperny): we allow the user to specify the value of
 		// CredentialSpec Config using the Name of the config, but the API
 		// requires the ID of the config. For simplicity, we will parse
@@ -347,20 +382,24 @@ func (c *credentialSpecOpt) Set(value string) error {
 		// making API calls, we may need to swap the Config Name for the ID.
 		// Therefore, this isn't the definitive location for the value of
 		// Config that is passed to the API.
-		c.value.Config = strings.TrimPrefix(value, "config://")
-	case strings.HasPrefix(value, "file://"):
-		c.value.File = strings.TrimPrefix(value, "file://")
-	case strings.HasPrefix(value, "registry://"):
-		c.value.Registry = strings.TrimPrefix(value, "registry://")
-	case value == "":
-		// if the value of the flag is an empty string, that means there is no
-		// CredentialSpec needed. This is useful for removing a CredentialSpec
-		// during a service update.
+		c.value = &swarm.CredentialSpec{
+			Config: val,
+		}
+		return nil
+	case credentialSpecFile:
+		c.value = &swarm.CredentialSpec{
+			File: val,
+		}
+		return nil
+	case credentialSpecRegistry:
+		c.value = &swarm.CredentialSpec{
+			Registry: val,
+		}
+		return nil
 	default:
+		c.value = &swarm.CredentialSpec{}
 		return errors.New(`invalid credential spec: value must be prefixed with "config://", "file://", or "registry://"`)
 	}
-
-	return nil
 }
 
 func (*credentialSpecOpt) Type() string {
@@ -376,8 +415,11 @@ func (c *credentialSpecOpt) Value() *swarm.CredentialSpec {
 }
 
 func resolveNetworkID(ctx context.Context, apiClient client.NetworkAPIClient, networkIDOrName string) (string, error) {
-	nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, network.InspectOptions{Scope: "swarm"})
-	return nw.ID, err
+	res, err := apiClient.NetworkInspect(ctx, networkIDOrName, client.NetworkInspectOptions{Scope: "swarm"})
+	if err != nil {
+		return "", err
+	}
+	return res.Network.ID, nil
 }
 
 func convertNetworks(networks opts.NetworkOpt) []swarm.NetworkAttachmentConfig {
@@ -446,7 +488,7 @@ func (o *healthCheckOptions) toHealthConfig() (*container.HealthConfig, error) {
 		o.retries != 0
 	if o.noHealthcheck {
 		if haveHealthSettings {
-			return nil, errors.Errorf("--%s conflicts with --health-* options", flagNoHealthcheck)
+			return nil, fmt.Errorf("--%s conflicts with --health-* options", flagNoHealthcheck)
 		}
 		healthConfig = &container.HealthConfig{Test: []string{"NONE"}}
 	} else if haveHealthSettings {
@@ -584,7 +626,7 @@ func (options *serviceOptions) ToServiceMode() (swarm.ServiceMode, error) {
 	switch options.mode {
 	case "global":
 		if options.replicas.Value() != nil {
-			return serviceMode, errors.Errorf("replicas can only be used with replicated or replicated-job mode")
+			return serviceMode, errors.New("replicas can only be used with replicated or replicated-job mode")
 		}
 
 		if options.maxReplicas > 0 {
@@ -620,11 +662,11 @@ func (options *serviceOptions) ToServiceMode() (swarm.ServiceMode, error) {
 			return serviceMode, errors.New("max-concurrent can only be used with replicated-job mode")
 		}
 		if options.replicas.Value() != nil {
-			return serviceMode, errors.Errorf("replicas can only be used with replicated or replicated-job mode")
+			return serviceMode, errors.New("replicas can only be used with replicated or replicated-job mode")
 		}
 		serviceMode.GlobalJob = &swarm.GlobalJob{}
 	default:
-		return serviceMode, errors.Errorf("Unknown mode: %s, only replicated and global supported", options.mode)
+		return serviceMode, fmt.Errorf("unknown mode: %s, only replicated and global supported", options.mode)
 	}
 	return serviceMode, nil
 }
@@ -692,7 +734,7 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 	// flags are not set, then the values will be nil. If they are non-nil,
 	// then return an error.
 	if (serviceMode.ReplicatedJob != nil || serviceMode.GlobalJob != nil) && (updateConfig != nil || rollbackConfig != nil) {
-		return service, errors.Errorf("update and rollback configuration is not supported for jobs")
+		return service, errors.New("update and rollback configuration is not supported for jobs")
 	}
 
 	networks := convertNetworks(options.networks)
@@ -707,7 +749,7 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 		return networks[i].Target < networks[j].Target
 	})
 
-	resources, err := options.resources.ToResourceRequirements()
+	resources, err := options.resources.ToResourceRequirements(flags)
 	if err != nil {
 		return service, err
 	}
@@ -736,7 +778,7 @@ func (options *serviceOptions) ToService(ctx context.Context, apiClient client.N
 				Mounts:     options.mounts.Value(),
 				Init:       &options.init,
 				DNSConfig: &swarm.DNSConfig{
-					Nameservers: options.dns.GetSlice(),
+					Nameservers: toNetipAddrSlice(options.dns.GetSlice()),
 					Search:      options.dnsSearch.GetSlice(),
 					Options:     options.dnsOption.GetSlice(),
 				},
@@ -862,6 +904,10 @@ func addServiceFlags(flags *pflag.FlagSet, options *serviceOptions, defaultFlagV
 	flags.Var(&options.resources.resMemBytes, flagReserveMemory, "Reserve Memory")
 	flags.Int64Var(&options.resources.limitPids, flagLimitPids, 0, "Limit maximum number of processes (default 0 = unlimited)")
 	flags.SetAnnotation(flagLimitPids, "version", []string{"1.41"})
+	flags.Var(&options.resources.swapBytes, flagSwapBytes, "Swap Bytes (-1 for unlimited)")
+	flags.SetAnnotation(flagLimitPids, "version", []string{"1.52"})
+	flags.Int64Var(&options.resources.memSwappiness, flagMemSwappiness, -1, "Tune memory swappiness (0-100), -1 to reset to default")
+	flags.SetAnnotation(flagLimitPids, "version", []string{"1.52"})
 
 	flags.Var(&options.stopGrace, flagStopGracePeriod, flagDesc(flagStopGracePeriod, "Time to wait before force killing a container (ns|us|ms|s|m|h)"))
 	flags.Var(&options.replicas, flagReplicas, "Number of tasks")
@@ -1046,4 +1092,21 @@ const (
 	flagUlimitAdd               = "ulimit-add"
 	flagUlimitRemove            = "ulimit-rm"
 	flagOomScoreAdj             = "oom-score-adj"
+	flagSwapBytes               = "memory-swap"
+	flagMemSwappiness           = "memory-swappiness"
 )
+
+func toNetipAddrSlice(ips []string) []netip.Addr {
+	if len(ips) == 0 {
+		return nil
+	}
+	netIPs := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			continue
+		}
+		netIPs = append(netIPs, addr)
+	}
+	return netIPs
+}

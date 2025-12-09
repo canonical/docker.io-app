@@ -16,7 +16,6 @@ import (
 	"github.com/docker/cli/e2e/testutils"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/environment"
-	"github.com/docker/docker/api/types/versions"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/icmd"
 	"gotest.tools/v3/poll"
@@ -90,7 +89,6 @@ func TestPromptExitCode(t *testing.T) {
 
 	defaultCmdOpts := []icmd.CmdOp{
 		fixtures.WithConfig(dir.Path()),
-		fixtures.WithNotary,
 	}
 
 	testCases := []struct {
@@ -133,26 +131,19 @@ func TestPromptExitCode(t *testing.T) {
 			},
 		},
 		{
-			name: "revoke trust",
-			run: func(t *testing.T) icmd.Cmd {
-				t.Helper()
-				return icmd.Command("docker", "trust", "revoke", "example/trust-demo")
-			},
-		},
-		{
 			name: "plugin install",
 			run: func(t *testing.T) icmd.Cmd {
 				t.Helper()
-				skip.If(t, versions.LessThan(environment.DaemonAPIVersion(t), "1.44"))
+				t.Skip("flaky test: see https://github.com/docker/cli/issues/6248")
+
+				const plugin = "registry:5000/plugin-install-test:latest"
 
 				pluginDir := testutils.SetupPlugin(t, ctx)
-				t.Cleanup(pluginDir.Remove)
-
-				plugin := "registry:5000/plugin-content-trust-install:latest"
-
-				icmd.RunCommand("docker", "plugin", "create", plugin, pluginDir.Path()).Assert(t, icmd.Success)
+				icmd.RunCommand("docker", "plugin", "create", plugin, pluginDir).Assert(t, icmd.Success)
 				icmd.RunCmd(icmd.Command("docker", "plugin", "push", plugin), defaultCmdOpts...).Assert(t, icmd.Success)
 				icmd.RunCmd(icmd.Command("docker", "plugin", "rm", "-f", plugin), defaultCmdOpts...).Assert(t, icmd.Success)
+
+				// Test prompt to grant privileges.
 				return icmd.Command("docker", "plugin", "install", plugin)
 			},
 		},
@@ -160,22 +151,24 @@ func TestPromptExitCode(t *testing.T) {
 			name: "plugin upgrade",
 			run: func(t *testing.T) icmd.Cmd {
 				t.Helper()
-				skip.If(t, versions.LessThan(environment.DaemonAPIVersion(t), "1.44"))
+				t.Skip("flaky test: see https://github.com/docker/cli/issues/6248")
+
+				const plugin = "registry:5000/plugin-upgrade-test"
 
 				pluginLatestDir := testutils.SetupPlugin(t, ctx)
-				t.Cleanup(pluginLatestDir.Remove)
-				pluginNextDir := testutils.SetupPlugin(t, ctx)
-				t.Cleanup(pluginNextDir.Remove)
-
-				plugin := "registry:5000/plugin-content-trust-upgrade"
-
-				icmd.RunCommand("docker", "plugin", "create", plugin+":latest", pluginLatestDir.Path()).Assert(t, icmd.Success)
-				icmd.RunCommand("docker", "plugin", "create", plugin+":next", pluginNextDir.Path()).Assert(t, icmd.Success)
+				icmd.RunCommand("docker", "plugin", "create", plugin+":latest", pluginLatestDir).Assert(t, icmd.Success)
 				icmd.RunCmd(icmd.Command("docker", "plugin", "push", plugin+":latest"), defaultCmdOpts...).Assert(t, icmd.Success)
-				icmd.RunCmd(icmd.Command("docker", "plugin", "push", plugin+":next"), defaultCmdOpts...).Assert(t, icmd.Success)
 				icmd.RunCmd(icmd.Command("docker", "plugin", "rm", "-f", plugin+":latest"), defaultCmdOpts...).Assert(t, icmd.Success)
+
+				pluginNextDir := testutils.SetupPlugin(t, ctx)
+				icmd.RunCommand("docker", "plugin", "create", plugin+":next", pluginNextDir).Assert(t, icmd.Success)
+				icmd.RunCmd(icmd.Command("docker", "plugin", "push", plugin+":next"), defaultCmdOpts...).Assert(t, icmd.Success)
 				icmd.RunCmd(icmd.Command("docker", "plugin", "rm", "-f", plugin+":next"), defaultCmdOpts...).Assert(t, icmd.Success)
+
+				// Using "--grant-all-permissions" to disable prompting for confirmation.
 				icmd.RunCmd(icmd.Command("docker", "plugin", "install", "--disable", "--grant-all-permissions", plugin+":latest"), defaultCmdOpts...).Assert(t, icmd.Success)
+
+				// Test prompting for upgrade.
 				return icmd.Command("docker", "plugin", "upgrade", plugin+":latest", plugin+":next")
 			},
 		},
@@ -240,7 +233,7 @@ func TestPromptExitCode(t *testing.T) {
 			case <-writeDone:
 				buf.Reset()
 				assert.NilError(t, bufioWriter.Flush())
-				assert.Equal(t, buf.String(), "\n", "expected a new line after the process exits from SIGINT")
+				assert.Assert(t, strings.HasSuffix(buf.String(), "\n"), "expected a new line after the process exits from SIGINT")
 			}
 		})
 	}

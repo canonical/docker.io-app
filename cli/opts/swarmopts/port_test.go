@@ -5,8 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/sirupsen/logrus"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -136,12 +137,14 @@ func TestPortOptValidSimpleSyntax(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		var port PortOpt
-		assert.NilError(t, port.Set(tc.value))
-		assert.Check(t, is.Len(port.Value(), len(tc.expected)))
-		for _, expectedPortConfig := range tc.expected {
-			assertContains(t, port.Value(), expectedPortConfig)
-		}
+		t.Run(tc.value, func(t *testing.T) {
+			var port PortOpt
+			assert.NilError(t, port.Set(tc.value))
+			assert.Check(t, is.Len(port.Value(), len(tc.expected)))
+			for _, expectedPortConfig := range tc.expected {
+				assertContains(t, port.Value(), expectedPortConfig)
+			}
+		})
 	}
 }
 
@@ -227,12 +230,14 @@ func TestPortOptValidComplexSyntax(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		var port PortOpt
-		assert.NilError(t, port.Set(tc.value))
-		assert.Check(t, is.Len(port.Value(), len(tc.expected)))
-		for _, expectedPortConfig := range tc.expected {
-			assertContains(t, port.Value(), expectedPortConfig)
-		}
+		t.Run(tc.value, func(t *testing.T) {
+			var port PortOpt
+			assert.NilError(t, port.Set(tc.value))
+			assert.Check(t, is.Len(port.Value(), len(tc.expected)))
+			for _, expectedPortConfig := range tc.expected {
+				assertContains(t, port.Value(), expectedPortConfig)
+			}
+		})
 	}
 }
 
@@ -309,7 +314,8 @@ func TestPortOptInvalidSimpleSyntax(t *testing.T) {
 		},
 		{
 			value:         "",
-			expectedError: "no port specified: <empty>",
+			expectedError: "invalid proto: ",
+			// expectedError: "no port specified: <empty>", // FIXME(thaJeztah): re-enable once https://github.com/docker/go-connections/pull/143 is in a go-connections release.
 		},
 		{
 			value:         "1.1.1.1:80:80",
@@ -317,8 +323,10 @@ func TestPortOptInvalidSimpleSyntax(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		var port PortOpt
-		assert.Error(t, port.Set(tc.value), tc.expectedError)
+		t.Run(tc.value, func(t *testing.T) {
+			var port PortOpt
+			assert.Error(t, port.Set(tc.value), tc.expectedError)
+		})
 	}
 }
 
@@ -347,7 +355,7 @@ func TestConvertPortToPortConfigWithIP(t *testing.T) {
 	logrus.SetOutput(&b)
 	for _, tc := range testCases {
 		t.Run(tc.value, func(t *testing.T) {
-			_, err := ConvertPortToPortConfig("80/tcp", map[nat.Port][]nat.PortBinding{
+			_, err := ConvertPortToPortConfig(network.MustParsePort("80/tcp"), map[nat.Port][]nat.PortBinding{
 				"80/tcp": {{HostIP: tc.value, HostPort: "2345"}},
 			})
 			assert.NilError(t, err)

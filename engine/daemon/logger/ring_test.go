@@ -1,7 +1,8 @@
-package logger // import "github.com/docker/docker/daemon/logger"
+package logger
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func TestRingClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Close()
-	if err := r.Enqueue(&Message{}); err != errClosed {
+	if err := r.Enqueue(&Message{}); !errors.Is(err, errClosed) {
 		t.Fatalf("expected errClosed, got: %v", err)
 	}
 	if len(r.queue) != 1 {

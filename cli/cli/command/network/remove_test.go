@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -110,12 +111,16 @@ func TestNetworkRemovePromptTermination(t *testing.T) {
 		networkRemoveFunc: func(ctx context.Context, networkID string) error {
 			return errors.New("fakeClient networkRemoveFunc should not be called")
 		},
-		networkInspectFunc: func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, []byte, error) {
-			return network.Inspect{
-				ID:      "existing-network",
-				Name:    "existing-network",
-				Ingress: true,
-			}, nil, nil
+		networkInspectFunc: func(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+			return client.NetworkInspectResult{
+				Network: network.Inspect{
+					Network: network.Network{
+						ID:      "existing-network",
+						Name:    "existing-network",
+						Ingress: true,
+					},
+				},
+			}, nil
 		},
 	})
 	cmd := newRemoveCommand(cli)

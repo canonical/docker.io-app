@@ -3,98 +3,98 @@ package system
 import (
 	"context"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
 )
 
 type fakeClient struct {
 	client.Client
 
 	version            string
-	containerListFunc  func(context.Context, container.ListOptions) ([]container.Summary, error)
-	containerPruneFunc func(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error)
-	eventsFn           func(context.Context, events.ListOptions) (<-chan events.Message, <-chan error)
-	imageListFunc      func(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
-	infoFunc           func(ctx context.Context) (system.Info, error)
-	networkListFunc    func(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
-	networkPruneFunc   func(ctx context.Context, pruneFilter filters.Args) (network.PruneReport, error)
-	nodeListFunc       func(ctx context.Context, options swarm.NodeListOptions) ([]swarm.Node, error)
-	serverVersion      func(ctx context.Context) (types.Version, error)
-	volumeListFunc     func(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error)
+	containerListFunc  func(context.Context, client.ContainerListOptions) ([]container.Summary, error)
+	containerPruneFunc func(ctx context.Context, options client.ContainerPruneOptions) (client.ContainerPruneResult, error)
+	eventsFn           func(context.Context, client.EventsListOptions) (<-chan events.Message, <-chan error)
+	imageListFunc      func(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
+	infoFunc           func(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
+	networkListFunc    func(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error)
+	networkPruneFunc   func(ctx context.Context, options client.NetworkPruneOptions) (client.NetworkPruneResult, error)
+	nodeListFunc       func(ctx context.Context, options client.NodeListOptions) (client.NodeListResult, error)
+	serverVersion      func(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
+	volumeListFunc     func(ctx context.Context, options client.VolumeListOptions) (client.VolumeListResult, error)
 }
 
 func (cli *fakeClient) ClientVersion() string {
 	return cli.version
 }
 
-func (cli *fakeClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
+func (cli *fakeClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	if cli.containerListFunc != nil {
-		return cli.containerListFunc(ctx, options)
+		res, err := cli.containerListFunc(ctx, options)
+		return client.ContainerListResult{
+			Items: res,
+		}, err
 	}
-	return []container.Summary{}, nil
+	return client.ContainerListResult{}, nil
 }
 
-func (cli *fakeClient) ContainersPrune(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error) {
+func (cli *fakeClient) ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
 	if cli.containerPruneFunc != nil {
-		return cli.containerPruneFunc(ctx, pruneFilters)
+		return cli.containerPruneFunc(ctx, opts)
 	}
-	return container.PruneReport{}, nil
+	return client.ContainerPruneResult{}, nil
 }
 
-func (cli *fakeClient) Events(ctx context.Context, opts events.ListOptions) (<-chan events.Message, <-chan error) {
-	return cli.eventsFn(ctx, opts)
+func (cli *fakeClient) Events(ctx context.Context, opts client.EventsListOptions) client.EventsResult {
+	eventC, errC := cli.eventsFn(ctx, opts)
+	return client.EventsResult{
+		Messages: eventC,
+		Err:      errC,
+	}
 }
 
-func (cli *fakeClient) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+func (cli *fakeClient) ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error) {
 	if cli.imageListFunc != nil {
 		return cli.imageListFunc(ctx, options)
 	}
-	return []image.Summary{}, nil
+	return client.ImageListResult{}, nil
 }
 
-func (cli *fakeClient) Info(ctx context.Context) (system.Info, error) {
+func (cli *fakeClient) Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error) {
 	if cli.infoFunc != nil {
-		return cli.infoFunc(ctx)
+		return cli.infoFunc(ctx, options)
 	}
-	return system.Info{}, nil
+	return client.SystemInfoResult{}, nil
 }
 
-func (cli *fakeClient) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error) {
+func (cli *fakeClient) NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error) {
 	if cli.networkListFunc != nil {
 		return cli.networkListFunc(ctx, options)
 	}
-	return []network.Summary{}, nil
+	return client.NetworkListResult{}, nil
 }
 
-func (cli *fakeClient) NetworksPrune(ctx context.Context, pruneFilter filters.Args) (network.PruneReport, error) {
+func (cli *fakeClient) NetworksPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
 	if cli.networkPruneFunc != nil {
-		return cli.networkPruneFunc(ctx, pruneFilter)
+		return cli.networkPruneFunc(ctx, opts)
 	}
-	return network.PruneReport{}, nil
+	return client.NetworkPruneResult{}, nil
 }
 
-func (cli *fakeClient) NodeList(ctx context.Context, options swarm.NodeListOptions) ([]swarm.Node, error) {
+func (cli *fakeClient) NodeList(ctx context.Context, options client.NodeListOptions) (client.NodeListResult, error) {
 	if cli.nodeListFunc != nil {
 		return cli.nodeListFunc(ctx, options)
 	}
-	return []swarm.Node{}, nil
+	return client.NodeListResult{}, nil
 }
 
-func (cli *fakeClient) ServerVersion(ctx context.Context) (types.Version, error) {
-	return cli.serverVersion(ctx)
+func (cli *fakeClient) ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error) {
+	return cli.serverVersion(ctx, options)
 }
 
-func (cli *fakeClient) VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+func (cli *fakeClient) VolumeList(ctx context.Context, options client.VolumeListOptions) (client.VolumeListResult, error) {
 	if cli.volumeListFunc != nil {
 		return cli.volumeListFunc(ctx, options)
 	}
-	return volume.ListResponse{}, nil
+	return client.VolumeListResult{}, nil
 }

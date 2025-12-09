@@ -1,9 +1,9 @@
-package cluster // import "github.com/docker/docker/daemon/cluster"
+package cluster
 
 import (
 	"net"
 
-	"github.com/docker/docker/internal/nlwrap"
+	"github.com/moby/moby/v2/daemon/libnetwork/nlwrap"
 	"github.com/vishvananda/netlink"
 )
 

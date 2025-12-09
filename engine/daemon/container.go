@@ -1,27 +1,28 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/containerd/log"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	networktypes "github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/daemon/network"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/oci/caps"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/system"
-	volumemounts "github.com/docker/docker/volume/mounts"
-	"github.com/docker/go-connections/nat"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	networktypes "github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/network"
+	"github.com/moby/moby/v2/daemon/pkg/oci/caps"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	volumemounts "github.com/moby/moby/v2/daemon/volume/mounts"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/signal"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/selinux/go-selinux"
@@ -36,7 +37,7 @@ import (
 //     unique enough to only return a single container object
 //     If none of these searches succeed, an error is returned
 func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, error) {
-	if len(prefixOrName) == 0 {
+	if prefixOrName == "" {
 		return nil, errors.WithStack(invalidIdentifier(prefixOrName))
 	}
 
@@ -78,28 +79,11 @@ func (daemon *Daemon) load(id string) (*container.Container, error) {
 	}
 	selinux.ReserveLabel(ctr.ProcessLabel)
 
-	if ctr.ImagePlatform.Architecture == "" {
-		migration := daemonPlatformReader{
-			imageService: daemon.imageService,
-		}
-		if daemon.containerdClient != nil {
-			migration.content = daemon.containerdClient.ContentStore()
-		}
-		migrateContainerOS(context.TODO(), migration, ctr)
-	}
-
 	if ctr.ID != id {
 		return ctr, fmt.Errorf("Container %s is stored at %s", ctr.ID, id)
 	}
 
 	return ctr, nil
-}
-
-// Register makes a container object usable by the daemon as <container.ID>
-//
-// Deprecated: this function is unused and will be removed in the next release.
-func (daemon *Daemon) Register(c *container.Container) error {
-	return daemon.register(context.TODO(), c)
 }
 
 // register makes a container object usable by the daemon as [container.Container.ID].
@@ -159,7 +143,7 @@ func (daemon *Daemon) newContainer(name string, platform ocispec.Platform, confi
 	base.Path = entrypoint
 	base.Args = args // FIXME: de-duplicate from config
 	base.Config = config
-	base.HostConfig = &containertypes.HostConfig{}
+	base.HostConfig = hostConfig
 	base.ImageID = imgID
 	base.NetworkSettings = &network.Settings{}
 	base.Name = name
@@ -178,8 +162,8 @@ func getEntrypointAndArgs(configEntrypoint, configCmd []string) (string, []strin
 
 // GetByName returns a container given a name.
 func (daemon *Daemon) GetByName(name string) (*container.Container, error) {
-	if len(name) == 0 {
-		return nil, fmt.Errorf("No container name supplied")
+	if name == "" {
+		return nil, errors.New("No container name supplied")
 	}
 	fullName := name
 	if name[0] != '/' {
@@ -196,32 +180,35 @@ func (daemon *Daemon) GetByName(name string) (*container.Container, error) {
 	return e, nil
 }
 
-func (daemon *Daemon) setSecurityOptions(cfg *config.Config, container *container.Container, hostConfig *containertypes.HostConfig) error {
-	container.Lock()
-	defer container.Unlock()
-	return daemon.parseSecurityOpt(cfg, &container.SecurityOptions, hostConfig)
+// GetDependentContainers returns a list of containers that depend on the given container.
+// Dependencies are determined by:
+//   - Network mode dependencies (--network=container:xxx)
+//   - Legacy container links (--link)
+//
+// This is primarily used during daemon startup to determine container startup order,
+// ensuring that dependent containers are started after their dependencies are running.
+// Upon error, it returns the last known dependent containers, which may be empty.
+func (daemon *Daemon) GetDependentContainers(c *container.Container) []*container.Container {
+	var dependentContainers []*container.Container
+
+	if c.HostConfig.NetworkMode.IsContainer() {
+		// If the container is using a network mode that depends on another container,
+		// we need to find that container and add it to the dependency map.
+		dependencyContainer, err := daemon.GetContainer(c.HostConfig.NetworkMode.ConnectedContainer())
+		if err != nil {
+			log.G(context.TODO()).WithError(err).Errorf("Could not find dependent container for %s", c.ID)
+			return dependentContainers
+		}
+		dependentContainers = append(dependentContainers, dependencyContainer)
+	}
+
+	return append(dependentContainers, slices.Collect(maps.Values(daemon.linkIndex.children(c)))...)
 }
 
-func (daemon *Daemon) setHostConfig(container *container.Container, hostConfig *containertypes.HostConfig, defaultReadOnlyNonRecursive bool) error {
-	// Do not lock while creating volumes since this could be calling out to external plugins
-	// Don't want to block other actions, like `docker ps` because we're waiting on an external plugin
-	if err := daemon.registerMountPoints(container, hostConfig, defaultReadOnlyNonRecursive); err != nil {
-		return err
-	}
-
+func (daemon *Daemon) setSecurityOptions(cfg *config.Config, container *container.Container) error {
 	container.Lock()
 	defer container.Unlock()
-
-	// Register any links from the host config before starting the container
-	if err := daemon.registerLinks(container, hostConfig); err != nil {
-		return err
-	}
-
-	if hostConfig != nil && hostConfig.NetworkMode == "" {
-		hostConfig.NetworkMode = networktypes.NetworkDefault
-	}
-	container.HostConfig = hostConfig
-	return nil
+	return daemon.parseSecurityOpt(cfg, &container.SecurityOptions, container.HostConfig)
 }
 
 // verifyContainerSettings performs validation of the hostconfig and config
@@ -252,7 +239,7 @@ func validateContainerConfig(config *containertypes.Config) error {
 	if err := translateWorkingDir(config); err != nil {
 		return err
 	}
-	if len(config.StopSignal) > 0 {
+	if config.StopSignal != "" {
 		if _, err := signal.ParseSignal(config.StopSignal); err != nil {
 			return err
 		}
@@ -346,15 +333,19 @@ func validateHealthCheck(healthConfig *containertypes.HealthConfig) error {
 	return nil
 }
 
-func validatePortBindings(ports nat.PortMap) error {
+func validatePortBindings(ports networktypes.PortMap) error {
 	for port := range ports {
-		_, portStr := nat.SplitProtoPort(string(port))
-		if _, err := nat.ParsePort(portStr); err != nil {
-			return errors.Errorf("invalid port specification: %q", portStr)
+		if !port.IsValid() {
+			return errors.Errorf("invalid port specification: %q", port.String())
 		}
+
 		for _, pb := range ports[port] {
-			_, err := nat.NewPort(nat.SplitProtoPort(pb.HostPort))
-			if err != nil {
+			if pb.HostPort == "" {
+				// Empty HostPort means to map to an ephemeral port.
+				continue
+			}
+
+			if _, err := networktypes.ParsePortRange(pb.HostPort); err != nil {
 				return errors.Errorf("invalid port specification: %q", pb.HostPort)
 			}
 		}
@@ -369,7 +360,7 @@ func translateWorkingDir(config *containertypes.Config) error {
 		return nil
 	}
 	wd := filepath.FromSlash(config.WorkingDir) // Ensure in platform semantics
-	if !system.IsAbs(wd) {
+	if !filepath.IsAbs(wd) && !strings.HasPrefix(wd, string(os.PathSeparator)) {
 		return fmt.Errorf("the working directory '%s' is invalid, it needs to be an absolute path", config.WorkingDir)
 	}
 	config.WorkingDir = filepath.Clean(wd)

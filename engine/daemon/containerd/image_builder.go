@@ -21,19 +21,20 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/builder"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/pkg/stringid"
-	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/go-archive"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/v2/daemon/builder"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/internal/progress"
+	"github.com/moby/moby/v2/daemon/internal/streamformatter"
+	"github.com/moby/moby/v2/daemon/internal/stringid"
+	"github.com/moby/moby/v2/daemon/server/buildbackend"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -64,10 +65,10 @@ const (
 // GetImageAndReleasableLayer returns an image and releaseable layer for a
 // reference or ID. Every call to GetImageAndReleasableLayer MUST call
 // releasableLayer.Release() to prevent leaking of layers.
-func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID string, opts backend.GetImageAndLayerOptions) (builder.Image, builder.ROLayer, error) {
+func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID string, opts buildbackend.GetImageAndLayerOptions) (builder.Image, builder.ROLayer, error) {
 	if refOrID == "" { // FROM scratch
 		if runtime.GOOS == "windows" {
-			return nil, nil, fmt.Errorf(`"FROM scratch" is not supported on Windows`)
+			return nil, nil, errors.New(`"FROM scratch" is not supported on Windows`)
 		}
 		if opts.Platform != nil {
 			if err := image.CheckOS(opts.Platform.OS); err != nil {
@@ -80,10 +81,10 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 		}, nil
 	}
 
-	if opts.PullOption != backend.PullOptionForcePull {
+	if opts.PullOption != buildbackend.PullOptionForcePull {
 		// TODO(laurazard): same as below
-		img, err := i.GetImage(ctx, refOrID, backend.GetImageOpts{Platform: opts.Platform})
-		if err != nil && opts.PullOption == backend.PullOptionNoPull {
+		img, err := i.GetImage(ctx, refOrID, imagebackend.GetImageOpts{Platform: opts.Platform})
+		if err != nil && opts.PullOption == buildbackend.PullOptionNoPull {
 			return nil, nil, err
 		}
 		imgDesc, err := i.resolveDescriptor(ctx, refOrID)
@@ -118,7 +119,7 @@ func (i *ImageService) GetImageAndReleasableLayer(ctx context.Context, refOrID s
 
 	// TODO(laurazard): pullForBuilder should return whatever we
 	// need here instead of having to go and get it again
-	img, err := i.GetImage(ctx, refOrID, backend.GetImageOpts{
+	img, err := i.GetImage(ctx, refOrID, imagebackend.GetImageOpts{
 		Platform: opts.Platform,
 	})
 	if err != nil {
@@ -146,11 +147,18 @@ func (i *ImageService) pullForBuilder(ctx context.Context, name string, authConf
 		pullRegistryAuth = &resolvedConfig
 	}
 
-	if err := i.PullImage(ctx, reference.TagNameOnly(ref), platform, nil, pullRegistryAuth, output); err != nil {
+	pullOptions := imagebackend.PullOptions{
+		AuthConfig: pullRegistryAuth,
+		OutStream:  output,
+	}
+	if platform != nil {
+		pullOptions.Platforms = append(pullOptions.Platforms, *platform)
+	}
+	if err := i.PullImage(ctx, reference.TagNameOnly(ref), pullOptions); err != nil {
 		return nil, err
 	}
 
-	img, err := i.GetImage(ctx, name, backend.GetImageOpts{Platform: platform})
+	img, err := i.GetImage(ctx, name, imagebackend.GetImageOpts{Platform: platform})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) && img != nil && platform != nil {
 			imgPlat := ocispec.Platform{
@@ -189,7 +197,7 @@ Please notify the image author to correct the configuration.`,
 
 func newROLayerForImage(ctx context.Context, imgDesc *ocispec.Descriptor, i *ImageService, platform *ocispec.Platform) (builder.ROLayer, error) {
 	if imgDesc == nil {
-		return nil, fmt.Errorf("can't make an RO layer for a nil image :'(")
+		return nil, errors.New("can't make an RO layer for a nil image :'(")
 	}
 
 	platMatcher := platforms.Default()
@@ -376,7 +384,7 @@ func (rw *rwlayer) Commit() (_ builder.ROLayer, outErr error) {
 	}
 	diffIDStr, ok := info.Labels["containerd.io/uncompressed"]
 	if !ok {
-		return nil, fmt.Errorf("invalid differ response with no diffID")
+		return nil, errors.New("invalid differ response with no diffID")
 	}
 	diffID, err := digest.Parse(diffIDStr)
 	if err != nil {
@@ -387,7 +395,7 @@ func (rw *rwlayer) Commit() (_ builder.ROLayer, outErr error) {
 		key:                key,
 		c:                  rw.c,
 		snapshotter:        rw.snapshotter,
-		diffID:             layer.DiffID(diffID),
+		diffID:             diffID,
 		contentStoreDigest: desc.Digest,
 		lease:              &lease,
 	}, nil
@@ -483,7 +491,7 @@ func (i *ImageService) CreateImage(ctx context.Context, config []byte, parent st
 	return image.Clone(imgToCreate, createdImageId), nil
 }
 
-func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec.DockerOCIImage,
+func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate dockerspec.DockerOCIImage,
 	parentDigest digest.Digest, layers []ocispec.Descriptor,
 	containerConfig container.Config,
 ) (image.ID, error) {
@@ -528,7 +536,7 @@ func (i *ImageService) createImageOCI(ctx context.Context, imgToCreate imagespec
 
 // writeContentsForImage will commit oci image config and manifest into containerd's content store.
 func writeContentsForImage(ctx context.Context, snName string, cs content.Store,
-	newConfig imagespec.DockerOCIImage, layers []ocispec.Descriptor,
+	newConfig dockerspec.DockerOCIImage, layers []ocispec.Descriptor,
 	containerConfig container.Config,
 ) (
 	manifestDesc ocispec.Descriptor,

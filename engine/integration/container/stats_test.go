@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"encoding/json"
@@ -6,8 +6,10 @@ import (
 	"reflect"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
+	cerrdefs "github.com/containerd/errdefs"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -20,31 +22,74 @@ func TestStats(t *testing.T) {
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
-	info, err := apiClient.Info(ctx)
+	result, err := apiClient.Info(ctx, client.InfoOptions{})
 	assert.NilError(t, err)
 
+	info := result.Info
 	cID := container.Run(ctx, t, apiClient)
-	resp, err := apiClient.ContainerStats(ctx, cID, false)
-	assert.NilError(t, err)
-	defer resp.Body.Close()
+	t.Run("no-stream", func(t *testing.T) {
+		resp, err := apiClient.ContainerStats(ctx, cID, client.ContainerStatsOptions{
+			Stream:                false,
+			IncludePreviousSample: true,
+		})
+		assert.NilError(t, err)
+		defer func() { _ = resp.Body.Close() }()
 
-	var v containertypes.StatsResponse
-	err = json.NewDecoder(resp.Body).Decode(&v)
-	assert.NilError(t, err)
-	assert.Check(t, is.Equal(int64(v.MemoryStats.Limit), info.MemTotal))
-	assert.Check(t, !reflect.DeepEqual(v.PreCPUStats, containertypes.CPUStats{}))
-	err = json.NewDecoder(resp.Body).Decode(&v)
-	assert.Assert(t, is.ErrorContains(err, ""), io.EOF)
+		var v containertypes.StatsResponse
+		err = json.NewDecoder(resp.Body).Decode(&v)
+		assert.NilError(t, err)
+		assert.Check(t, is.Equal(int64(v.MemoryStats.Limit), info.MemTotal))
+		assert.Check(t, !reflect.DeepEqual(v.PreCPUStats, containertypes.CPUStats{}))
+		err = json.NewDecoder(resp.Body).Decode(&v)
+		assert.Assert(t, is.ErrorIs(err, io.EOF))
+	})
 
-	resp, err = apiClient.ContainerStatsOneShot(ctx, cID)
-	assert.NilError(t, err)
-	defer resp.Body.Close()
+	t.Run("one-shot", func(t *testing.T) {
+		resp, err := apiClient.ContainerStats(ctx, cID, client.ContainerStatsOptions{
+			Stream:                false,
+			IncludePreviousSample: false,
+		})
+		assert.NilError(t, err)
+		defer func() { _ = resp.Body.Close() }()
 
-	v = containertypes.StatsResponse{}
-	err = json.NewDecoder(resp.Body).Decode(&v)
-	assert.NilError(t, err)
-	assert.Check(t, is.Equal(int64(v.MemoryStats.Limit), info.MemTotal))
-	assert.Check(t, is.DeepEqual(v.PreCPUStats, containertypes.CPUStats{}))
-	err = json.NewDecoder(resp.Body).Decode(&v)
-	assert.Assert(t, is.ErrorContains(err, ""), io.EOF)
+		var v containertypes.StatsResponse
+		err = json.NewDecoder(resp.Body).Decode(&v)
+		assert.NilError(t, err)
+		assert.Check(t, is.Equal(int64(v.MemoryStats.Limit), info.MemTotal))
+		assert.Check(t, reflect.DeepEqual(v.PreCPUStats, containertypes.CPUStats{}))
+		err = json.NewDecoder(resp.Body).Decode(&v)
+		assert.Assert(t, is.ErrorIs(err, io.EOF))
+	})
+}
+
+func TestStatsContainerNotFound(t *testing.T) {
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	tests := []struct {
+		name    string
+		options client.ContainerStatsOptions
+	}{
+		{
+			name: "with stream",
+			options: client.ContainerStatsOptions{
+				Stream: true,
+			},
+		},
+		{
+			name: "without stream",
+			options: client.ContainerStatsOptions{
+				Stream:                false,
+				IncludePreviousSample: true,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := apiClient.ContainerStats(ctx, "no-such-container", tc.options)
+			assert.ErrorType(t, err, cerrdefs.IsNotFound)
+			assert.ErrorContains(t, err, "no-such-container")
+		})
+	}
 }

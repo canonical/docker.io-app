@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package store
 
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -26,7 +26,7 @@ func testMetadata(name string) Metadata {
 func TestMetadataGetNotExisting(t *testing.T) {
 	testee := metadataStore{root: t.TempDir(), config: testCfg}
 	_, err := testee.get("noexist")
-	assert.ErrorType(t, err, cerrdefs.IsNotFound)
+	assert.ErrorType(t, err, errdefs.IsNotFound)
 }
 
 func TestMetadataCreateGetRemove(t *testing.T) {
@@ -60,7 +60,7 @@ func TestMetadataCreateGetRemove(t *testing.T) {
 	assert.NilError(t, testee.remove("test-context"))
 	assert.NilError(t, testee.remove("test-context")) // support duplicate remove
 	_, err = testee.get("test-context")
-	assert.ErrorType(t, err, cerrdefs.IsNotFound)
+	assert.ErrorType(t, err, errdefs.IsNotFound)
 }
 
 func TestMetadataRespectJsonAnnotation(t *testing.T) {

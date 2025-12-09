@@ -1,27 +1,30 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.24.3
+ARG GO_VERSION=1.25.5
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
-ARG XX_VERSION=1.6.1
+
+# XX_VERSION specifies the version of the xx utility to use.
+# It must be a valid tag in the docker.io/tonistiigi/xx image repository.
+ARG XX_VERSION=1.7.0
 
 # VPNKIT_VERSION is the version of the vpnkit binary which is used as a fallback
 # network driver for rootless.
 ARG VPNKIT_VERSION=0.6.0
 
 # DOCKERCLI_VERSION is the version of the CLI to install in the dev-container.
-ARG DOCKERCLI_VERSION=v28.2.0-rc.2
+ARG DOCKERCLI_VERSION=v29.0.1
 ARG DOCKERCLI_REPOSITORY="https://github.com/docker/cli.git"
 
 # cli version used for integration-cli tests
 ARG DOCKERCLI_INTEGRATION_REPOSITORY="https://github.com/docker/cli.git"
-ARG DOCKERCLI_INTEGRATION_VERSION=v18.06.3-ce
+ARG DOCKERCLI_INTEGRATION_VERSION=v25.0.5
 
 # BUILDX_VERSION is the version of buildx to install in the dev container.
-ARG BUILDX_VERSION=0.24.0
+ARG BUILDX_VERSION=0.30.1
 
 # COMPOSE_VERSION is the version of compose to install in the dev container.
-ARG COMPOSE_VERSION=v2.36.2
+ARG COMPOSE_VERSION=v2.40.0
 
 ARG SYSTEMD="false"
 ARG FIREWALLD="false"
@@ -34,8 +37,8 @@ ARG DOCKER_STATIC=1
 ARG REGISTRY_VERSION=3.0.0
 
 # delve is currently only supported on linux/amd64 and linux/arm64;
-# https://github.com/go-delve/delve/blob/v1.24.1/pkg/proc/native/support_sentinel.go#L1
-# https://github.com/go-delve/delve/blob/v1.24.1/pkg/proc/native/support_sentinel_linux.go#L1
+# https://github.com/go-delve/delve/blob/v1.25.0/pkg/proc/native/support_sentinel.go#L1
+# https://github.com/go-delve/delve/blob/v1.25.0/pkg/proc/native/support_sentinel_linux.go#L1
 #
 # ppc64le support was added in v1.21.1, but is still experimental, and requires
 # the "-tags exp.linuxppc64le" build-tag to be set:
@@ -64,7 +67,6 @@ COPY --from=xx / /
 RUN go telemetry off && [ "$(go telemetry)" = "off" ] || { echo "Failed to disable Go telemetry"; exit 1; }
 RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 RUN apt-get update && apt-get install --no-install-recommends -y file
-ENV GO111MODULE=off
 ENV GOTOOLCHAIN=local
 
 FROM base AS criu
@@ -82,25 +84,18 @@ FROM distribution/distribution:$REGISTRY_VERSION AS registry
 RUN mkdir /build && mv /bin/registry /build/registry
 
 # go-swagger
-FROM base AS swagger-src
-WORKDIR /usr/src/swagger
-# Currently uses a fork from https://github.com/kolyshkin/go-swagger/tree/golang-1.13-fix
-# TODO: move to under moby/ or fix upstream go-swagger to work for us.
-RUN git init . && git remote add origin "https://github.com/kolyshkin/go-swagger.git"
-# GO_SWAGGER_COMMIT specifies the version of the go-swagger binary to build and
-# install. Go-swagger is used in CI for validating swagger.yaml in hack/validate/swagger-gen
-ARG GO_SWAGGER_COMMIT=c56166c036004ba7a3a321e5951ba472b9ae298c
-RUN git fetch -q --depth 1 origin "${GO_SWAGGER_COMMIT}" && git checkout -q FETCH_HEAD
-
 FROM base AS swagger
 WORKDIR /go/src/github.com/go-swagger/go-swagger
 ARG TARGETPLATFORM
-RUN --mount=from=swagger-src,src=/usr/src/swagger,rw \
-    --mount=type=cache,target=/root/.cache/go-build,id=swagger-build-$TARGETPLATFORM \
+# GO_SWAGGER_VERSION specifies the version of the go-swagger binary to install.
+# Go-swagger is used in CI for generating types from swagger.yaml in
+# hack/validate/swagger-gen
+ARG GO_SWAGGER_VERSION=v0.33.1
+RUN --mount=type=cache,target=/root/.cache/go-build,id=swagger-build-$TARGETPLATFORM \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=tmpfs,target=/go/src/ <<EOT
   set -e
-  xx-go build -o /build/swagger ./cmd/swagger
+  GOBIN=/build CGO_ENABLED=0 xx-go install "github.com/go-swagger/go-swagger/cmd/swagger@${GO_SWAGGER_VERSION}"
   xx-verify /build/swagger
 EOT
 
@@ -121,7 +116,7 @@ ARG TARGETVARIANT
 RUN /download-frozen-image-v2.sh /build \
         busybox:latest@sha256:95cf004f559831017cdf4628aaf1bb30133677be8702a8c5f2994629f637a209 \
         busybox:glibc@sha256:1f81263701cddf6402afe9f33fca0266d9fff379e59b1748f33d3072da71ee85 \
-        debian:bookworm-slim@sha256:2bc5c236e9b262645a323e9088dfa3bb1ecb16cc75811daf40a23a824d665be9 \
+        debian:trixie-slim@sha256:c85a2732e97694ea77237c61304b3bb410e0e961dd6ee945997a06c788c545bb \
         hello-world:latest@sha256:d58e752213a51785838f9eed2b7a498ffa1cb3aa7f946dda11af39286c3db9a9 \
         arm32v7/hello-world:latest@sha256:50b8560ad574c779908da71f7ce370c0a2471c098d44d1c8f6b513c5a55eeeb1 \
         hello-world:amd64@sha256:90659bf80b44ce6be8234e6ff90a1ac34acbeb826903b02cfa0da11c82cbc042 \
@@ -135,7 +130,7 @@ RUN git init . && git remote add origin "https://github.com/go-delve/delve.git"
 # from the https://github.com/go-delve/delve repository.
 # It can be used to run Docker with a possibility of
 # attaching debugger to it.
-ARG DELVE_VERSION=v1.24.1
+ARG DELVE_VERSION=v1.25.2
 RUN git fetch -q --depth 1 origin "${DELVE_VERSION}" +refs/tags/*:refs/tags/* && git checkout -q FETCH_HEAD
 
 FROM base AS delve-supported
@@ -145,7 +140,7 @@ RUN --mount=from=delve-src,src=/usr/src/delve,rw \
     --mount=type=cache,target=/root/.cache/go-build,id=delve-build-$TARGETPLATFORM \
     --mount=type=cache,target=/go/pkg/mod <<EOT
   set -e
-  GO111MODULE=on xx-go build -o /build/dlv ./cmd/dlv
+  xx-go build -o /build/dlv ./cmd/dlv
   xx-verify /build/dlv
 EOT
 
@@ -157,7 +152,7 @@ FROM base AS gowinres
 ARG GOWINRES_VERSION=v0.3.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "github.com/tc-hib/go-winres@${GOWINRES_VERSION}" \
+        GOBIN=/build CGO_ENABLED=0 go install "github.com/tc-hib/go-winres@${GOWINRES_VERSION}" \
      && /build/go-winres --help
 
 # containerd
@@ -167,11 +162,8 @@ RUN git init . && git remote add origin "https://github.com/containerd/container
 # CONTAINERD_VERSION is used to build containerd binaries, and used for the
 # integration tests. The distributed docker .deb and .rpm packages depend on a
 # separate (containerd.io) package, which may be a different version as is
-# specified here. The containerd golang package is also pinned in vendor.mod.
-# When updating the binary version you may also need to update the vendor
-# version to pick up bug fixes or new APIs, however, usually the Go packages
-# are built from a commit from the master branch.
-ARG CONTAINERD_VERSION=v1.7.27
+# specified here.
+ARG CONTAINERD_VERSION=v2.2.0
 RUN git fetch -q --depth 1 origin "${CONTAINERD_VERSION}" +refs/tags/*:refs/tags/* && git checkout -q FETCH_HEAD
 
 FROM base AS containerd-build
@@ -205,27 +197,28 @@ FROM base AS golangci_lint
 ARG GOLANGCI_LINT_VERSION=v2.1.5
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" \
+        GOBIN=/build CGO_ENABLED=0 go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" \
      && /build/golangci-lint --version
 
 FROM base AS gotestsum
-ARG GOTESTSUM_VERSION=v1.12.0
+# GOTESTSUM_VERSION is the version of gotest.tools/gotestsum to install.
+ARG GOTESTSUM_VERSION=v1.13.0
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}" \
+        GOBIN=/build CGO_ENABLED=0 go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}" \
      && /build/gotestsum --version
 
 FROM base AS shfmt
 ARG SHFMT_VERSION=v3.8.0
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}" \
+        GOBIN=/build CGO_ENABLED=0 go install "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}" \
      && /build/shfmt --version
 
 FROM base AS gopls
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "golang.org/x/tools/gopls@latest" \
+        GOBIN=/build CGO_ENABLED=0 go install "golang.org/x/tools/gopls@latest" \
      && /build/gopls version
 
 FROM base AS dockercli
@@ -257,11 +250,11 @@ RUN --mount=source=hack/dockerfile/cli.sh,target=/download-or-build-cli.sh \
 FROM base AS runc-src
 WORKDIR /usr/src/runc
 RUN git init . && git remote add origin "https://github.com/opencontainers/runc.git"
-# RUNC_VERSION should match the version that is used by the containerd version
+# RUNC_VERSION sets the version of runc to install in the dev-container.
+# This version should usually match the version that is used by the containerd version
 # that is used. If you need to update runc, open a pull request in the containerd
-# project first, and update both after that is merged. When updating RUNC_VERSION,
-# consider updating runc in vendor.mod accordingly.
-ARG RUNC_VERSION=v1.2.6
+# project first, and update both after that is merged.
+ARG RUNC_VERSION=v1.3.4
 RUN git fetch -q --depth 1 origin "${RUNC_VERSION}" +refs/tags/*:refs/tags/* && git checkout -q FETCH_HEAD
 
 FROM base AS runc-build
@@ -328,8 +321,8 @@ FROM tini-${TARGETOS} AS tini
 FROM base AS rootlesskit-src
 WORKDIR /usr/src/rootlesskit
 RUN git init . && git remote add origin "https://github.com/rootless-containers/rootlesskit.git"
-# When updating, also update vendor.mod and hack/dockerfile/install/rootlesskit.installer accordingly.
-ARG ROOTLESSKIT_VERSION=v2.3.4
+# When updating, also update go.mod and hack/dockerfile/install/rootlesskit.installer accordingly.
+ARG ROOTLESSKIT_VERSION=v2.3.5
 RUN git fetch -q --depth 1 origin "${ROOTLESSKIT_VERSION}" +refs/tags/*:refs/tags/* && git checkout -q FETCH_HEAD
 
 FROM base AS rootlesskit-build
@@ -341,7 +334,6 @@ RUN --mount=type=cache,sharing=locked,id=moby-rootlesskit-aptlib,target=/var/lib
             gcc \
             libc6-dev \
             pkg-config
-ENV GO111MODULE=on
 ARG DOCKER_STATIC
 RUN --mount=from=rootlesskit-src,src=/usr/src/rootlesskit,rw \
     --mount=type=cache,target=/go/pkg/mod \
@@ -502,6 +494,7 @@ RUN --mount=type=cache,sharing=locked,id=moby-dev-aptlib,target=/var/lib/apt \
             apparmor \
             bash-completion \
             bzip2 \
+            fuse-overlayfs \
             inetutils-ping \
             iproute2 \
             iptables \
@@ -509,6 +502,7 @@ RUN --mount=type=cache,sharing=locked,id=moby-dev-aptlib,target=/var/lib/apt \
             jq \
             libcap2-bin \
             libnet1 \
+            libnftables-dev \
             libnl-3-200 \
             libprotobuf-c1 \
             libyajl2 \
@@ -542,20 +536,21 @@ COPY --link --from=dockercli-integration /build/ /usr/local/cli-integration
 FROM base AS build
 COPY --from=gowinres /build/ /usr/local/bin/
 WORKDIR /go/src/github.com/docker/docker
-ENV GO111MODULE=off
 ENV CGO_ENABLED=1
 RUN --mount=type=cache,sharing=locked,id=moby-build-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=moby-build-aptcache,target=/var/cache/apt \
         apt-get update && apt-get install --no-install-recommends -y \
             clang \
             lld \
-            llvm
+            llvm \
+            icoutils
 ARG TARGETPLATFORM
 RUN --mount=type=cache,sharing=locked,id=moby-build-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=moby-build-aptcache,target=/var/cache/apt \
         xx-apt-get install --no-install-recommends -y \
             gcc \
             libc6-dev \
+            libnftables-dev \
             libseccomp-dev \
             libsystemd-dev \
             pkg-config
@@ -579,7 +574,6 @@ RUN <<EOT
   fi
 EOT
 RUN --mount=type=bind,target=.,rw \
-    --mount=type=tmpfs,target=cli/winresources/dockerd \
     --mount=type=cache,target=/root/.cache/go-build,id=moby-build-$TARGETPLATFORM <<EOT
   set -e
   target=$([ "$DOCKER_STATIC" = "1" ] && echo "binary" || echo "dynbinary")

@@ -8,11 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 )
@@ -56,7 +55,13 @@ func NewTestConfig(ops ...func(*TestContainerConfig)) *TestContainerConfig {
 func Create(ctx context.Context, t *testing.T, apiClient client.APIClient, ops ...func(*TestContainerConfig)) string {
 	t.Helper()
 	config := NewTestConfig(ops...)
-	c, err := apiClient.ContainerCreate(ctx, config.Config, config.HostConfig, config.NetworkingConfig, config.Platform, config.Name)
+	c, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           config.Config,
+		HostConfig:       config.HostConfig,
+		NetworkingConfig: config.NetworkingConfig,
+		Platform:         config.Platform,
+		Name:             config.Name,
+	})
 	assert.NilError(t, err)
 
 	return c.ID
@@ -68,8 +73,14 @@ func Create(ctx context.Context, t *testing.T, apiClient client.APIClient, ops .
 //
 //	ctr, err := container.CreateFromConfig(ctx, apiClient, container.NewTestConfig(container.WithAutoRemove))
 //	assert.Check(t, err)
-func CreateFromConfig(ctx context.Context, apiClient client.APIClient, config *TestContainerConfig) (container.CreateResponse, error) {
-	return apiClient.ContainerCreate(ctx, config.Config, config.HostConfig, config.NetworkingConfig, config.Platform, config.Name)
+func CreateFromConfig(ctx context.Context, apiClient client.APIClient, config *TestContainerConfig) (client.ContainerCreateResult, error) {
+	return apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           config.Config,
+		HostConfig:       config.HostConfig,
+		NetworkingConfig: config.NetworkingConfig,
+		Platform:         config.Platform,
+		Name:             config.Name,
+	})
 }
 
 // Run creates and start a container with the specified options
@@ -77,7 +88,7 @@ func Run(ctx context.Context, t *testing.T, apiClient client.APIClient, ops ...f
 	t.Helper()
 	id := Create(ctx, t, apiClient, ops...)
 
-	err := apiClient.ContainerStart(ctx, id, container.StartOptions{})
+	_, err := apiClient.ContainerStart(ctx, id, client.ContainerStartOptions{})
 	assert.NilError(t, err)
 
 	return id
@@ -99,27 +110,27 @@ func RunAttach(ctx context.Context, t *testing.T, apiClient client.APIClient, op
 	})
 	id := Create(ctx, t, apiClient, ops...)
 
-	aresp, err := apiClient.ContainerAttach(ctx, id, container.AttachOptions{
+	aresp, err := apiClient.ContainerAttach(ctx, id, client.ContainerAttachOptions{
 		Stream: true,
 		Stdout: true,
 		Stderr: true,
 	})
 	assert.NilError(t, err)
 
-	err = apiClient.ContainerStart(ctx, id, container.StartOptions{})
+	_, err = apiClient.ContainerStart(ctx, id, client.ContainerStartOptions{})
 	assert.NilError(t, err)
 
-	s, err := demultiplexStreams(ctx, aresp)
+	s, err := demultiplexStreams(ctx, aresp.HijackedResponse)
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		assert.NilError(t, err)
 	}
 
 	// Inspect to get the exit code. A new context is used here to make sure that if the context passed as argument as
 	// reached timeout during the demultiplexStream call, we still return a RunResult.
-	resp, err := apiClient.ContainerInspect(context.Background(), id)
+	inspect, err := apiClient.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
 
-	return RunResult{ContainerID: id, ExitCode: resp.State.ExitCode, Stdout: &s.stdout, Stderr: &s.stderr}
+	return RunResult{ContainerID: id, ExitCode: inspect.Container.State.ExitCode, Stdout: &s.stdout, Stderr: &s.stderr}
 }
 
 type streams struct {
@@ -129,7 +140,7 @@ type streams struct {
 // demultiplexStreams starts a goroutine to demultiplex stdout and stderr from the types.HijackedResponse resp and
 // waits until either multiplexed stream reaches EOF or the context expires. It unconditionally closes resp and waits
 // until the demultiplexing goroutine has finished its work before returning.
-func demultiplexStreams(ctx context.Context, resp types.HijackedResponse) (streams, error) {
+func demultiplexStreams(ctx context.Context, resp client.HijackedResponse) (streams, error) {
 	var s streams
 	outputDone := make(chan error, 1)
 
@@ -155,31 +166,31 @@ func demultiplexStreams(ctx context.Context, resp types.HijackedResponse) (strea
 	return s, err
 }
 
-func Remove(ctx context.Context, t *testing.T, apiClient client.APIClient, container string, options container.RemoveOptions) {
+func Remove(ctx context.Context, t *testing.T, apiClient client.APIClient, container string, options client.ContainerRemoveOptions) {
 	t.Helper()
 
-	err := apiClient.ContainerRemove(ctx, container, options)
+	_, err := apiClient.ContainerRemove(ctx, container, options)
 	assert.NilError(t, err)
 }
 
 func RemoveAll(ctx context.Context, t *testing.T, apiClient client.APIClient) {
 	t.Helper()
 
-	containers, err := apiClient.ContainerList(ctx, container.ListOptions{All: true})
+	list, err := apiClient.ContainerList(ctx, client.ContainerListOptions{All: true})
 	assert.NilError(t, err)
 
-	for _, c := range containers {
-		Remove(ctx, t, apiClient, c.ID, container.RemoveOptions{Force: true})
+	for _, c := range list.Items {
+		Remove(ctx, t, apiClient, c.ID, client.ContainerRemoveOptions{Force: true})
 	}
 }
 
 func Inspect(ctx context.Context, t *testing.T, apiClient client.APIClient, containerRef string) container.InspectResponse {
 	t.Helper()
 
-	c, err := apiClient.ContainerInspect(ctx, containerRef)
+	inspect, err := apiClient.ContainerInspect(ctx, containerRef, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
 
-	return c
+	return inspect.Container
 }
 
 type ContainerOutput struct {
@@ -187,8 +198,8 @@ type ContainerOutput struct {
 }
 
 // Output waits for the container to end running and returns its output.
-func Output(ctx context.Context, client client.APIClient, id string) (ContainerOutput, error) {
-	logs, err := client.ContainerLogs(ctx, id, container.LogsOptions{Follow: true, ShowStdout: true, ShowStderr: true})
+func Output(ctx context.Context, apiClient client.APIClient, id string) (ContainerOutput, error) {
+	logs, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{Follow: true, ShowStdout: true, ShowStderr: true})
 	if err != nil {
 		return ContainerOutput{}, err
 	}

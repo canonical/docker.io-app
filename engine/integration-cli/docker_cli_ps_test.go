@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/client/pkg/stringid"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -22,12 +22,12 @@ type DockerCLIPsSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIPsSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIPsSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIPsSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIPsSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLIPsSuite) TestPsListContainersBase(c *testing.T) {
@@ -319,21 +319,22 @@ func (s *DockerCLIPsSuite) TestPsListContainersFilterName(c *testing.T) {
 // - Run containers for each of those image (busybox, images_ps_filter_test1, images_ps_filter_test2)
 // - Filter them out :P
 func (s *DockerCLIPsSuite) TestPsListContainersFilterAncestorImage(c *testing.T) {
+	skip.If(c, TODOBuildkit) // order or digests are different with buildkit
 	existingContainers := ExistingContainerIDs(c)
 
 	// Build images
 	imageName1 := "images_ps_filter_test1"
-	buildImageSuccessfully(c, imageName1, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName1, build.WithDockerfile(`FROM busybox
 		 LABEL match me 1`))
 	imageID1 := getIDByName(c, imageName1)
 
 	imageName1Tagged := "images_ps_filter_test1:tag"
-	buildImageSuccessfully(c, imageName1Tagged, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName1Tagged, build.WithDockerfile(`FROM busybox
 		 LABEL match me 1 tagged`))
 	imageID1Tagged := getIDByName(c, imageName1Tagged)
 
 	imageName2 := "images_ps_filter_test2"
-	buildImageSuccessfully(c, imageName2, build.WithDockerfile(fmt.Sprintf(`FROM %s
+	cli.BuildCmd(c, imageName2, build.WithDockerfile(fmt.Sprintf(`FROM %s
 		 LABEL match me 2`, imageName1)))
 	imageID2 := getIDByName(c, imageName2)
 
@@ -391,7 +392,7 @@ func (s *DockerCLIPsSuite) TestPsListContainersFilterAncestorImage(c *testing.T)
 	checkPsAncestorFilterOutput(c, RemoveOutputForExistingElements(out, existingContainers), imageName2+","+imageName1Tagged, []string{fourthID, fifthID})
 }
 
-func checkPsAncestorFilterOutput(c *testing.T, out string, filterName string, expectedIDs []string) {
+func checkPsAncestorFilterOutput(t *testing.T, out string, filterName string, expectedIDs []string) {
 	var actualIDs []string
 	if out != "" {
 		actualIDs = strings.Split(out[:len(out)-1], "\n")
@@ -399,17 +400,17 @@ func checkPsAncestorFilterOutput(c *testing.T, out string, filterName string, ex
 	sort.Strings(actualIDs)
 	sort.Strings(expectedIDs)
 
-	assert.Equal(c, len(actualIDs), len(expectedIDs), fmt.Sprintf("Expected filtered container(s) for %s ancestor filter to be %v:%v, got %v:%v", filterName, len(expectedIDs), expectedIDs, len(actualIDs), actualIDs))
+	assert.Equal(t, len(actualIDs), len(expectedIDs), fmt.Sprintf("Expected filtered container(s) for %s ancestor filter to be %v:%v, got %v:%v", filterName, len(expectedIDs), expectedIDs, len(actualIDs), actualIDs))
 	if len(expectedIDs) > 0 {
 		same := true
 		for i := range expectedIDs {
 			if actualIDs[i] != expectedIDs[i] {
-				c.Logf("%s, %s", actualIDs[i], expectedIDs[i])
+				t.Logf("%s, %s", actualIDs[i], expectedIDs[i])
 				same = false
 				break
 			}
 		}
-		assert.Equal(c, same, true, fmt.Sprintf("Expected filtered container(s) for %s ancestor filter to be %v, got %v", filterName, expectedIDs, actualIDs))
+		assert.Equal(t, same, true, fmt.Sprintf("Expected filtered container(s) for %s ancestor filter to be %v, got %v", filterName, expectedIDs, actualIDs))
 	}
 }
 

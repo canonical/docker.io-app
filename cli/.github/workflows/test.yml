@@ -53,24 +53,25 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-13  # macOS 13 on Intel
-          - macos-14  # macOS 14 on arm64 (Apple Silicon M1)
+          - macos-14        # macOS 14 on arm64 (Apple Silicon M1)
+          - macos-15-intel  # macOS 15 on Intel
+          - macos-15        # macOS 15 on arm64 (Apple Silicon M1)
 #          - windows-2022 # FIXME: some tests are failing on the Windows runner, as well as on Appveyor since June 24, 2018: https://ci.appveyor.com/project/docker/cli/history
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ${{ env.GOPATH }}/src/github.com/docker/cli
       -
         name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.24.3"
+          go-version: "1.25.5"
       -
         name: Test
         run: |
-          go test -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/')
+          go test -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/|/cmd/docker-trust')
           go tool cover -func=/tmp/coverage.txt
         working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli
         shell: bash

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -27,7 +27,7 @@ func TestRemoveForce(t *testing.T) {
 			mutex := new(sync.Mutex)
 
 			cli := test.NewFakeCli(&fakeClient{
-				containerRemoveFunc: func(ctx context.Context, container string, options container.RemoveOptions) error {
+				containerRemoveFunc: func(ctx context.Context, container string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 					// containerRemoveFunc is called in parallel for each container
 					// by the remove command so append must be synchronized.
 					mutex.Lock()
@@ -35,13 +35,13 @@ func TestRemoveForce(t *testing.T) {
 					mutex.Unlock()
 
 					if container == "nosuchcontainer" {
-						return notFound(errors.New("Error: no such container: " + container))
+						return client.ContainerRemoveResult{}, notFound(errors.New("Error: no such container: " + container))
 					}
-					return nil
+					return client.ContainerRemoveResult{}, nil
 				},
 				Version: "1.36",
 			})
-			cmd := NewRmCommand(cli)
+			cmd := newRmCommand(cli)
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)

@@ -1,50 +1,36 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestSwarmInitError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.SwarmInit(context.Background(), swarm.InitRequest{})
+	_, err = client.SwarmInit(t.Context(), SwarmInitOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 func TestSwarmInit(t *testing.T) {
-	expectedURL := "/swarm/init"
+	const expectedURL = "/swarm/init"
 
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			if req.Method != http.MethodPost {
-				return nil, fmt.Errorf("expected POST method, got %s", req.Method)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`"body"`))),
-			}, nil
-		}),
-	}
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		if err := assertRequest(req, http.MethodPost, expectedURL); err != nil {
+			return nil, err
+		}
+		return mockJSONResponse(http.StatusOK, nil, "node-id")(req)
+	}))
+	assert.NilError(t, err)
 
-	resp, err := client.SwarmInit(context.Background(), swarm.InitRequest{
+	result, err := client.SwarmInit(t.Context(), SwarmInitOptions{
 		ListenAddr: "0.0.0.0:2377",
 	})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(resp, "body"))
+	assert.Check(t, is.Equal(result.NodeID, "node-id"))
 }

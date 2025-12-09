@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	hostconfig "github.com/containerd/containerd/v2/core/remotes/docker/config"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/registry"
+	"github.com/moby/moby/v2/daemon/pkg/registry"
 	"github.com/pkg/errors"
 )
 
@@ -86,7 +86,7 @@ func mirrorsToRegistryHosts(mirrors []string, dHost docker.RegistryHost) []docke
 	var mirrorHosts []docker.RegistryHost
 	for _, mirror := range mirrors {
 		h := dHost
-		h.Capabilities = docker.HostCapabilityPull | docker.HostCapabilityResolve
+		h.Capabilities = docker.HostCapabilityPull | docker.HostCapabilityResolve | docker.HostCapabilityReferrers
 
 		u, err := url.Parse(mirror)
 		if err != nil || u.Host == "" {

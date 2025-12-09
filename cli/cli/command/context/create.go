@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package context
 
@@ -8,22 +8,20 @@ import (
 	"errors"
 	"fmt"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter/tabwriter"
 	"github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/context/store"
 	"github.com/spf13/cobra"
 )
 
-// CreateOptions are the options used for creating a context
-type CreateOptions struct {
-	Name        string
-	Description string
-	Docker      map[string]string
-	From        string
+// createOptions are the options used for creating a context
+type createOptions struct {
+	description string
+	endpoint    map[string]string
+	from        string
 
 	// Additional Metadata to store in the context. This option is not
 	// currently exposed to the user.
@@ -44,52 +42,52 @@ func longCreateDescription() string {
 }
 
 func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
-	opts := &CreateOptions{}
+	opts := createOptions{}
 	cmd := &cobra.Command{
 		Use:   "create [OPTIONS] CONTEXT",
 		Short: "Create a context",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.Name = args[0]
-			return RunCreate(dockerCLI, opts)
+			return runCreate(dockerCLI, args[0], opts)
 		},
-		Long:              longCreateDescription(),
-		ValidArgsFunction: completion.NoComplete,
+		Long:                  longCreateDescription(),
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&opts.Description, "description", "", "Description of the context")
-	flags.StringToStringVar(&opts.Docker, "docker", nil, "set the docker endpoint")
-	flags.StringVar(&opts.From, "from", "", "create context from a named context")
+	flags.StringVar(&opts.description, "description", "", "Description of the context")
+	flags.StringToStringVar(&opts.endpoint, "docker", nil, "set the docker endpoint")
+	flags.StringVar(&opts.from, "from", "", "create context from a named context")
 	return cmd
 }
 
-// RunCreate creates a Docker context
-func RunCreate(dockerCLI command.Cli, o *CreateOptions) error {
+// runCreate creates a Docker context
+func runCreate(dockerCLI command.Cli, name string, opts createOptions) error {
 	s := dockerCLI.ContextStore()
-	err := checkContextNameForCreation(s, o.Name)
+	err := checkContextNameForCreation(s, name)
 	if err != nil {
 		return err
 	}
 	switch {
-	case o.From == "" && o.Docker == nil:
-		err = createFromExistingContext(s, dockerCLI.CurrentContext(), o)
-	case o.From != "":
-		err = createFromExistingContext(s, o.From, o)
+	case opts.from == "" && opts.endpoint == nil:
+		err = createFromExistingContext(s, name, dockerCLI.CurrentContext(), opts)
+	case opts.from != "":
+		err = createFromExistingContext(s, name, opts.from, opts)
 	default:
-		err = createNewContext(s, o)
+		err = createNewContext(s, name, opts)
 	}
 	if err == nil {
-		_, _ = fmt.Fprintln(dockerCLI.Out(), o.Name)
-		_, _ = fmt.Fprintf(dockerCLI.Err(), "Successfully created context %q\n", o.Name)
+		_, _ = fmt.Fprintln(dockerCLI.Out(), name)
+		_, _ = fmt.Fprintf(dockerCLI.Err(), "Successfully created context %q\n", name)
 	}
 	return err
 }
 
-func createNewContext(contextStore store.ReaderWriter, o *CreateOptions) error {
-	if o.Docker == nil {
+func createNewContext(contextStore store.ReaderWriter, name string, opts createOptions) error {
+	if opts.endpoint == nil {
 		return errors.New("docker endpoint configuration is required")
 	}
-	dockerEP, dockerTLS, err := getDockerEndpointMetadataAndTLS(contextStore, o.Docker)
+	dockerEP, dockerTLS, err := getDockerEndpointMetadataAndTLS(contextStore, opts.endpoint)
 	if err != nil {
 		return fmt.Errorf("unable to create docker endpoint config: %w", err)
 	}
@@ -98,10 +96,10 @@ func createNewContext(contextStore store.ReaderWriter, o *CreateOptions) error {
 			docker.DockerEndpoint: dockerEP,
 		},
 		Metadata: command.DockerContext{
-			Description:      o.Description,
-			AdditionalFields: o.metaData,
+			Description:      opts.description,
+			AdditionalFields: opts.metaData,
 		},
-		Name: o.Name,
+		Name: name,
 	}
 	contextTLSData := store.ContextTLSData{}
 	if dockerTLS != nil {
@@ -115,14 +113,14 @@ func createNewContext(contextStore store.ReaderWriter, o *CreateOptions) error {
 	if err := contextStore.CreateOrUpdate(contextMetadata); err != nil {
 		return err
 	}
-	return contextStore.ResetTLSMaterial(o.Name, &contextTLSData)
+	return contextStore.ResetTLSMaterial(name, &contextTLSData)
 }
 
 func checkContextNameForCreation(s store.Reader, name string) error {
 	if err := store.ValidateContextName(name); err != nil {
 		return err
 	}
-	if _, err := s.GetMetadata(name); !cerrdefs.IsNotFound(err) {
+	if _, err := s.GetMetadata(name); !errdefs.IsNotFound(err) {
 		if err != nil {
 			return fmt.Errorf("error while getting existing contexts: %w", err)
 		}
@@ -131,16 +129,16 @@ func checkContextNameForCreation(s store.Reader, name string) error {
 	return nil
 }
 
-func createFromExistingContext(s store.ReaderWriter, fromContextName string, o *CreateOptions) error {
-	if len(o.Docker) != 0 {
+func createFromExistingContext(s store.ReaderWriter, name string, fromContextName string, opts createOptions) error {
+	if len(opts.endpoint) != 0 {
 		return errors.New("cannot use --docker flag when --from is set")
 	}
 	reader := store.Export(fromContextName, &descriptionDecorator{
 		Reader:      s,
-		description: o.Description,
+		description: opts.description,
 	})
 	defer reader.Close()
-	return store.Import(o.Name, s, reader)
+	return store.Import(name, s, reader)
 }
 
 type descriptionDecorator struct {

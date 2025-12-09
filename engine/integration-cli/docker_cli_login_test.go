@@ -4,26 +4,30 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"runtime"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/skip"
 )
 
 type DockerCLILoginSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLILoginSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLILoginSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLILoginSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLILoginSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLILoginSuite) TestLoginWithoutTTY(c *testing.T) {
+	skip.If(c, runtime.GOOS == "windows", "FIXME: doesn't produce error without TTY with CLI v25.0")
+
 	cmd := exec.Command(dockerBinary, "login")
 
 	// Send to stdin so the process does not get the TTY
@@ -31,7 +35,7 @@ func (s *DockerCLILoginSuite) TestLoginWithoutTTY(c *testing.T) {
 
 	// run the command and block until it's done
 	err := cmd.Run()
-	assert.ErrorContains(c, err, "") // "Expected non nil err when logging in & TTY not available"
+	assert.ErrorContains(c, err, "", "Expected an err when logging in & TTY not available")
 }
 
 func (s *DockerRegistryAuthHtpasswdSuite) TestLoginToPrivateRegistry(c *testing.T) {

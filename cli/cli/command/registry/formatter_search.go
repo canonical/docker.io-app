@@ -5,7 +5,8 @@ import (
 	"strings"
 
 	"github.com/docker/cli/cli/command/formatter"
-	registrytypes "github.com/docker/docker/api/types/registry"
+	registrytypes "github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -16,8 +17,8 @@ const (
 	automatedHeader = "AUTOMATED"
 )
 
-// NewSearchFormat returns a Format for rendering using a network Context
-func NewSearchFormat(source string) formatter.Format {
+// newFormat returns a Format for rendering using a searchContext.
+func newFormat(source string) formatter.Format {
 	switch source {
 	case "", formatter.TableFormatKey:
 		return defaultSearchTableFormat
@@ -25,25 +26,29 @@ func NewSearchFormat(source string) formatter.Format {
 	return formatter.Format(source)
 }
 
-// SearchWrite writes the context
-func SearchWrite(ctx formatter.Context, results []registrytypes.SearchResult) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, result := range results {
-			searchCtx := &searchContext{trunc: ctx.Trunc, s: result}
-			if err := format(searchCtx); err != nil {
+// formatWrite writes the context.
+func formatWrite(fmtCtx formatter.Context, results client.ImageSearchResult) error {
+	searchCtx := &searchContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"Name":        formatter.NameHeader,
+				"Description": formatter.DescriptionHeader,
+				"StarCount":   starsHeader,
+				"IsOfficial":  officialHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(searchCtx, func(format func(subContext formatter.SubContext) error) error {
+		for _, result := range results.Items {
+			if err := format(&searchContext{
+				trunc: fmtCtx.Trunc,
+				s:     result,
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	searchCtx := searchContext{}
-	searchCtx.Header = formatter.SubHeaderContext{
-		"Name":        formatter.NameHeader,
-		"Description": formatter.DescriptionHeader,
-		"StarCount":   starsHeader,
-		"IsOfficial":  officialHeader,
-	}
-	return ctx.Write(&searchCtx, render)
+	})
 }
 
 type searchContext struct {

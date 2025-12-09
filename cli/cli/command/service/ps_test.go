@@ -6,22 +6,23 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
-	"github.com/google/go-cmp/cmp"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestCreateFilter(t *testing.T) {
-	client := &fakeClient{
-		serviceListFunc: func(ctx context.Context, options swarm.ServiceListOptions) ([]swarm.Service, error) {
-			return []swarm.Service{
-				{ID: "idmatch"},
-				{ID: "idprefixmatch"},
-				newService("cccccccc", "namematch"),
-				newService("01010101", "notfoundprefix"),
+	apiClient := &fakeClient{
+		serviceListFunc: func(ctx context.Context, options client.ServiceListOptions) (client.ServiceListResult, error) {
+			return client.ServiceListResult{
+				Items: []swarm.Service{
+					{ID: "idmatch"},
+					{ID: "idprefixmatch"},
+					newService("cccccccc", "namematch"),
+					newService("01010101", "notfoundprefix"),
+				},
 			}, nil
 		},
 	}
@@ -33,56 +34,52 @@ func TestCreateFilter(t *testing.T) {
 		filter:   filter,
 	}
 
-	actual, notfound, err := createFilter(context.Background(), client, options)
+	actual, notfound, err := createFilter(context.Background(), apiClient, options)
 	assert.NilError(t, err)
 	assert.Check(t, is.DeepEqual(notfound, []string{"no such service: notfound"}))
 
-	expected := filters.NewArgs(
-		filters.Arg("service", "idmatch"),
-		filters.Arg("service", "idprefixmatch"),
-		filters.Arg("service", "cccccccc"),
-		filters.Arg("node", "somenode"),
-	)
-	assert.DeepEqual(t, expected, actual, cmpFilters)
+	expected := make(client.Filters).Add("service", "idmatch").Add("service", "idprefixmatch").Add("service", "cccccccc").Add("node", "somenode")
+	assert.DeepEqual(t, expected, actual)
 }
 
 func TestCreateFilterWithAmbiguousIDPrefixError(t *testing.T) {
-	client := &fakeClient{
-		serviceListFunc: func(ctx context.Context, options swarm.ServiceListOptions) ([]swarm.Service, error) {
-			return []swarm.Service{
-				{ID: "aaaone"},
-				{ID: "aaatwo"},
+	apiClient := &fakeClient{
+		serviceListFunc: func(ctx context.Context, options client.ServiceListOptions) (client.ServiceListResult, error) {
+			return client.ServiceListResult{
+				Items: []swarm.Service{
+					{ID: "aaaone"},
+					{ID: "aaatwo"},
+				},
 			}, nil
 		},
 	}
-	options := psOptions{
+	_, _, err := createFilter(context.Background(), apiClient, psOptions{
 		services: []string{"aaa"},
 		filter:   opts.NewFilterOpt(),
-	}
-	_, _, err := createFilter(context.Background(), client, options)
+	})
 	assert.Error(t, err, "multiple services found with provided prefix: aaa")
 }
 
 func TestCreateFilterNoneFound(t *testing.T) {
-	client := &fakeClient{}
+	apiClient := &fakeClient{}
 	options := psOptions{
 		services: []string{"foo", "notfound"},
 		filter:   opts.NewFilterOpt(),
 	}
-	_, _, err := createFilter(context.Background(), client, options)
+	_, _, err := createFilter(context.Background(), apiClient, options)
 	assert.Error(t, err, "no such service: foo\nno such service: notfound")
 }
 
 func TestRunPSWarnsOnNotFound(t *testing.T) {
-	client := &fakeClient{
-		serviceListFunc: func(ctx context.Context, options swarm.ServiceListOptions) ([]swarm.Service, error) {
-			return []swarm.Service{
-				{ID: "foo"},
+	apiClient := &fakeClient{
+		serviceListFunc: func(ctx context.Context, options client.ServiceListOptions) (client.ServiceListResult, error) {
+			return client.ServiceListResult{
+				Items: []swarm.Service{{ID: "foo"}},
 			}, nil
 		},
 	}
 
-	cli := test.NewFakeCli(client)
+	cli := test.NewFakeCli(apiClient)
 	options := psOptions{
 		services: []string{"foo", "bar"},
 		filter:   opts.NewFilterOpt(),
@@ -95,16 +92,20 @@ func TestRunPSWarnsOnNotFound(t *testing.T) {
 }
 
 func TestRunPSQuiet(t *testing.T) {
-	client := &fakeClient{
-		serviceListFunc: func(ctx context.Context, options swarm.ServiceListOptions) ([]swarm.Service, error) {
-			return []swarm.Service{{ID: "foo"}}, nil
+	apiClient := &fakeClient{
+		serviceListFunc: func(ctx context.Context, options client.ServiceListOptions) (client.ServiceListResult, error) {
+			return client.ServiceListResult{
+				Items: []swarm.Service{{ID: "foo"}},
+			}, nil
 		},
-		taskListFunc: func(ctx context.Context, options swarm.TaskListOptions) ([]swarm.Task, error) {
-			return []swarm.Task{{ID: "sxabyp0obqokwekpun4rjo0b3"}}, nil
+		taskListFunc: func(ctx context.Context, options client.TaskListOptions) (client.TaskListResult, error) {
+			return client.TaskListResult{
+				Items: []swarm.Task{{ID: "sxabyp0obqokwekpun4rjo0b3"}},
+			}, nil
 		},
 	}
 
-	cli := test.NewFakeCli(client)
+	cli := test.NewFakeCli(apiClient)
 	ctx := context.Background()
 	err := runPS(ctx, cli, psOptions{services: []string{"foo"}, quiet: true, filter: opts.NewFilterOpt()})
 	assert.NilError(t, err)
@@ -113,26 +114,21 @@ func TestRunPSQuiet(t *testing.T) {
 
 func TestUpdateNodeFilter(t *testing.T) {
 	selfNodeID := "foofoo"
-	filter := filters.NewArgs(
-		filters.Arg("node", "one"),
-		filters.Arg("node", "two"),
-		filters.Arg("node", "self"),
-	)
+	filter := make(client.Filters).Add("node", "one", "two", "self")
 
-	client := &fakeClient{
-		infoFunc: func(_ context.Context) (system.Info, error) {
-			return system.Info{Swarm: swarm.Info{NodeID: selfNodeID}}, nil
+	apiClient := &fakeClient{
+		infoFunc: func(_ context.Context) (client.SystemInfoResult, error) {
+			return client.SystemInfoResult{
+				Info: system.Info{
+					Swarm: swarm.Info{NodeID: selfNodeID},
+				},
+			}, nil
 		},
 	}
 
-	updateNodeFilter(context.Background(), client, filter)
+	err := updateNodeFilter(context.Background(), apiClient, filter)
+	assert.NilError(t, err)
 
-	expected := filters.NewArgs(
-		filters.Arg("node", "one"),
-		filters.Arg("node", "two"),
-		filters.Arg("node", selfNodeID),
-	)
-	assert.DeepEqual(t, expected, filter, cmpFilters)
+	expected := make(client.Filters).Add("node", "one", "two", selfNodeID)
+	assert.DeepEqual(t, expected, filter)
 }
-
-var cmpFilters = cmp.AllowUnexported(filters.Args{})

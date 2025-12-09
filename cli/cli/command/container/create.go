@@ -4,33 +4,27 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"net/netip"
 	"os"
 	"path"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/cli/config/types"
 	"github.com/docker/cli/cli/streams"
-	"github.com/docker/cli/cli/trust"
 	"github.com/docker/cli/internal/jsonstream"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/container"
-	imagetypes "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -45,14 +39,13 @@ const (
 type createOptions struct {
 	name         string
 	platform     string
-	untrusted    bool
 	pull         string // always, missing, never
 	quiet        bool
 	useAPISocket bool
 }
 
-// NewCreateCommand creates a new cobra.Command for `docker create`
-func NewCreateCommand(dockerCli command.Cli) *cobra.Command {
+// newCreateCommand creates a new cobra.Command for `docker create`
+func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	var options createOptions
 	var copts *containerOptions
 
@@ -65,12 +58,13 @@ func NewCreateCommand(dockerCli command.Cli) *cobra.Command {
 			if len(args) > 1 {
 				copts.Args = args[1:]
 			}
-			return runCreate(cmd.Context(), dockerCli, cmd.Flags(), &options, copts)
+			return runCreate(cmd.Context(), dockerCLI, cmd.Flags(), &options, copts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker container create, docker create",
 		},
-		ValidArgsFunction: completion.ImageNames(dockerCli, -1),
+		ValidArgsFunction:     completion.ImageNames(dockerCLI, -1),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -80,24 +74,23 @@ func NewCreateCommand(dockerCli command.Cli) *cobra.Command {
 	flags.StringVar(&options.pull, "pull", PullImageMissing, `Pull image before creating ("`+PullImageAlways+`", "|`+PullImageMissing+`", "`+PullImageNever+`")`)
 	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Suppress the pull output")
 	flags.BoolVarP(&options.useAPISocket, "use-api-socket", "", false, "Bind mount Docker API socket and required auth")
-	flags.SetAnnotation("use-api-socket", "experimentalCLI", nil) // Marks flag as experimental for now.
+	_ = flags.SetAnnotation("use-api-socket", "experimentalCLI", nil) // Mark flag as experimental for now.
 
 	// Add an explicit help that doesn't have a `-h` to prevent the conflict
 	// with hostname
 	flags.Bool("help", false, "Print usage")
 
-	command.AddPlatformFlag(flags, &options.platform)
-	command.AddTrustVerificationFlags(flags, &options.untrusted, dockerCli.ContentTrustEnabled())
+	// TODO(thaJeztah): consider adding platform as "image create option" on containerOptions
+	flags.StringVar(&options.platform, "platform", os.Getenv("DOCKER_DEFAULT_PLATFORM"), "Set platform if server is multi-platform capable")
+	_ = flags.SetAnnotation("platform", "version", []string{"1.32"})
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
+
+	// TODO(thaJeztah): DEPRECATED: remove in v29.1 or v30
+	flags.Bool("disable-content-trust", true, "Skip image verification (deprecated)")
+	_ = flags.MarkDeprecated("disable-content-trust", "support for docker content trust was removed")
 	copts = addFlags(flags)
 
-	addCompletions(cmd, dockerCli)
-
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
+	addCompletions(cmd, dockerCLI)
 
 	return cmd
 }
@@ -110,7 +103,7 @@ func runCreate(ctx context.Context, dockerCli command.Cli, flags *pflag.FlagSet,
 		}
 	}
 	proxyConfig := dockerCli.ConfigFile().ParseProxyConfig(dockerCli.Client().DaemonHost(), opts.ConvertKVStringsToMapWithNil(copts.env.GetSlice()))
-	newEnv := []string{}
+	newEnv := make([]string, 0, len(proxyConfig))
 	for k, v := range proxyConfig {
 		if v == nil {
 			newEnv = append(newEnv, k)
@@ -141,20 +134,27 @@ func pullImage(ctx context.Context, dockerCli command.Cli, img string, options *
 		return err
 	}
 
-	responseBody, err := dockerCli.Client().ImageCreate(ctx, img, imagetypes.CreateOptions{
+	var ociPlatforms []ocispec.Platform
+	if options.platform != "" {
+		// Already validated.
+		ociPlatforms = append(ociPlatforms, platforms.MustParse(options.platform))
+	}
+	resp, err := dockerCli.Client().ImagePull(ctx, img, client.ImagePullOptions{
 		RegistryAuth: encodedAuth,
-		Platform:     options.platform,
+		Platforms:    ociPlatforms,
 	})
 	if err != nil {
 		return err
 	}
-	defer responseBody.Close()
+	defer func() {
+		_ = resp.Close()
+	}()
 
 	out := dockerCli.Err()
 	if options.quiet {
 		out = streams.NewOut(io.Discard)
 	}
-	return jsonstream.Display(ctx, responseBody, out)
+	return jsonstream.Display(ctx, resp, out)
 }
 
 type cidFile struct {
@@ -167,13 +167,13 @@ func (cid *cidFile) Close() error {
 	if cid.file == nil {
 		return nil
 	}
-	cid.file.Close()
+	_ = cid.file.Close()
 
 	if cid.written {
 		return nil
 	}
 	if err := os.Remove(cid.path); err != nil {
-		return errors.Wrapf(err, "failed to remove the CID file '%s'", cid.path)
+		return fmt.Errorf("failed to remove the CID file '%s': %w", cid.path, err)
 	}
 
 	return nil
@@ -184,7 +184,7 @@ func (cid *cidFile) Write(id string) error {
 		return nil
 	}
 	if _, err := cid.file.Write([]byte(id)); err != nil {
-		return errors.Wrap(err, "failed to write the container ID to the file")
+		return fmt.Errorf("failed to write the container ID to the file: %w", err)
 	}
 	cid.written = true
 	return nil
@@ -195,12 +195,12 @@ func newCIDFile(cidPath string) (*cidFile, error) {
 		return &cidFile{}, nil
 	}
 	if _, err := os.Stat(cidPath); err == nil {
-		return nil, errors.Errorf("container ID file found, make sure the other container isn't running or delete %s", cidPath)
+		return nil, errors.New("container ID file found, make sure the other container isn't running or delete " + cidPath)
 	}
 
 	f, err := os.Create(cidPath)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create the container ID file")
+		return nil, fmt.Errorf("failed to create the container ID file: %w", err)
 	}
 
 	return &cidFile{path: cidPath, file: f}, nil
@@ -212,16 +212,23 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 	hostConfig := containerCfg.HostConfig
 	networkingConfig := containerCfg.NetworkingConfig
 
-	var (
-		trustedRef reference.Canonical
-		namedRef   reference.Named
-	)
+	var namedRef reference.Named
+
+	// TODO(thaJeztah): add a platform option-type / flag-type.
+	if options.platform != "" {
+		_, err = platforms.Parse(options.platform)
+		if err != nil {
+			return "", err
+		}
+	}
 
 	containerIDFile, err := newCIDFile(hostConfig.ContainerIDFile)
 	if err != nil {
 		return "", err
 	}
-	defer containerIDFile.Close()
+	defer func() {
+		_ = containerIDFile.Close()
+	}()
 
 	ref, err := reference.ParseAnyReference(config.Image)
 	if err != nil {
@@ -229,15 +236,6 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 	}
 	if named, ok := ref.(reference.Named); ok {
 		namedRef = reference.TagNameOnly(named)
-
-		if taggedRef, ok := namedRef.(reference.NamedTagged); ok && !options.untrusted {
-			var err error
-			trustedRef, err = image.TrustedReference(ctx, dockerCli, taggedRef)
-			if err != nil {
-				return "", err
-			}
-			config.Image = reference.FamiliarString(trustedRef)
-		}
 	}
 
 	const dockerConfigPathInContainer = "/run/secrets/docker/config.json"
@@ -248,15 +246,14 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 		// 1. Mount the actual docker socket.
 		// 2. A synthezised ~/.docker/config.json with resolved tokens.
 
-		socket := dockerCli.DockerEndpoint().Host
-		if !strings.HasPrefix(socket, "unix://") {
-			return "", fmt.Errorf("flag --use-api-socket can only be used with unix sockets: docker endpoint %s incompatible", socket)
+		if dockerCli.ServerInfo().OSType == "windows" {
+			return "", errors.New("flag --use-api-socket can't be used with a Windows Docker Engine")
 		}
-		socket = strings.TrimPrefix(socket, "unix://") // should we confirm absolute path?
 
+		// hard-code engine socket path until https://github.com/moby/moby/pull/43459 gives us a discovery mechanism
 		containerCfg.HostConfig.Mounts = append(containerCfg.HostConfig.Mounts, mount.Mount{
 			Type:        mount.TypeBind,
-			Source:      socket,
+			Source:      "/var/run/docker.sock",
 			Target:      "/var/run/docker.sock",
 			BindOptions: &mount.BindOptions{},
 		})
@@ -309,14 +306,10 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 	}
 
 	var platform *ocispec.Platform
-	// Engine API version 1.41 first introduced the option to specify platform on
-	// create. It will produce an error if you try to set a platform on older API
-	// versions, so check the API version here to maintain backwards
-	// compatibility for CLI users.
-	if options.platform != "" && versions.GreaterThanOrEqualTo(dockerCli.Client().ClientVersion(), "1.41") {
+	if options.platform != "" {
 		p, err := platforms.Parse(options.platform)
 		if err != nil {
-			return "", errors.Wrap(invalidParameter(err), "error parsing specified platform")
+			return "", invalidParameter(fmt.Errorf("error parsing specified platform: %w", err))
 		}
 		platform = &p
 	}
@@ -324,9 +317,6 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 	pullAndTagImage := func() error {
 		if err := pullImage(ctx, dockerCli, config.Image, options); err != nil {
 			return err
-		}
-		if taggedRef, ok := namedRef.(reference.NamedTagged); ok && trustedRef != nil {
-			return trust.TagTrusted(ctx, dockerCli.Client(), dockerCli.Err(), trustedRef, taggedRef)
 		}
 		return nil
 	}
@@ -339,10 +329,17 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 
 	hostConfig.ConsoleSize[0], hostConfig.ConsoleSize[1] = dockerCli.Out().GetTtySize()
 
-	response, err := dockerCli.Client().ContainerCreate(ctx, config, hostConfig, networkingConfig, platform, options.name)
+	response, err := dockerCli.Client().ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: options.name,
+		// Image:            config.Image, // TODO(thaJeztah): pass image-ref separate
+		Platform:         platform,
+		Config:           config,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+	})
 	if err != nil {
 		// Pull image if it does not exist locally and we have the PullImageMissing option. Default behavior.
-		if cerrdefs.IsNotFound(err) && namedRef != nil && options.pull == PullImageMissing {
+		if errdefs.IsNotFound(err) && namedRef != nil && options.pull == PullImageMissing {
 			if !options.quiet {
 				// we don't want to write to stdout anything apart from container.ID
 				_, _ = fmt.Fprintf(dockerCli.Err(), "Unable to find image '%s' locally\n", reference.FamiliarString(namedRef))
@@ -353,17 +350,20 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 			}
 
 			var retryErr error
-			response, retryErr = dockerCli.Client().ContainerCreate(ctx, config, hostConfig, networkingConfig, platform, options.name)
+			response, retryErr = dockerCli.Client().ContainerCreate(ctx, client.ContainerCreateOptions{
+				Name: options.name,
+				// Image:            config.Image, // TODO(thaJeztah): pass image-ref separate
+				Platform:         platform,
+				Config:           config,
+				HostConfig:       hostConfig,
+				NetworkingConfig: networkingConfig,
+			})
 			if retryErr != nil {
 				return "", retryErr
 			}
 		} else {
 			return "", err
 		}
-	}
-
-	if warn := localhostDNSWarning(*hostConfig); warn != "" {
-		response.Warnings = append(response.Warnings, warn)
 	}
 
 	containerID = response.ID
@@ -384,19 +384,6 @@ func createContainer(ctx context.Context, dockerCli command.Cli, containerCfg *c
 	}
 
 	return containerID, err
-}
-
-// check the DNS settings passed via --dns against localhost regexp to warn if
-// they are trying to set a DNS to a localhost address.
-//
-// TODO(thaJeztah): move this to the daemon, which can make a better call if it will work or not (depending on networking mode).
-func localhostDNSWarning(hostConfig container.HostConfig) string {
-	for _, dnsIP := range hostConfig.DNS {
-		if addr, err := netip.ParseAddr(dnsIP); err == nil && addr.IsLoopback() {
-			return fmt.Sprintf("Localhost DNS (%s) may fail in containers.", addr)
-		}
-	}
-	return ""
 }
 
 func validatePullOpt(val string) error {
@@ -420,7 +407,7 @@ func validatePullOpt(val string) error {
 //
 // The path should be an absolute path in the container, commonly
 // /root/.docker/config.json.
-func copyDockerConfigIntoContainer(ctx context.Context, dockerAPI client.APIClient, containerID string, configPath string, config *configfile.ConfigFile) error {
+func copyDockerConfigIntoContainer(ctx context.Context, apiClient client.APIClient, containerID string, configPath string, config *configfile.ConfigFile) error {
 	var configBuf bytes.Buffer
 	if err := config.SaveToWriter(&configBuf); err != nil {
 		return fmt.Errorf("saving creds: %w", err)
@@ -429,7 +416,7 @@ func copyDockerConfigIntoContainer(ctx context.Context, dockerAPI client.APIClie
 	// We don't need to get super fancy with the tar creation.
 	var tarBuf bytes.Buffer
 	tarWriter := tar.NewWriter(&tarBuf)
-	tarWriter.WriteHeader(&tar.Header{
+	_ = tarWriter.WriteHeader(&tar.Header{
 		Name: configPath,
 		Size: int64(configBuf.Len()),
 		Mode: 0o600,
@@ -443,8 +430,11 @@ func copyDockerConfigIntoContainer(ctx context.Context, dockerAPI client.APIClie
 		return fmt.Errorf("closing tar for config copy failed: %w", err)
 	}
 
-	if err := dockerAPI.CopyToContainer(ctx, containerID, "/",
-		&tarBuf, container.CopyToContainerOptions{}); err != nil {
+	_, err := apiClient.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{
+		DestinationPath: "/",
+		Content:         &tarBuf,
+	})
+	if err != nil {
 		return fmt.Errorf("copying config.json into container failed: %w", err)
 	}
 

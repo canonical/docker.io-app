@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/pkg/streamformatter"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/progress"
+	"github.com/moby/moby/client/pkg/streamformatter"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -25,8 +25,10 @@ const (
 )
 
 // RootRotationProgress outputs progress information for convergence of a root rotation.
-func RootRotationProgress(ctx context.Context, dclient client.APIClient, progressWriter io.WriteCloser) error {
-	defer progressWriter.Close()
+func RootRotationProgress(ctx context.Context, apiClient client.APIClient, progressWriter io.WriteCloser) error {
+	defer func() {
+		_ = progressWriter.Close()
+	}()
 
 	progressOut := streamformatter.NewJSONProgressOutput(progressWriter, false)
 
@@ -42,7 +44,7 @@ func RootRotationProgress(ctx context.Context, dclient client.APIClient, progres
 	var done bool
 
 	for {
-		info, err := dclient.SwarmInspect(ctx)
+		info, err := apiClient.SwarmInspect(ctx, client.SwarmInspectOptions{})
 		if err != nil {
 			return err
 		}
@@ -51,12 +53,12 @@ func RootRotationProgress(ctx context.Context, dclient client.APIClient, progres
 			return nil
 		}
 
-		nodes, err := dclient.NodeList(ctx, swarm.NodeListOptions{})
+		res, err := apiClient.NodeList(ctx, client.NodeListOptions{})
 		if err != nil {
 			return err
 		}
 
-		done = updateProgress(progressOut, info.ClusterInfo.TLSInfo, nodes, info.ClusterInfo.RootRotationInProgress)
+		done = updateProgress(progressOut, info.Swarm.ClusterInfo.TLSInfo, res.Items, info.Swarm.ClusterInfo.RootRotationInProgress)
 
 		select {
 		case <-time.After(200 * time.Millisecond):
@@ -72,7 +74,7 @@ func RootRotationProgress(ctx context.Context, dclient client.APIClient, progres
 
 func updateProgress(progressOut progress.Output, desiredTLSInfo swarm.TLSInfo, nodes []swarm.Node, rootRotationInProgress bool) bool {
 	// write the current desired root cert's digest, because the desired root certs might be too long
-	progressOut.WriteProgress(progress.Progress{
+	_ = progressOut.WriteProgress(progress.Progress{
 		ID:     "desired root digest",
 		Action: digest.FromBytes([]byte(desiredTLSInfo.TrustRoot)).String(),
 	})
@@ -91,7 +93,7 @@ func updateProgress(progressOut progress.Output, desiredTLSInfo swarm.TLSInfo, n
 	}
 
 	total := int64(len(nodes))
-	progressOut.WriteProgress(progress.Progress{
+	_ = progressOut.WriteProgress(progress.Progress{
 		ID:      certsRotatedStr,
 		Action:  certsAction,
 		Current: certsRight,
@@ -108,12 +110,12 @@ func updateProgress(progressOut progress.Output, desiredTLSInfo swarm.TLSInfo, n
 	}
 
 	if certsRight == total && !rootRotationInProgress {
-		progressOut.WriteProgress(rootsProgress)
+		_ = progressOut.WriteProgress(rootsProgress)
 		return certsRight == total && trustRootsRight == total
 	}
 
 	// we still have certs that need renewing, so display that there are zero roots rotated yet
 	rootsProgress.Current = 0
-	progressOut.WriteProgress(rootsProgress)
+	_ = progressOut.WriteProgress(rootsProgress)
 	return false
 }

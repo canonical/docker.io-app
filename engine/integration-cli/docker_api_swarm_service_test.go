@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/integration-cli/checker"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/docker/testutil"
-	testdaemon "github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration-cli/checker"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
+	"github.com/moby/moby/v2/integration-cli/daemon"
+	"github.com/moby/moby/v2/internal/testutil"
+	testdaemon "github.com/moby/moby/v2/internal/testutil/daemon"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -71,20 +72,20 @@ func (s *DockerSwarmSuite) TestAPISwarmServicesCreate(c *testing.T) {
 	id := d.CreateService(ctx, c, simpleTestService, setInstances(instances))
 	poll.WaitOn(c, pollCheck(c, d.CheckActiveContainerCount(ctx), checker.Equals(instances)), poll.WithTimeout(defaultReconciliationTimeout))
 
-	client := d.NewClientT(c)
-	defer client.Close()
+	apiClient := d.NewClientT(c)
+	defer apiClient.Close()
 
-	options := swarm.ServiceInspectOptions{InsertDefaults: true}
+	options := client.ServiceInspectOptions{InsertDefaults: true}
 
 	// insertDefaults inserts UpdateConfig when service is fetched by ID
-	resp, _, err := client.ServiceInspectWithRaw(ctx, id, options)
-	out := fmt.Sprintf("%+v", resp)
+	res, err := apiClient.ServiceInspect(ctx, id, options)
+	out := fmt.Sprintf("%+v", res.Service)
 	assert.NilError(c, err)
 	assert.Assert(c, is.Contains(out, "UpdateConfig"))
 
 	// insertDefaults inserts UpdateConfig when service is fetched by ID
-	resp, _, err = client.ServiceInspectWithRaw(ctx, "top", options)
-	out = fmt.Sprintf("%+v", resp)
+	res, err = apiClient.ServiceInspect(ctx, "top", options)
+	out = fmt.Sprintf("%+v", res.Service)
 	assert.NilError(c, err)
 	assert.Assert(c, is.Contains(out, "UpdateConfig"))
 
@@ -224,8 +225,8 @@ func (s *DockerSwarmSuite) TestAPISwarmServicesUpdateStartFirst(c *testing.T) {
 
 	checkStartingTasks := func(expected int) []swarm.Task {
 		var startingTasks []swarm.Task
-		poll.WaitOn(c, pollCheck(c, func(c *testing.T) (interface{}, string) {
-			tasks := d.GetServiceTasks(ctx, c, id)
+		poll.WaitOn(c, pollCheck(c, func(t *testing.T) (any, string) {
+			tasks := d.GetServiceTasks(ctx, t, id)
 			startingTasks = nil
 			for _, t := range tasks {
 				if t.Status.State == swarm.TaskStateStarting {

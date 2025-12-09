@@ -23,7 +23,7 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: "1.24.3"
+  GO_VERSION: "1.25.5"
   DESTDIR: ./build
   SETUP_BUILDX_VERSION: edge
   SETUP_BUILDKIT_IMAGE: moby/buildkit:latest
@@ -35,6 +35,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - validate-dco
     steps:
@@ -52,7 +53,7 @@ jobs:
           targets: binary
       -
         name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binary
           path: ${{ env.DESTDIR }}
@@ -62,6 +63,7 @@ jobs:
   test-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - build-linux
     env:
@@ -98,15 +100,15 @@ jobs:
         uses: crazy-max/ghaction-github-runtime@v3
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: moby
       -
         name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: vendor.sum
+          cache: false
       -
         name: BuildKit ref
         run: |
@@ -114,7 +116,7 @@ jobs:
         working-directory: moby
       -
         name: Checkout BuildKit ${{ env.BUILDKIT_REF }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.BUILDKIT_REPO }}
           ref: ${{ env.BUILDKIT_REF }}
@@ -131,7 +133,7 @@ jobs:
           buildkitd-flags: --debug
       -
         name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: binary
           path: ./buildkit/build/moby/
@@ -166,6 +168,7 @@ jobs:
   build-windows:
     runs-on: windows-2022
     timeout-minutes: 120
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - validate-dco
     env:
@@ -181,13 +184,14 @@ jobs:
         working-directory: ${{ env.GOPATH }}/src/github.com/docker/docker
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: ${{ env.GOPATH }}/src/github.com/docker/docker
 
       - name: Env
         run: |
           Get-ChildItem Env: | Out-String
+
       - name: Moby - Init
         run: |
           New-Item -ItemType "directory" -Path "${{ github.workspace }}\go-build"
@@ -195,21 +199,10 @@ jobs:
           echo "WINDOWS_BASE_IMAGE_TAG=${{ env.WINDOWS_BASE_TAG_2022 }}" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: vendor.sum
-      - name: Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~\AppData\Local\go-build
-            ~\go\pkg\mod
-            ${{ github.workspace }}\go-build
-            ${{ env.GOPATH }}\pkg\mod
-          key: ${{ inputs.os }}-${{ github.job }}-${{ hashFiles('**/vendor.sum') }}
-          restore-keys: |
-            ${{ inputs.os }}-${{ github.job }}-
+          cache: false
 
       - name: Docker info
         run: |
@@ -220,7 +213,6 @@ jobs:
           & docker build `
             --build-arg WINDOWS_BASE_IMAGE `
             --build-arg WINDOWS_BASE_IMAGE_TAG `
-            --build-arg GO_VERSION `
             -t ${{ env.TEST_IMAGE_NAME }} `
             -f Dockerfile.windows .
 
@@ -233,7 +225,7 @@ jobs:
           go install github.com/distribution/distribution/v3/cmd/registry@latest
 
       - name: Checkout BuildKit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: moby/buildkit
           ref: master
@@ -256,7 +248,7 @@ jobs:
           cp ${{ env.GOPATH }}\bin\buildctl.exe ${{ env.BIN_OUT }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: build-windows
           path: ${{ env.BIN_OUT }}/*
@@ -266,6 +258,7 @@ jobs:
   test-windows:
     runs-on: windows-2022
     timeout-minutes: 120 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - build-windows
     env:
@@ -309,31 +302,36 @@ jobs:
             disabledFeatures="${disabledFeatures},merge_diff"
           fi
           echo "BUILDKIT_TEST_DISABLE_FEATURES=${disabledFeatures}" >> $GITHUB_ENV
+
       - name: Expose GitHub Runtime
         uses: crazy-max/ghaction-github-runtime@v3
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: moby
+
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: vendor.sum
+          cache: false
+
       - name: BuildKit ref
         shell: bash
         run: |
           echo "$(./hack/buildkit-ref)" >> $GITHUB_ENV
         working-directory: moby
+
       - name: Checkout BuildKit ${{ env.BUILDKIT_REF }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.BUILDKIT_REPO }}
           ref: ${{ env.BUILDKIT_REF }}
           path: buildkit
 
       - name: Download Moby artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: build-windows
           path: ${{ env.BIN_OUT }}
@@ -359,6 +357,7 @@ jobs:
            testFlags="${testFlags} --run=TestIntegration/$testSliceOffset.*/worker=${{ matrix.worker }}"
           fi
           echo "TESTFLAGS=${testFlags}" >> $GITHUB_ENV
+
       - name: Test
         shell: bash
         run: |

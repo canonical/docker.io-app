@@ -8,9 +8,9 @@ import (
 
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/command/inspect"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -79,8 +79,8 @@ TLS Info:
 	tlsStatusHeader     = "TLS STATUS"
 )
 
-// NewFormat returns a Format for rendering using a node Context
-func NewFormat(source string, quiet bool) formatter.Format {
+// newFormat returns a Format for rendering using a nodeContext.
+func newFormat(source string, quiet bool) formatter.Format {
 	switch source {
 	case formatter.PrettyFormatKey:
 		return nodeInspectPrettyTemplate
@@ -98,35 +98,39 @@ func NewFormat(source string, quiet bool) formatter.Format {
 	return formatter.Format(source)
 }
 
-// FormatWrite writes the context
-func FormatWrite(ctx formatter.Context, nodes []swarm.Node, info system.Info) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, node := range nodes {
-			nodeCtx := &nodeContext{n: node, info: info}
-			if err := format(nodeCtx); err != nil {
+// formatWrite writes the context.
+func formatWrite(fmtCtx formatter.Context, nodes client.NodeListResult, info client.SystemInfoResult) error {
+	nodeCtx := &nodeContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"ID":            nodeIDHeader,
+				"Self":          selfHeader,
+				"Hostname":      hostnameHeader,
+				"Status":        formatter.StatusHeader,
+				"Availability":  availabilityHeader,
+				"ManagerStatus": managerStatusHeader,
+				"EngineVersion": engineVersionHeader,
+				"TLSStatus":     tlsStatusHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(nodeCtx, func(format func(subContext formatter.SubContext) error) error {
+		for _, node := range nodes.Items {
+			if err := format(&nodeContext{
+				n:    node,
+				info: info.Info.Swarm,
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	nodeCtx := nodeContext{}
-	nodeCtx.Header = formatter.SubHeaderContext{
-		"ID":            nodeIDHeader,
-		"Self":          selfHeader,
-		"Hostname":      hostnameHeader,
-		"Status":        formatter.StatusHeader,
-		"Availability":  availabilityHeader,
-		"ManagerStatus": managerStatusHeader,
-		"EngineVersion": engineVersionHeader,
-		"TLSStatus":     tlsStatusHeader,
-	}
-	return ctx.Write(&nodeCtx, render)
+	})
 }
 
 type nodeContext struct {
 	formatter.HeaderContext
 	n    swarm.Node
-	info system.Info
+	info swarm.Info
 }
 
 func (c *nodeContext) MarshalJSON() ([]byte, error) {
@@ -138,7 +142,7 @@ func (c *nodeContext) ID() string {
 }
 
 func (c *nodeContext) Self() bool {
-	return c.n.ID == c.info.Swarm.NodeID
+	return c.n.ID == c.info.NodeID
 }
 
 func (c *nodeContext) Hostname() string {
@@ -166,10 +170,10 @@ func (c *nodeContext) ManagerStatus() string {
 }
 
 func (c *nodeContext) TLSStatus() string {
-	if c.info.Swarm.Cluster == nil || reflect.DeepEqual(c.info.Swarm.Cluster.TLSInfo, swarm.TLSInfo{}) || reflect.DeepEqual(c.n.Description.TLSInfo, swarm.TLSInfo{}) {
+	if c.info.Cluster == nil || reflect.DeepEqual(c.info.Cluster.TLSInfo, swarm.TLSInfo{}) || reflect.DeepEqual(c.n.Description.TLSInfo, swarm.TLSInfo{}) {
 		return "Unknown"
 	}
-	if reflect.DeepEqual(c.n.Description.TLSInfo, c.info.Swarm.Cluster.TLSInfo) {
+	if reflect.DeepEqual(c.n.Description.TLSInfo, c.info.Cluster.TLSInfo) {
 		return "Ready"
 	}
 	return "Needs Rotation"
@@ -179,12 +183,12 @@ func (c *nodeContext) EngineVersion() string {
 	return c.n.Description.Engine.EngineVersion
 }
 
-// InspectFormatWrite renders the context for a list of nodes
-func InspectFormatWrite(ctx formatter.Context, refs []string, getRef inspect.GetRefFunc) error {
-	if ctx.Format != nodeInspectPrettyTemplate {
-		return inspect.Inspect(ctx.Output, refs, string(ctx.Format), getRef)
+// inspectFormatWrite renders the context for a list of nodes.
+func inspectFormatWrite(fmtCtx formatter.Context, refs []string, getRef inspect.GetRefFunc) error {
+	if fmtCtx.Format != nodeInspectPrettyTemplate {
+		return inspect.Inspect(fmtCtx.Output, refs, string(fmtCtx.Format), getRef)
 	}
-	render := func(format func(subContext formatter.SubContext) error) error {
+	return fmtCtx.Write(&nodeInspectContext{}, func(format func(subContext formatter.SubContext) error) error {
 		for _, ref := range refs {
 			nodeI, _, err := getRef(ref)
 			if err != nil {
@@ -199,8 +203,7 @@ func InspectFormatWrite(ctx formatter.Context, refs []string, getRef inspect.Get
 			}
 		}
 		return nil
-	}
-	return ctx.Write(&nodeInspectContext{}, render)
+	})
 }
 
 type nodeInspectContext struct {

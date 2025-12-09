@@ -13,11 +13,10 @@ import (
 	configtypes "github.com/docker/cli/cli/config/types"
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/prompt"
+	"github.com/docker/cli/internal/registry"
 	"github.com/docker/cli/internal/test"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/registry"
+	registrytypes "github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
@@ -34,23 +33,23 @@ type fakeClient struct {
 	client.Client
 }
 
-func (*fakeClient) Info(context.Context) (system.Info, error) {
-	return system.Info{}, nil
+func (*fakeClient) Info(context.Context, client.InfoOptions) (client.SystemInfoResult, error) {
+	return client.SystemInfoResult{}, nil
 }
 
-func (*fakeClient) RegistryLogin(_ context.Context, auth registrytypes.AuthConfig) (registrytypes.AuthenticateOKBody, error) {
-	if auth.Password == expiredPassword {
-		return registrytypes.AuthenticateOKBody{}, errors.New("Invalid Username or Password")
+func (*fakeClient) RegistryLogin(_ context.Context, options client.RegistryLoginOptions) (client.RegistryLoginResult, error) {
+	if options.Password == expiredPassword {
+		return client.RegistryLoginResult{}, errors.New("invalid Username or Password")
 	}
-	if auth.Password == useToken {
-		return registrytypes.AuthenticateOKBody{
-			IdentityToken: auth.Password,
+	if options.Password == useToken {
+		return client.RegistryLoginResult{
+			Auth: registrytypes.AuthResponse{IdentityToken: options.Password},
 		}, nil
 	}
-	if auth.Username == unknownUser {
-		return registrytypes.AuthenticateOKBody{}, errors.New(errUnknownUser)
+	if options.Username == unknownUser {
+		return client.RegistryLoginResult{}, errors.New(errUnknownUser)
 	}
-	return registrytypes.AuthenticateOKBody{}, nil
+	return client.RegistryLoginResult{}, nil
 }
 
 func TestLoginWithCredStoreCreds(t *testing.T) {
@@ -128,7 +127,7 @@ func TestRunLogin(t *testing.T) {
 			input: loginOptions{
 				serverAddress: "reg1",
 			},
-			expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+			expectedErr: "error: cannot perform an interactive login from a non TTY device",
 		},
 		{
 			doc:              "store valid username and password",
@@ -335,19 +334,19 @@ func TestLoginNonInteractive(t *testing.T) {
 				doc:         "error - w/o user w/o pass ",
 				username:    false,
 				password:    false,
-				expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+				expectedErr: "error: cannot perform an interactive login from a non TTY device",
 			},
 			{
 				doc:         "error - w/ user w/o pass",
 				username:    true,
 				password:    false,
-				expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+				expectedErr: "error: cannot perform an interactive login from a non TTY device",
 			},
 			{
 				doc:         "error - w/o user w/ pass",
 				username:    false,
 				password:    true,
-				expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+				expectedErr: "error: cannot perform an interactive login from a non TTY device",
 			},
 		}
 
@@ -404,13 +403,13 @@ func TestLoginNonInteractive(t *testing.T) {
 				doc:         "error - w/ user w/o pass",
 				username:    true,
 				password:    false,
-				expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+				expectedErr: "error: cannot perform an interactive login from a non TTY device",
 			},
 			{
 				doc:         "error - w/o user w/ pass",
 				username:    false,
 				password:    true,
-				expectedErr: "Error: Cannot perform an interactive login from a non TTY device",
+				expectedErr: "error: cannot perform an interactive login from a non TTY device",
 			},
 		}
 
@@ -497,50 +496,6 @@ func TestLoginTermination(t *testing.T) {
 	}
 }
 
-func TestIsOauthLoginDisabled(t *testing.T) {
-	testCases := []struct {
-		envVar   string
-		disabled bool
-	}{
-		{
-			envVar:   "",
-			disabled: false,
-		},
-		{
-			envVar:   "bork",
-			disabled: false,
-		},
-		{
-			envVar:   "0",
-			disabled: false,
-		},
-		{
-			envVar:   "false",
-			disabled: false,
-		},
-		{
-			envVar:   "true",
-			disabled: true,
-		},
-		{
-			envVar:   "TRUE",
-			disabled: true,
-		},
-		{
-			envVar:   "1",
-			disabled: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Setenv(OauthLoginEscapeHatchEnvVar, tc.envVar)
-
-		disabled := isOauthLoginDisabled()
-
-		assert.Equal(t, disabled, tc.disabled)
-	}
-}
-
 func TestLoginValidateFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -584,7 +539,7 @@ func TestLoginValidateFlags(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewLoginCommand(test.NewFakeCli(&fakeClient{}))
+			cmd := newLoginCommand(test.NewFakeCli(&fakeClient{}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)

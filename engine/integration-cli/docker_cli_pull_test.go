@@ -17,19 +17,23 @@ type DockerCLIPullSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIPullSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIPullSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIPullSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIPullSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 // TestPullFromCentralRegistry pulls an image from the central registry and verifies that the client
 // prints all expected output.
 func (s *DockerHubPullSuite) TestPullFromCentralRegistry(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
-	out := s.Cmd(c, "pull", "hello-world")
+	out, err := s.CmdWithError("pull", "hello-world")
+	if err != nil && strings.Contains(err.Error(), "toomanyrequests") {
+		c.Skipf("XFAIL: %s", err.Error())
+	}
+	assert.NilError(c, err)
 	defer deleteImages("hello-world")
 
 	assert.Assert(c, strings.Contains(out, "Using default tag: latest"), "expected the 'latest' tag to be automatically assumed")
@@ -39,7 +43,7 @@ func (s *DockerHubPullSuite) TestPullFromCentralRegistry(c *testing.T) {
 	matches := regexp.MustCompile(`Digest: (.+)\n`).FindAllStringSubmatch(out, -1)
 	assert.Equal(c, len(matches), 1, "expected exactly one image digest in the output")
 	assert.Equal(c, len(matches[0]), 2, "unexpected number of submatches for the digest")
-	_, err := digest.Parse(matches[0][1])
+	_, err = digest.Parse(matches[0][1])
 	assert.NilError(c, err, "invalid digest %q in output", matches[0][1])
 
 	// We should have a single entry in images.
@@ -137,7 +141,11 @@ func (s *DockerHubPullSuite) TestPullAllTagsFromCentralRegistry(c *testing.T) {
 	// See https://github.com/moby/moby/issues/46632
 	skip.If(c, testEnv.UsingSnapshotter, "The image dockercore/engine-pull-all-test-fixture is a hand-made image that contains an error in the manifest, the size is reported as 424 but its real size is 524, containerd fails to pull it because it checks that the sizes reported are right")
 	testRequires(c, DaemonIsLinux)
-	s.Cmd(c, "pull", "dockercore/engine-pull-all-test-fixture")
+	_, err := s.CmdWithError("pull", "dockercore/engine-pull-all-test-fixture")
+	if err != nil && strings.Contains(err.Error(), "toomanyrequests") {
+		c.Skipf("XFAIL: %s", err.Error())
+	}
+	assert.NilError(c, err)
 	outImageCmd := s.Cmd(c, "images", "dockercore/engine-pull-all-test-fixture")
 	splitOutImageCmd := strings.Split(strings.TrimSpace(outImageCmd), "\n")
 	assert.Equal(c, len(splitOutImageCmd), 2)
@@ -203,7 +211,7 @@ func (s *DockerHubPullSuite) TestPullClientDisconnect(c *testing.T) {
 	assert.ErrorContains(c, err, "", "image was pulled after client disconnected")
 }
 
-// Regression test for https://github.com/docker/docker/issues/26429
+// Regression test for https://github.com/moby/moby/issues/26429
 func (s *DockerCLIPullSuite) TestPullLinuxImageFailsOnWindows(c *testing.T) {
 	testRequires(c, DaemonIsWindows, Network)
 	_, _, err := dockerCmdWithError("pull", "ubuntu")
@@ -211,7 +219,7 @@ func (s *DockerCLIPullSuite) TestPullLinuxImageFailsOnWindows(c *testing.T) {
 	assert.ErrorContains(c, err, "no matching manifest for windows")
 }
 
-// Regression test for https://github.com/docker/docker/issues/28892
+// Regression test for https://github.com/moby/moby/issues/28892
 func (s *DockerCLIPullSuite) TestPullWindowsImageFailsOnLinux(c *testing.T) {
 	testRequires(c, DaemonIsLinux, Network)
 	_, _, err := dockerCmdWithError("pull", "mcr.microsoft.com/windows/servercore:ltsc2022")

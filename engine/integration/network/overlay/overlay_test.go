@@ -1,6 +1,6 @@
 //go:build !windows
 
-package overlay // import "github.com/docker/docker/integration/network/overlay"
+package overlay
 
 import (
 	"fmt"
@@ -10,14 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	networktypes "github.com/docker/docker/api/types/network"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/integration/internal/swarm"
-	"github.com/docker/docker/libnetwork/netlabel"
-	"github.com/docker/docker/testutil/daemon"
+	networktypes "github.com/moby/moby/api/types/network"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/daemon/libnetwork/netlabel"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/integration/internal/swarm"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
 	"gotest.tools/v3/skip"
@@ -48,7 +48,7 @@ func TestEndpointWithCustomIfname(t *testing.T) {
 				netlabel.Ifname: "foobar",
 			},
 		}))
-	defer container.Remove(ctx, t, apiClient, ctrID, containertypes.RemoveOptions{Force: true})
+	defer container.Remove(ctx, t, apiClient, ctrID, client.ContainerRemoveOptions{Force: true})
 
 	out, err := container.Output(ctx, apiClient, ctrID)
 	assert.NilError(t, err)
@@ -65,7 +65,7 @@ func TestHostPortMappings(t *testing.T) {
 	ctx := setupTest(t)
 
 	d := daemon.New(t)
-	d.StartWithBusybox(ctx, t)
+	d.StartNodeWithBusybox(ctx, t)
 	defer d.Stop(t)
 
 	d.SwarmInit(ctx, t, swarmtypes.InitRequest{AdvertiseAddr: "127.0.0.1:2377"})
@@ -82,20 +82,20 @@ func TestHostPortMappings(t *testing.T) {
 		swarm.ServiceWithNetwork(netName),
 		swarm.ServiceWithEndpoint(&swarmtypes.EndpointSpec{
 			Ports: []swarmtypes.PortConfig{
-				{Protocol: swarmtypes.PortConfigProtocolTCP, TargetPort: 80, PublishedPort: 80, PublishMode: swarmtypes.PortConfigPublishModeHost},
+				{Protocol: networktypes.TCP, TargetPort: 80, PublishedPort: 80, PublishMode: swarmtypes.PortConfigPublishModeHost},
 			},
 		}))
-	defer apiClient.ServiceRemove(ctx, svcID)
+	defer apiClient.ServiceRemove(ctx, svcID, client.ServiceRemoveOptions{})
 
 	poll.WaitOn(t, swarm.RunningTasksCount(ctx, apiClient, svcID, 1), swarm.ServicePoll)
 
-	ctrs, err := apiClient.ContainerList(ctx, containertypes.ListOptions{})
+	list, err := apiClient.ContainerList(ctx, client.ContainerListOptions{})
 	assert.NilError(t, err)
-	assert.Equal(t, 1, len(ctrs))
+	assert.Equal(t, 1, len(list.Items))
 
 	var addrs []string
-	for _, port := range ctrs[0].Ports {
-		addrs = append(addrs, fmt.Sprintf("%s:%d/%s", net.JoinHostPort(port.IP, strconv.Itoa(int(port.PublicPort))), port.PrivatePort, port.Type))
+	for _, port := range list.Items[0].Ports {
+		addrs = append(addrs, fmt.Sprintf("%s:%d/%s", net.JoinHostPort(port.IP.String(), strconv.Itoa(int(port.PublicPort))), port.PrivatePort, port.Type))
 	}
 
 	assert.Check(t, len(addrs) >= 1 && len(addrs) <= 2)

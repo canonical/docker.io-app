@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
 	"gotest.tools/v3/assert"
 )
 
@@ -18,35 +18,36 @@ type DockerCLIHealthSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIHealthSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIHealthSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIHealthSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIHealthSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
-func waitForHealthStatus(c *testing.T, name string, prev string, expected string) {
-	prev = prev + "\n"
-	expected = expected + "\n"
+func waitForHealthStatus(t *testing.T, name string, prev container.HealthStatus, expected container.HealthStatus) {
 	for {
-		out := cli.DockerCmd(c, "inspect", "--format={{.State.Health.Status}}", name).Stdout()
-		if out == expected {
+		out := cli.DockerCmd(t, "inspect", "--format={{.State.Health.Status}}", name).Stdout()
+		actual := container.HealthStatus(strings.TrimSpace(out))
+		if actual == expected {
 			return
 		}
-		assert.Equal(c, out, prev)
-		if out != prev {
+
+		// TODO(thaJeztah): this logic seems broken? assert.Assert would make it fail, so why the "actual != prev"?
+		assert.Equal(t, actual, prev)
+		if actual != prev {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func getHealth(c *testing.T, name string) *container.Health {
-	out := cli.DockerCmd(c, "inspect", "--format={{json .State.Health}}", name).Stdout()
+func getHealth(t *testing.T, name string) *container.Health {
+	out := cli.DockerCmd(t, "inspect", "--format={{json .State.Health}}", name).Stdout()
 	var health container.Health
 	err := json.Unmarshal([]byte(out), &health)
-	assert.Equal(c, err, nil)
+	assert.Equal(t, err, nil)
 	return &health
 }
 
@@ -56,7 +57,7 @@ func (s *DockerCLIHealthSuite) TestHealth(c *testing.T) {
 	existingContainers := ExistingContainerIDs(c)
 
 	imageName := "testhealth"
-	buildImageSuccessfully(c, imageName, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName, build.WithDockerfile(`FROM busybox
 		RUN echo OK > /status
 		CMD ["/bin/sleep", "120"]
 		STOPSIGNAL SIGKILL
@@ -84,7 +85,7 @@ func (s *DockerCLIHealthSuite) TestHealth(c *testing.T) {
 
 	// Inspect the status
 	out = cli.DockerCmd(c, "inspect", "--format={{.State.Health.Status}}", name).Stdout()
-	assert.Equal(c, strings.TrimSpace(out), container.Unhealthy)
+	assert.Equal(c, container.HealthStatus(strings.TrimSpace(out)), container.Unhealthy)
 
 	// Make it healthy again
 	cli.DockerCmd(c, "exec", name, "touch", "/status")
@@ -100,7 +101,7 @@ func (s *DockerCLIHealthSuite) TestHealth(c *testing.T) {
 	cli.DockerCmd(c, "rm", "noh")
 
 	// Disable the check with a new build
-	buildImageSuccessfully(c, "no_healthcheck", build.WithDockerfile(`FROM testhealth
+	cli.BuildCmd(c, "no_healthcheck", build.WithDockerfile(`FROM testhealth
 		HEALTHCHECK NONE`))
 
 	out = cli.DockerCmd(c, "inspect", "--format={{.Config.Healthcheck.Test}}", "no_healthcheck").Stdout()
@@ -144,7 +145,7 @@ func (s *DockerCLIHealthSuite) TestHealth(c *testing.T) {
 	cli.DockerCmd(c, "rm", "-f", "test")
 
 	// Check JSON-format
-	buildImageSuccessfully(c, imageName, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName, build.WithDockerfile(`FROM busybox
 		RUN echo OK > /status
 		CMD ["/bin/sleep", "120"]
 		STOPSIGNAL SIGKILL
@@ -159,7 +160,7 @@ func (s *DockerCLIHealthSuite) TestUnsetEnvVarHealthCheck(c *testing.T) {
 	testRequires(c, DaemonIsLinux) // busybox doesn't work on Windows
 
 	imageName := "testhealth"
-	buildImageSuccessfully(c, imageName, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, imageName, build.WithDockerfile(`FROM busybox
 HEALTHCHECK --interval=1s --timeout=5s --retries=5 CMD /bin/sh -c "sleep 1"
 ENTRYPOINT /bin/sh -c "sleep 600"`))
 

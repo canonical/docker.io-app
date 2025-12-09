@@ -1,7 +1,8 @@
-package config // import "github.com/docker/docker/daemon/config"
+package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,13 +17,7 @@ const (
 	StockRuntimeName = ""
 
 	WindowsV1RuntimeName = "com.docker.hcsshim.v1"
-	WindowsV2RuntimeName = "io.containerd.runhcs.v1"
 )
-
-var builtinRuntimes = map[string]bool{
-	WindowsV1RuntimeName: true,
-	WindowsV2RuntimeName: true,
-}
 
 // BridgeConfig is meant to store all the parameters for both the bridge driver and the default bridge network. On
 // Windows: 1. "bridge" in this context reference the nat driver and the default nat network; 2. the nat driver has no
@@ -64,13 +59,6 @@ func (conf *Config) IsSwarmCompatible() error {
 	return nil
 }
 
-// ValidatePlatformConfig checks if any platform-specific configuration settings are invalid.
-//
-// Deprecated: this function was only used internally and is no longer used. Use [Validate] instead.
-func (conf *Config) ValidatePlatformConfig() error {
-	return validatePlatformConfig(conf)
-}
-
 // IsRootless returns conf.Rootless on Linux but false on Windows
 func (conf *Config) IsRootless() bool {
 	return false
@@ -87,6 +75,9 @@ func setPlatformDefaults(cfg *Config) error {
 func validatePlatformConfig(conf *Config) error {
 	if conf.MTU != 0 && conf.MTU != DefaultNetworkMtu {
 		log.G(context.TODO()).Warn(`WARNING: MTU for the default network is not configurable on Windows, and this option will be ignored.`)
+	}
+	if conf.FirewallBackend != "" {
+		return errors.New("firewall-backend can only be configured on Linux")
 	}
 	return nil
 }

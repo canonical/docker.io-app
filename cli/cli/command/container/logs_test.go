@@ -2,27 +2,22 @@ package container
 
 import (
 	"context"
-	"io"
-	"strings"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
-var logFn = func(expectedOut string) func(string, container.LogsOptions) (io.ReadCloser, error) {
-	return func(container string, opts container.LogsOptions) (io.ReadCloser, error) {
-		return io.NopCloser(strings.NewReader(expectedOut)), nil
-	}
-}
-
 func TestRunLogs(t *testing.T) {
-	inspectFn := func(containerID string) (container.InspectResponse, error) {
-		return container.InspectResponse{
-			Config:            &container.Config{Tty: true},
-			ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Running: false}},
+	inspectFn := func(containerID string) (client.ContainerInspectResult, error) {
+		return client.ContainerInspectResult{
+			Container: container.InspectResponse{
+				Config: &container.Config{Tty: true},
+				State:  &container.State{Running: false},
+			},
 		}, nil
 	}
 
@@ -38,7 +33,13 @@ func TestRunLogs(t *testing.T) {
 			doc:         "successful logs",
 			expectedOut: "foo",
 			options:     &logsOptions{},
-			client:      &fakeClient{logFunc: logFn("foo"), inspectFunc: inspectFn},
+			client: &fakeClient{
+				logFunc: func(container string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+					// FIXME(thaJeztah): how to mock this?
+					return mockContainerLogsResult("foo"), nil
+				},
+				inspectFunc: inspectFn,
+			},
 		},
 	}
 

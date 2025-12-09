@@ -2,12 +2,12 @@ package manifest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/manifest/store"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +16,7 @@ type createOpts struct {
 	insecure bool
 }
 
-func newCreateListCommand(dockerCli command.Cli) *cobra.Command {
+func newCreateListCommand(dockerCLI command.Cli) *cobra.Command {
 	opts := createOpts{}
 
 	cmd := &cobra.Command{
@@ -24,8 +24,9 @@ func newCreateListCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Create a local manifest list for annotating and pushing to a registry",
 		Args:  cli.RequiresMinArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return createManifestList(cmd.Context(), dockerCli, args, opts)
+			return createManifestList(cmd.Context(), dockerCLI, args, opts)
 		},
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -38,18 +39,18 @@ func createManifestList(ctx context.Context, dockerCLI command.Cli, args []strin
 	newRef := args[0]
 	targetRef, err := normalizeReference(newRef)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing name for manifest list %s", newRef)
+		return fmt.Errorf("error parsing name for manifest list %s: %w", newRef, err)
 	}
 
 	manifestStore := newManifestStore(dockerCLI)
 	_, err = manifestStore.GetList(targetRef)
 	switch {
-	case store.IsNotFound(err):
+	case errdefs.IsNotFound(err):
 		// New manifest list
 	case err != nil:
 		return err
 	case !opts.amend:
-		return errors.Errorf("refusing to amend an existing manifest list with no --amend flag")
+		return errors.New("refusing to amend an existing manifest list with no --amend flag")
 	}
 
 	// Now create the local manifest list transaction by looking up the manifest schemas

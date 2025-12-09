@@ -2,7 +2,7 @@ package checkpoint
 
 import (
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/checkpoint"
+	"github.com/moby/moby/api/types/checkpoint"
 )
 
 const (
@@ -10,38 +10,36 @@ const (
 	checkpointNameHeader    = "CHECKPOINT NAME"
 )
 
-// NewFormat returns a format for use with a checkpoint Context
-func NewFormat(source string) formatter.Format {
+// newFormat returns a format for use with a checkpointContext.
+func newFormat(source string) formatter.Format {
 	if source == formatter.TableFormatKey {
 		return defaultCheckpointFormat
 	}
 	return formatter.Format(source)
 }
 
-// FormatWrite writes formatted checkpoints using the Context
-func FormatWrite(ctx formatter.Context, checkpoints []checkpoint.Summary) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
+// formatWrite writes formatted checkpoints using the Context
+func formatWrite(fmtCtx formatter.Context, checkpoints []checkpoint.Summary) error {
+	cpContext := &checkpointContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"Name": checkpointNameHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(cpContext, func(format func(subContext formatter.SubContext) error) error {
 		for _, cp := range checkpoints {
 			if err := format(&checkpointContext{c: cp}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	return ctx.Write(newCheckpointContext(), render)
+	})
 }
 
 type checkpointContext struct {
 	formatter.HeaderContext
 	c checkpoint.Summary
-}
-
-func newCheckpointContext() *checkpointContext {
-	cpCtx := checkpointContext{}
-	cpCtx.Header = formatter.SubHeaderContext{
-		"Name": checkpointNameHeader,
-	}
-	return &cpCtx
 }
 
 func (c *checkpointContext) MarshalJSON() ([]byte, error) {

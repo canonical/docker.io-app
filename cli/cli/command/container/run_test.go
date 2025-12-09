@@ -2,9 +2,7 @@ package container
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -15,13 +13,11 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/cli/internal/test/notary"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/jsonmessage"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/progress"
+	"github.com/moby/moby/client/pkg/streamformatter"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -40,7 +36,7 @@ func TestRunValidateFlags(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewRunCommand(test.NewFakeCli(&fakeClient{}))
+			cmd := newRunCommand(test.NewFakeCli(&fakeClient{}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
@@ -57,14 +53,12 @@ func TestRunValidateFlags(t *testing.T) {
 
 func TestRunLabel(t *testing.T) {
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
-			return container.CreateResponse{
-				ID: "id",
-			}, nil
+		createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			return client.ContainerCreateResult{ID: "id"}, nil
 		},
-		Version: "1.36",
+		Version: client.MaxAPIVersion,
 	})
-	cmd := NewRunCommand(fakeCLI)
+	cmd := newRunCommand(fakeCLI)
 	cmd.SetArgs([]string{"--detach=true", "--label", "foo", "busybox"})
 	assert.NilError(t, cmd.Execute())
 }
@@ -80,38 +74,41 @@ func TestRunAttach(t *testing.T) {
 	var conn net.Conn
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
-			return container.CreateResponse{
-				ID: "id",
-			}, nil
+		createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			return client.ContainerCreateResult{ID: "id"}, nil
 		},
-		containerAttachFunc: func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
-			server, client := net.Pipe()
+		containerAttachFunc: func(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+			server, clientConn := net.Pipe()
 			conn = server
 			t.Cleanup(func() {
 				_ = server.Close()
 			})
 			attachCh <- struct{}{}
-			return types.NewHijackedResponse(client, types.MediaTypeRawStream), nil
+			return client.ContainerAttachResult{
+				HijackedResponse: client.NewHijackedResponse(clientConn, types.MediaTypeRawStream),
+			}, nil
 		},
-		waitFunc: func(_ string) (<-chan container.WaitResponse, <-chan error) {
+		waitFunc: func(_ string) client.ContainerWaitResult {
 			responseChan := make(chan container.WaitResponse, 1)
 			errChan := make(chan error)
 
 			responseChan <- container.WaitResponse{
 				StatusCode: 33,
 			}
-			return responseChan, errChan
+			return client.ContainerWaitResult{
+				Result: responseChan,
+				Error:  errChan,
+			}
 		},
 		// use new (non-legacy) wait API
-		// see: 38591f20d07795aaef45d400df89ca12f29c603b
-		Version: "1.30",
+		// see: https://github.com/docker/cli/commit/38591f20d07795aaef45d400df89ca12f29c603b
+		Version: client.MaxAPIVersion,
 	}, func(fc *test.FakeCli) {
 		fc.SetOut(streams.NewOut(tty))
 		fc.SetIn(streams.NewIn(tty))
 	})
 
-	cmd := NewRunCommand(fakeCLI)
+	cmd := newRunCommand(fakeCLI)
 	cmd.SetArgs([]string{"-it", "busybox"})
 	cmd.SilenceUsage = true
 	cmdErrC := make(chan error, 1)
@@ -151,44 +148,47 @@ func TestRunAttachTermination(t *testing.T) {
 	killCh := make(chan struct{})
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(_ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
-			return container.CreateResponse{
-				ID: "id",
-			}, nil
+		createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			return client.ContainerCreateResult{ID: "id"}, nil
 		},
-		containerKillFunc: func(ctx context.Context, containerID, sig string) error {
-			if sig == "TERM" {
+		containerKillFunc: func(ctx context.Context, container string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
+			if options.Signal == "TERM" {
 				close(killCh)
 			}
-			return nil
+			return client.ContainerKillResult{}, nil
 		},
-		containerAttachFunc: func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
-			server, client := net.Pipe()
+		containerAttachFunc: func(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+			server, clientConn := net.Pipe()
 			conn = server
 			t.Cleanup(func() {
 				_ = server.Close()
 			})
 			attachCh <- struct{}{}
-			return types.NewHijackedResponse(client, types.MediaTypeRawStream), nil
+			return client.ContainerAttachResult{
+				HijackedResponse: client.NewHijackedResponse(clientConn, types.MediaTypeRawStream),
+			}, nil
 		},
-		waitFunc: func(_ string) (<-chan container.WaitResponse, <-chan error) {
+		waitFunc: func(_ string) client.ContainerWaitResult {
 			responseChan := make(chan container.WaitResponse, 1)
 			errChan := make(chan error)
 			<-killCh
 			responseChan <- container.WaitResponse{
 				StatusCode: 130,
 			}
-			return responseChan, errChan
+			return client.ContainerWaitResult{
+				Result: responseChan,
+				Error:  errChan,
+			}
 		},
 		// use new (non-legacy) wait API
-		// see: 38591f20d07795aaef45d400df89ca12f29c603b
-		Version: "1.30",
+		// see: https://github.com/docker/cli/commit/38591f20d07795aaef45d400df89ca12f29c603b
+		Version: client.MaxAPIVersion,
 	}, func(fc *test.FakeCli) {
 		fc.SetOut(streams.NewOut(tty))
 		fc.SetIn(streams.NewIn(tty))
 	})
 
-	cmd := NewRunCommand(fakeCLI)
+	cmd := newRunCommand(fakeCLI)
 	cmd.SetArgs([]string{"-it", "busybox"})
 	cmd.SilenceUsage = true
 	cmdErrC := make(chan error, 1)
@@ -228,49 +228,43 @@ func TestRunPullTermination(t *testing.T) {
 
 	attachCh := make(chan struct{})
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig,
-			platform *ocispec.Platform, containerName string,
-		) (container.CreateResponse, error) {
-			return container.CreateResponse{}, errors.New("shouldn't try to create a container")
+		createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			return client.ContainerCreateResult{}, errors.New("shouldn't try to create a container")
 		},
-		containerAttachFunc: func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
-			return types.HijackedResponse{}, errors.New("shouldn't try to attach to a container")
+		containerAttachFunc: func(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+			return client.ContainerAttachResult{}, errors.New("shouldn't try to attach to a container")
 		},
-		imageCreateFunc: func(ctx context.Context, parentReference string, options image.CreateOptions) (io.ReadCloser, error) {
-			server, client := net.Pipe()
+		imagePullFunc: func(ctx context.Context, parentReference string, options client.ImagePullOptions) (client.ImagePullResponse, error) {
+			server, respReader := net.Pipe()
 			t.Cleanup(func() {
 				_ = server.Close()
 			})
 			go func() {
-				enc := json.NewEncoder(server)
+				id := test.RandomID()[:12] // short-ID
+				progressOutput := streamformatter.NewJSONProgressOutput(server, true)
 				for i := 0; i < 100; i++ {
 					select {
 					case <-ctx.Done():
 						assert.NilError(t, server.Close(), "failed to close imageCreateFunc server")
 						return
 					default:
-						assert.NilError(t, enc.Encode(jsonmessage.JSONMessage{
-							Status:   "Downloading",
-							ID:       fmt.Sprintf("id-%d", i),
-							TimeNano: time.Now().UnixNano(),
-							Time:     time.Now().Unix(),
-							Progress: &jsonmessage.JSONProgress{
-								Current: int64(i),
-								Total:   100,
-								Start:   0,
-							},
+						assert.NilError(t, progressOutput.WriteProgress(progress.Progress{
+							ID:      id,
+							Message: "Downloading",
+							Current: int64(i),
+							Total:   100,
 						}))
 						time.Sleep(100 * time.Millisecond)
 					}
 				}
 			}()
 			attachCh <- struct{}{}
-			return client, nil
+			return fakeStreamResult{ReadCloser: respReader}, nil
 		},
-		Version: "1.30",
+		Version: client.MaxAPIVersion,
 	})
 
-	cmd := NewRunCommand(fakeCLI)
+	cmd := newRunCommand(fakeCLI)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"--pull", "always", "foobar:latest"})
@@ -297,58 +291,6 @@ func TestRunPullTermination(t *testing.T) {
 		})
 	case <-time.After(10 * time.Second):
 		t.Fatal("cmd did not return before the timeout")
-	}
-}
-
-func TestRunCommandWithContentTrustErrors(t *testing.T) {
-	testCases := []struct {
-		name          string
-		args          []string
-		expectedError string
-		notaryFunc    test.NotaryClientFuncType
-	}{
-		{
-			name:          "offline-notary-server",
-			notaryFunc:    notary.GetOfflineNotaryRepository,
-			expectedError: "client is offline",
-			args:          []string{"image:tag"},
-		},
-		{
-			name:          "uninitialized-notary-server",
-			notaryFunc:    notary.GetUninitializedNotaryRepository,
-			expectedError: "remote trust data does not exist",
-			args:          []string{"image:tag"},
-		},
-		{
-			name:          "empty-notary-server",
-			notaryFunc:    notary.GetEmptyTargetsNotaryRepository,
-			expectedError: "No valid trust data for tag",
-			args:          []string{"image:tag"},
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeCLI := test.NewFakeCli(&fakeClient{
-				createContainerFunc: func(config *container.Config,
-					hostConfig *container.HostConfig,
-					networkingConfig *network.NetworkingConfig,
-					platform *ocispec.Platform,
-					containerName string,
-				) (container.CreateResponse, error) {
-					return container.CreateResponse{}, errors.New("shouldn't try to pull image")
-				},
-			}, test.EnableContentTrust)
-			fakeCLI.SetNotaryClient(tc.notaryFunc)
-			cmd := NewRunCommand(fakeCLI)
-			cmd.SetArgs(tc.args)
-			cmd.SetOut(io.Discard)
-			cmd.SetErr(io.Discard)
-			err := cmd.Execute()
-			statusErr := cli.StatusError{}
-			assert.Check(t, errors.As(err, &statusErr))
-			assert.Check(t, is.Equal(statusErr.StatusCode, 125))
-			assert.Check(t, is.ErrorContains(err, tc.expectedError))
-		})
 	}
 }
 

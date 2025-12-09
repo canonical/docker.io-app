@@ -1,4 +1,4 @@
-package loggerutils // import "github.com/docker/docker/daemon/logger/loggerutils"
+package loggerutils
 
 import (
 	"bufio"
@@ -15,8 +15,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/pkg/tailfile"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/pkg/tailfile"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -99,7 +99,7 @@ func TestTailFiles(t *testing.T) {
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		tailFiles(context.TODO(), files, watcher, dec, tailReader, config.Tail, fwd)
+		tailFiles(t.Context(), files, watcher, dec, tailReader, config.Tail, fwd)
 	}()
 	<-started
 
@@ -167,7 +167,7 @@ func TestTailFiles(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			close(started)
-			tailFiles(context.TODO(), files, watcher, &testJSONStreamDecoder{}, tailReader, config.Tail, fwd)
+			tailFiles(t.Context(), files, watcher, &testJSONStreamDecoder{}, tailReader, config.Tail, fwd)
 			close(done)
 		}()
 
@@ -250,7 +250,7 @@ func TestCheckCapacityAndRotate(t *testing.T) {
 
 	t.Run("with log reader", func(t *testing.T) {
 		// Make sure rotate works with an active reader
-		lw := l.ReadLogs(context.TODO(), logger.ReadConfig{Follow: true, Tail: 1000})
+		lw := l.ReadLogs(t.Context(), logger.ReadConfig{Follow: true, Tail: 1000})
 		defer lw.ConsumerGone()
 
 		assert.NilError(t, l.WriteLogEntry(timestamp, []byte("hello world 0!\n")), ls)

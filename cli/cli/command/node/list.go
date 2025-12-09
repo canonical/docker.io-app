@@ -6,15 +6,12 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
 	"github.com/fvbommel/sortorder"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 type listOptions struct {
@@ -23,7 +20,7 @@ type listOptions struct {
 	filter opts.FilterOpt
 }
 
-func newListCommand(dockerCli command.Cli) *cobra.Command {
+func newListCommand(dockerCLI command.Cli) *cobra.Command {
 	options := listOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
@@ -32,38 +29,33 @@ func newListCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "List nodes in the swarm",
 		Args:    cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd.Context(), dockerCli, options)
+			return runList(cmd.Context(), dockerCLI, options)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
 	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Only display IDs")
 	flags.StringVar(&options.format, "format", "", flagsHelper.FormatHelp)
 	flags.VarP(&options.filter, "filter", "f", "Filter output based on conditions provided")
 
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
 	return cmd
 }
 
-func runList(ctx context.Context, dockerCli command.Cli, options listOptions) error {
-	client := dockerCli.Client()
+func runList(ctx context.Context, dockerCLI command.Cli, options listOptions) error {
+	apiClient := dockerCLI.Client()
 
-	nodes, err := client.NodeList(
-		ctx,
-		swarm.NodeListOptions{Filters: options.filter.Value()})
+	res, err := apiClient.NodeList(ctx, client.NodeListOptions{
+		Filters: options.filter.Value(),
+	})
 	if err != nil {
 		return err
 	}
 
-	info := system.Info{}
-	if len(nodes) > 0 && !options.quiet {
+	var info client.SystemInfoResult
+	if len(res.Items) > 0 && !options.quiet {
 		// only non-empty nodes and not quiet, should we call /info api
-		info, err = client.Info(ctx)
+		info, err = apiClient.Info(ctx, client.InfoOptions{})
 		if err != nil {
 			return err
 		}
@@ -72,17 +64,17 @@ func runList(ctx context.Context, dockerCli command.Cli, options listOptions) er
 	format := options.format
 	if len(format) == 0 {
 		format = formatter.TableFormatKey
-		if len(dockerCli.ConfigFile().NodesFormat) > 0 && !options.quiet {
-			format = dockerCli.ConfigFile().NodesFormat
+		if len(dockerCLI.ConfigFile().NodesFormat) > 0 && !options.quiet {
+			format = dockerCLI.ConfigFile().NodesFormat
 		}
 	}
 
 	nodesCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewFormat(format, options.quiet),
+		Output: dockerCLI.Out(),
+		Format: newFormat(format, options.quiet),
 	}
-	sort.Slice(nodes, func(i, j int) bool {
-		return sortorder.NaturalLess(nodes[i].Description.Hostname, nodes[j].Description.Hostname)
+	sort.Slice(res.Items, func(i, j int) bool {
+		return sortorder.NaturalLess(res.Items[i].Description.Hostname, res.Items[j].Description.Hostname)
 	})
-	return FormatWrite(nodesCtx, nodes, info)
+	return formatWrite(nodesCtx, res, info)
 }

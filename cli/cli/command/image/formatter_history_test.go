@@ -9,8 +9,8 @@ import (
 
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -21,7 +21,7 @@ type historyCase struct {
 }
 
 func TestHistoryContext_ID(t *testing.T) {
-	id := stringid.GenerateRandomID()
+	id := test.RandomID()
 
 	var ctx historyContext
 	cases := []historyCase{
@@ -35,7 +35,7 @@ func TestHistoryContext_ID(t *testing.T) {
 			historyContext{
 				h:     image.HistoryResponseItem{ID: id},
 				trunc: true,
-			}, stringid.TruncateID(id), ctx.ID,
+			}, formatter.TruncateID(id), ctx.ID,
 		},
 	}
 
@@ -107,8 +107,8 @@ func TestHistoryContext_CreatedSince(t *testing.T) {
 }
 
 func TestHistoryContext_CreatedBy(t *testing.T) {
-	const withTabs = `/bin/sh -c apt-key adv --keyserver hkp://pgp.mit.edu:80	--recv-keys 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62	&& echo "deb http://nginx.org/packages/mainline/debian/ jessie nginx" >> /etc/apt/sources.list  && apt-get update  && apt-get install --no-install-recommends --no-install-suggests -y       ca-certificates       nginx=${NGINX_VERSION}       nginx-module-xslt       nginx-module-geoip       nginx-module-image-filter       nginx-module-perl       nginx-module-njs       gettext-base  && rm -rf /var/lib/apt/lists/*` //nolint:revive // ignore line-length-limit
-	const expected = `/bin/sh -c apt-key adv --keyserver hkp://pgp.mit.edu:80 --recv-keys 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 && echo "deb http://nginx.org/packages/mainline/debian/ jessie nginx" >> /etc/apt/sources.list  && apt-get update  && apt-get install --no-install-recommends --no-install-suggests -y       ca-certificates       nginx=${NGINX_VERSION}       nginx-module-xslt       nginx-module-geoip       nginx-module-image-filter       nginx-module-perl       nginx-module-njs       gettext-base  && rm -rf /var/lib/apt/lists/*` //nolint:revive // ignore line-length-limit
+	const withTabs = `/bin/sh -c apt-key adv --keyserver hkp://pgp.mit.edu:80	--recv-keys 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62	&& echo "deb https://nginx.org/packages/mainline/debian/ jessie nginx" >> /etc/apt/sources.list  && apt-get update  && apt-get install --no-install-recommends --no-install-suggests -y       ca-certificates       nginx=${NGINX_VERSION}       nginx-module-xslt       nginx-module-geoip       nginx-module-image-filter       nginx-module-perl       nginx-module-njs       gettext-base  && rm -rf /var/lib/apt/lists/*` //nolint:revive // ignore line-length-limit
+	const expected = `/bin/sh -c apt-key adv --keyserver hkp://pgp.mit.edu:80 --recv-keys 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 && echo "deb https://nginx.org/packages/mainline/debian/ jessie nginx" >> /etc/apt/sources.list  && apt-get update  && apt-get install --no-install-recommends --no-install-suggests -y       ca-certificates       nginx=${NGINX_VERSION}       nginx-module-xslt       nginx-module-geoip       nginx-module-image-filter       nginx-module-perl       nginx-module-njs       gettext-base  && rm -rf /var/lib/apt/lists/*` //nolint:revive // ignore line-length-limit
 
 	var ctx historyContext
 	cases := []historyCase{
@@ -197,20 +197,22 @@ func TestHistoryContext_Table(t *testing.T) {
 	out := bytes.NewBufferString("")
 	unixTime := time.Now().AddDate(0, 0, -1).Unix()
 	oldDate := time.Now().AddDate(-17, 0, 0).Unix()
-	histories := []image.HistoryResponseItem{
-		{
-			ID:        "imageID1",
-			Created:   unixTime,
-			CreatedBy: "/bin/bash ls && npm i && npm run test && karma -c karma.conf.js start && npm start && more commands here && the list goes on",
-			Size:      int64(182964289),
-			Comment:   "Hi",
-			Tags:      []string{"image:tag2"},
+	histories := client.ImageHistoryResult{
+		Items: []image.HistoryResponseItem{
+			{
+				ID:        "imageID1",
+				Created:   unixTime,
+				CreatedBy: "/bin/bash ls && npm i && npm run test && karma -c karma.conf.js start && npm start && more commands here && the list goes on",
+				Size:      int64(182964289),
+				Comment:   "Hi",
+				Tags:      []string{"image:tag2"},
+			},
+			{ID: "imageID2", Created: unixTime, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+			{ID: "imageID3", Created: unixTime, CreatedBy: "/bin/bash ls", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+			{ID: "imageID4", Created: unixTime, CreatedBy: "/bin/bash grep", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+			{ID: "imageID5", Created: 0, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
+			{ID: "imageID6", Created: oldDate, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
 		},
-		{ID: "imageID2", Created: unixTime, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
-		{ID: "imageID3", Created: unixTime, CreatedBy: "/bin/bash ls", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
-		{ID: "imageID4", Created: unixTime, CreatedBy: "/bin/bash grep", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
-		{ID: "imageID5", Created: 0, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
-		{ID: "imageID6", Created: oldDate, CreatedBy: "/bin/bash echo", Size: int64(182964289), Comment: "Hi", Tags: []string{"image:tag2"}},
 	}
 
 	//nolint:dupword // ignore "Duplicate words (CREATED) found"
@@ -238,7 +240,7 @@ imageID6   17 years ago   /bin/bash echo                                  183MB 
 	}{
 		{
 			formatter.Context{
-				Format: NewHistoryFormat("table", false, true),
+				Format: newHistoryFormat("table", false, true),
 				Trunc:  true,
 				Output: out,
 			},
@@ -246,7 +248,7 @@ imageID6   17 years ago   /bin/bash echo                                  183MB 
 		},
 		{
 			formatter.Context{
-				Format: NewHistoryFormat("table", false, true),
+				Format: newHistoryFormat("table", false, true),
 				Trunc:  false,
 				Output: out,
 			},
@@ -256,7 +258,7 @@ imageID6   17 years ago   /bin/bash echo                                  183MB 
 
 	for _, tc := range cases {
 		t.Run(string(tc.context.Format), func(t *testing.T) {
-			err := HistoryWrite(tc.context, true, histories)
+			err := historyWrite(tc.context, true, histories)
 			assert.NilError(t, err)
 			assert.Equal(t, out.String(), tc.expected)
 			// Clean buffer

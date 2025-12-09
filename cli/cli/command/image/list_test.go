@@ -8,9 +8,8 @@ import (
 
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
-	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
 )
 
@@ -19,7 +18,7 @@ func TestNewImagesCommandErrors(t *testing.T) {
 		name          string
 		args          []string
 		expectedError string
-		imageListFunc func(options image.ListOptions) ([]image.Summary, error)
+		imageListFunc func(options client.ImageListOptions) (client.ImageListResult, error)
 	}{
 		{
 			name:          "wrong-args",
@@ -29,17 +28,17 @@ func TestNewImagesCommandErrors(t *testing.T) {
 		{
 			name:          "failed-list",
 			expectedError: "something went wrong",
-			imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
-				return []image.Summary{}, errors.New("something went wrong")
+			imageListFunc: func(options client.ImageListOptions) (client.ImageListResult, error) {
+				return client.ImageListResult{}, errors.New("something went wrong")
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewImagesCommand(test.NewFakeCli(&fakeClient{imageListFunc: tc.imageListFunc}))
+			cmd := newImagesCommand(test.NewFakeCli(&fakeClient{imageListFunc: tc.imageListFunc}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
-			cmd.SetArgs(tc.args)
+			cmd.SetArgs(nilToEmptySlice(tc.args))
 			assert.ErrorContains(t, cmd.Execute(), tc.expectedError)
 		})
 	}
@@ -50,7 +49,7 @@ func TestNewImagesCommandSuccess(t *testing.T) {
 		name          string
 		args          []string
 		imageFormat   string
-		imageListFunc func(options image.ListOptions) ([]image.Summary, error)
+		imageListFunc func(options client.ImageListOptions) (client.ImageListResult, error)
 	}{
 		{
 			name: "simple",
@@ -67,17 +66,17 @@ func TestNewImagesCommandSuccess(t *testing.T) {
 		{
 			name: "match-name",
 			args: []string{"image"},
-			imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
-				assert.Check(t, is.Equal("image", options.Filters.Get("reference")[0]))
-				return []image.Summary{}, nil
+			imageListFunc: func(options client.ImageListOptions) (client.ImageListResult, error) {
+				assert.Check(t, options.Filters["reference"]["image"])
+				return client.ImageListResult{}, nil
 			},
 		},
 		{
 			name: "filters",
 			args: []string{"--filter", "name=value"},
-			imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
-				assert.Check(t, is.Equal("value", options.Filters.Get("name")[0]))
-				return []image.Summary{}, nil
+			imageListFunc: func(options client.ImageListOptions) (client.ImageListResult, error) {
+				assert.Check(t, options.Filters["name"]["value"])
+				return client.ImageListResult{}, nil
 			},
 		},
 	}
@@ -85,10 +84,10 @@ func TestNewImagesCommandSuccess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imageListFunc: tc.imageListFunc})
 			cli.SetConfigFile(&configfile.ConfigFile{ImagesFormat: tc.imageFormat})
-			cmd := NewImagesCommand(cli)
+			cmd := newImagesCommand(cli)
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
-			cmd.SetArgs(tc.args)
+			cmd.SetArgs(nilToEmptySlice(tc.args))
 			err := cmd.Execute()
 			assert.NilError(t, err)
 			golden.Assert(t, cli.OutBuffer().String(), fmt.Sprintf("list-command-success.%s.golden", tc.name))
@@ -98,13 +97,14 @@ func TestNewImagesCommandSuccess(t *testing.T) {
 
 func TestNewListCommandAlias(t *testing.T) {
 	cmd := newListCommand(test.NewFakeCli(&fakeClient{}))
+	cmd.SetArgs([]string{""})
 	assert.Check(t, cmd.HasAlias("list"))
 	assert.Check(t, !cmd.HasAlias("other"))
 }
 
 func TestNewListCommandAmbiguous(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{})
-	cmd := NewImagesCommand(cli)
+	cmd := newImagesCommand(cli)
 	cmd.SetOut(io.Discard)
 
 	// Set the Use field to mimic that the command was called as "docker images",
@@ -114,4 +114,11 @@ func TestNewListCommandAmbiguous(t *testing.T) {
 	err := cmd.Execute()
 	assert.NilError(t, err)
 	golden.Assert(t, cli.ErrBuffer().String(), "list-command-ambiguous.golden")
+}
+
+func nilToEmptySlice[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }

@@ -91,7 +91,7 @@ run_test_integration_suites() {
 		if ! (
 			cd "$dir"
 			# Create a useful package name based on the tests's $dir. We need to take
-			# into account that  "$dir" can be either an absolute (/go/src/github.com/docker/docker/integration/foo)
+			# into account that  "$dir" can be either an absolute (/go/src/github.com/moby/moby/integration/foo)
 			# or relative (./integration/foo) path. To account for both, first we strip
 			# the absolute path, then remove any leading periods and slashes.
 			pkgname="${dir}"
@@ -188,6 +188,13 @@ test_env() {
 	(
 		set -e
 		[ -n "$TESTDEBUG" ] && set -x
+
+		# Disable collecting local telemetry, as collected by Go and Delve;
+		#
+		# - https://github.com/go-delve/delve/blob/v1.24.1/CHANGELOG.md#1231-2024-09-23
+		# - https://go.dev/doc/telemetry#background
+		HOME="$ABS_DEST/fake-HOME" go telemetry off
+
 		env -i \
 			DEST="$ABS_DEST" \
 			DOCKER_API_VERSION="$DOCKER_API_VERSION" \
@@ -198,12 +205,12 @@ test_env() {
 			DOCKER_GRAPHDRIVER="$DOCKER_GRAPHDRIVER" \
 			DOCKER_USERLANDPROXY="$DOCKER_USERLANDPROXY" \
 			DOCKER_HOST="$DOCKER_HOST" \
+			DOCKER_IGNORE_BR_NETFILTER_ERROR="$DOCKER_IGNORE_BR_NETFILTER_ERROR" \
 			DOCKER_REMAP_ROOT="$DOCKER_REMAP_ROOT" \
 			DOCKER_REMOTE_DAEMON="$DOCKER_REMOTE_DAEMON" \
 			DOCKER_ROOTLESS="$DOCKER_ROOTLESS" \
 			DOCKER_FIREWALL_BACKEND="$DOCKER_FIREWALL_BACKEND" \
 			GITHUB_ACTIONS="$GITHUB_ACTIONS" \
-			GO111MODULE="$GO111MODULE" \
 			GOCACHE="$GOCACHE" \
 			GOPATH="$GOPATH" \
 			GOTRACEBACK=all \
@@ -211,7 +218,7 @@ test_env() {
 			PATH="$PATH" \
 			TEMP="$TEMP" \
 			TEST_CLIENT_BINARY="$TEST_CLIENT_BINARY" \
-			TEST_INTEGRATION_USE_SNAPSHOTTER="$TEST_INTEGRATION_USE_SNAPSHOTTER" \
+			TEST_INTEGRATION_USE_GRAPHDRIVER="$TEST_INTEGRATION_USE_GRAPHDRIVER" \
 			OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EXPORTER_OTLP_ENDPOINT" \
 			OTEL_SERVICE_NAME="$OTEL_SERVICE_NAME" \
 			"$@"

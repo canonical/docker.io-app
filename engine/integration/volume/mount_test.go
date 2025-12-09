@@ -9,17 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/build"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/internal/safepath"
-	"github.com/docker/docker/testutil/fakecontext"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
+	"github.com/moby/moby/v2/daemon/volume/safepath"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/fakecontext"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -83,10 +80,15 @@ func TestRunMountVolumeSubdir(t *testing.T) {
 			}
 
 			ctrName := strings.ReplaceAll(t.Name(), "/", "_")
-			create, creatErr := apiClient.ContainerCreate(ctx, &cfg, &hostCfg, &network.NetworkingConfig{}, nil, ctrName)
+			create, creatErr := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+				Config:           &cfg,
+				HostConfig:       &hostCfg,
+				NetworkingConfig: &network.NetworkingConfig{},
+				Name:             ctrName,
+			})
 			id := create.ID
 			if id != "" {
-				defer apiClient.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+				defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
 			}
 
 			if tc.createErr != "" {
@@ -95,7 +97,7 @@ func TestRunMountVolumeSubdir(t *testing.T) {
 			}
 			assert.NilError(t, creatErr, "container creation failed")
 
-			startErr := apiClient.ContainerStart(ctx, id, containertypes.StartOptions{})
+			_, startErr := apiClient.ContainerStart(ctx, id, client.ContainerStartOptions{})
 			if tc.startErr != "" {
 				assert.ErrorContains(t, startErr, tc.startErr)
 				return
@@ -105,9 +107,9 @@ func TestRunMountVolumeSubdir(t *testing.T) {
 			output, err := container.Output(ctx, apiClient, id)
 			assert.Check(t, err)
 
-			inspect, err := apiClient.ContainerInspect(ctx, id)
+			inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 			if assert.Check(t, err) {
-				assert.Check(t, is.Equal(inspect.State.ExitCode, 0))
+				assert.Check(t, is.Equal(inspect.Container.State.ExitCode, 0))
 			}
 
 			assert.Check(t, is.Equal(strings.TrimSpace(output.Stderr), ""))
@@ -147,9 +149,11 @@ func TestRunMountImage(t *testing.T) {
 		{name: "image_remove_force", cmd: []string{"cat", "/image/foo"}, expected: "barbar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testImage := setupTestImage(t, ctx, apiClient, tc.name, testEnv.UsingSnapshotter())
+			testImage := setupTestImage(t, ctx, apiClient, tc.name)
 			if testImage != "" {
-				defer apiClient.ImageRemove(ctx, testImage, image.RemoveOptions{Force: true})
+				defer func() {
+					_, _ = apiClient.ImageRemove(ctx, testImage, client.ImageRemoveOptions{Force: true})
+				}()
 			}
 
 			cfg := containertypes.Config{
@@ -169,7 +173,7 @@ func TestRunMountImage(t *testing.T) {
 			}
 
 			startContainer := func(id string) {
-				startErr := apiClient.ContainerStart(ctx, id, containertypes.StartOptions{})
+				_, startErr := apiClient.ContainerStart(ctx, id, client.ContainerStartOptions{})
 				if tc.startErr != "" {
 					assert.ErrorContains(t, startErr, tc.startErr)
 					return
@@ -178,10 +182,15 @@ func TestRunMountImage(t *testing.T) {
 			}
 
 			ctrName := strings.ReplaceAll(t.Name(), "/", "_")
-			create, creatErr := apiClient.ContainerCreate(ctx, &cfg, &hostCfg, &network.NetworkingConfig{}, nil, ctrName)
+			create, creatErr := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+				Config:           &cfg,
+				HostConfig:       &hostCfg,
+				NetworkingConfig: &network.NetworkingConfig{},
+				Name:             ctrName,
+			})
 			id := create.ID
 			if id != "" {
-				defer container.Remove(ctx, t, apiClient, id, containertypes.RemoveOptions{Force: true})
+				defer container.Remove(ctx, t, apiClient, id, client.ContainerRemoveOptions{Force: true})
 			}
 
 			if tc.createErr != "" {
@@ -195,16 +204,16 @@ func TestRunMountImage(t *testing.T) {
 			if tc.name == "image_remove" {
 				img, _ := apiClient.ImageInspect(ctx, testImage)
 				imgId := strings.Split(img.ID, ":")[1]
-				_, removeErr := apiClient.ImageRemove(ctx, testImage, image.RemoveOptions{})
+				_, removeErr := apiClient.ImageRemove(ctx, testImage, client.ImageRemoveOptions{})
 				assert.ErrorContains(t, removeErr, fmt.Sprintf(`container %s is using its referenced image %s`, id[:12], imgId[:12]))
 			}
 
 			// Test that the container servives a restart when mounted image is removed
 			if tc.name == "image_remove_force" {
-				stopErr := apiClient.ContainerStop(ctx, id, containertypes.StopOptions{})
+				_, stopErr := apiClient.ContainerStop(ctx, id, client.ContainerStopOptions{})
 				assert.NilError(t, stopErr)
 
-				_, removeErr := apiClient.ImageRemove(ctx, testImage, image.RemoveOptions{Force: true})
+				_, removeErr := apiClient.ImageRemove(ctx, testImage, client.ImageRemoveOptions{Force: true})
 				assert.NilError(t, removeErr)
 
 				startContainer(id)
@@ -213,9 +222,9 @@ func TestRunMountImage(t *testing.T) {
 			output, err := container.Output(ctx, apiClient, id)
 			assert.Check(t, err)
 
-			inspect, err := apiClient.ContainerInspect(ctx, id)
+			inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 			if tc.startErr == "" && assert.Check(t, err) {
-				assert.Check(t, is.Equal(inspect.State.ExitCode, 0))
+				assert.Check(t, is.Equal(inspect.Container.State.ExitCode, 0))
 			}
 
 			assert.Check(t, is.Equal(strings.TrimSpace(output.Stderr), ""))
@@ -240,10 +249,10 @@ func setupTestVolume(t *testing.T, apiClient client.APIClient) string {
 
 	volumeName := t.Name() + "-volume"
 
-	err := apiClient.VolumeRemove(ctx, volumeName, true)
+	_, err := apiClient.VolumeRemove(ctx, volumeName, client.VolumeRemoveOptions{Force: true})
 	assert.NilError(t, err, "failed to clean volume")
 
-	_, err = apiClient.VolumeCreate(ctx, volume.CreateOptions{
+	_, err = apiClient.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name: volumeName,
 	})
 	assert.NilError(t, err, "failed to setup volume")
@@ -279,31 +288,24 @@ func setupTestVolume(t *testing.T, apiClient client.APIClient) string {
 	}
 
 	cid := container.Run(ctx, t, apiClient, opts...)
-	defer container.Remove(ctx, t, apiClient, cid, containertypes.RemoveOptions{Force: true})
+	defer container.Remove(ctx, t, apiClient, cid, client.ContainerRemoveOptions{Force: true})
 	output, err := container.Output(ctx, apiClient, cid)
 
 	assert.NilError(t, err)
 	assert.Assert(t, is.Equal(output.Stderr, ""))
 
-	inspect, err := apiClient.ContainerInspect(ctx, cid)
+	inspect, err := apiClient.ContainerInspect(ctx, cid, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Assert(t, is.Equal(inspect.State.ExitCode, 0))
+	assert.Assert(t, is.Equal(inspect.Container.State.ExitCode, 0))
 
 	return volumeName
 }
 
-func setupTestImage(t *testing.T, ctx context.Context, apiClient client.APIClient, test string, snapshotter bool) string {
+func setupTestImage(t *testing.T, ctx context.Context, apiClient client.APIClient, test string) string {
 	imgName := "test-image"
 
 	if test == "image_tag" {
 		imgName += ":foo"
-	}
-
-	var symlink string
-	if snapshotter {
-		symlink = "../../../../rootfs"
-	} else {
-		symlink = "../../../../../docker"
 	}
 
 	//nolint:dupword // ignore "Duplicate words (subdir) found (dupword)"
@@ -311,7 +313,7 @@ func setupTestImage(t *testing.T, ctx context.Context, apiClient client.APIClien
 		FROM busybox as symlink
 		RUN mkdir /hack \
 			&& ln -s "../subdir" /hack/good \
-			&& ln -s "` + symlink + `" /hack/bad
+			&& ln -s "../../../../../docker" /hack/bad
 		#--
 		FROM scratch
 		COPY foo /
@@ -328,13 +330,11 @@ func setupTestImage(t *testing.T, ctx context.Context, apiClient client.APIClien
 	)
 	defer source.Close()
 
-	resp, err := apiClient.ImageBuild(ctx,
-		source.AsTarReader(t),
-		build.ImageBuildOptions{
-			Remove:      false,
-			ForceRemove: false,
-			Tags:        []string{imgName},
-		})
+	resp, err := apiClient.ImageBuild(ctx, source.AsTarReader(t), client.ImageBuildOptions{
+		Remove:      false,
+		ForceRemove: false,
+		Tags:        []string{imgName},
+	})
 	assert.NilError(t, err)
 
 	out := bytes.NewBuffer(nil)
@@ -349,4 +349,67 @@ func setupTestImage(t *testing.T, ctx context.Context, apiClient client.APIClien
 	assert.NilError(t, err)
 
 	return imgName
+}
+
+// TestRunMountImageMultipleTimes tests mounting the same image multiple times to different destinations
+// Regression test for: https://github.com/moby/moby/issues/50122
+func TestRunMountImageMultipleTimes(t *testing.T) {
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.48"), "skip test from new feature")
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
+
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	basePath := "/etc"
+	if testEnv.DaemonInfo.OSType == "windows" {
+		basePath = `C:\`
+	}
+
+	// hello-world image is a small image that only has /hello executable binary file
+	testImage := "hello-world:frozen"
+	id := container.Run(ctx, t, apiClient,
+		container.WithImage("busybox:latest"),
+		container.WithCmd("top"),
+		container.WithMount(mount.Mount{
+			Type:   mount.TypeImage,
+			Source: testImage,
+			Target: filepath.Join(basePath, "foo"),
+		}),
+		container.WithMount(mount.Mount{
+			Type:   mount.TypeImage,
+			Source: testImage,
+			Target: filepath.Join(basePath, "bar"),
+		}),
+	)
+
+	defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+
+	inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	assert.NilError(t, err)
+
+	assert.Equal(t, len(inspect.Container.Mounts), 2)
+	var hasFoo, hasBar bool
+	for _, mnt := range inspect.Container.Mounts {
+		if mnt.Destination == "/etc/foo" {
+			hasFoo = true
+		}
+		if mnt.Destination == "/etc/bar" {
+			hasBar = true
+		}
+	}
+
+	assert.Check(t, hasFoo, "Expected mount at /etc/foo")
+	assert.Check(t, hasBar, "Expected mount at /etc/bar")
+
+	t.Run("mounted foo", func(t *testing.T) {
+		res, err := container.Exec(ctx, apiClient, id, []string{"stat", "/etc/foo/hello"})
+		assert.NilError(t, err)
+		assert.Check(t, is.Equal(res.ExitCode, 0))
+	})
+
+	t.Run("mounted bar", func(t *testing.T) {
+		res, err := container.Exec(ctx, apiClient, id, []string{"stat", "/etc/bar/hello"})
+		assert.NilError(t, err)
+		assert.Check(t, is.Equal(res.ExitCode, 0))
+	})
 }

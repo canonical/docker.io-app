@@ -1,4 +1,4 @@
-package local // import "github.com/docker/docker/daemon/logger/local"
+package local
 
 import (
 	"encoding/binary"
@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/plugins/logdriver"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/internal/logdriver"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
@@ -30,7 +30,7 @@ const (
 	defaultCompressLogs       = true
 )
 
-var buffersPool = sync.Pool{New: func() interface{} {
+var buffersPool = sync.Pool{New: func() any {
 	b := make([]byte, initialBufSize)
 	return &b
 }}

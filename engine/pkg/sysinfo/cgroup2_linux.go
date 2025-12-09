@@ -1,4 +1,4 @@
-package sysinfo // import "github.com/docker/docker/pkg/sysinfo"
+package sysinfo
 
 import (
 	"context"
@@ -84,8 +84,6 @@ func applyMemoryCgroupInfoV2(info *SysInfo) {
 	info.MemoryReservation = true
 	info.OomKillDisable = false
 	info.MemorySwappiness = false
-	info.KernelMemory = false
-	info.KernelMemoryTCP = false
 }
 
 func applyCPUCgroupInfoV2(info *SysInfo) {

@@ -2,21 +2,22 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 var errNoRoleChange = errors.New("role was already set to the requested value")
 
-func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
+func newUpdateCommand(dockerCLI command.Cli) *cobra.Command {
 	options := newNodeOptions()
 
 	cmd := &cobra.Command{
@@ -24,9 +25,10 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Update a node",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd.Context(), dockerCli, cmd.Flags(), args[0])
+			return runUpdate(cmd.Context(), dockerCLI, cmd.Flags(), args[0])
 		},
-		ValidArgsFunction: completeNodeNames(dockerCli),
+		ValidArgsFunction:     completeNodeNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -38,39 +40,34 @@ func newUpdateCommand(dockerCli command.Cli) *cobra.Command {
 
 	_ = cmd.RegisterFlagCompletionFunc(flagRole, completion.FromList("worker", "manager"))
 	_ = cmd.RegisterFlagCompletionFunc(flagAvailability, completion.FromList("active", "pause", "drain"))
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
+
 	return cmd
 }
 
-func runUpdate(ctx context.Context, dockerCli command.Cli, flags *pflag.FlagSet, nodeID string) error {
-	success := func(_ string) {
-		fmt.Fprintln(dockerCli.Out(), nodeID)
-	}
-	return updateNodes(ctx, dockerCli, []string{nodeID}, mergeNodeUpdate(flags), success)
+func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet, nodeID string) error {
+	return updateNodes(ctx, dockerCLI.Client(), []string{nodeID}, mergeNodeUpdate(flags), func(_ string) {
+		_, _ = fmt.Fprintln(dockerCLI.Out(), nodeID)
+	})
 }
 
-func updateNodes(ctx context.Context, dockerCli command.Cli, nodes []string, mergeNode func(node *swarm.Node) error, success func(nodeID string)) error {
-	client := dockerCli.Client()
-
+func updateNodes(ctx context.Context, apiClient client.NodeAPIClient, nodes []string, mergeNode func(node *swarm.Node) error, success func(nodeID string)) error {
 	for _, nodeID := range nodes {
-		node, _, err := client.NodeInspectWithRaw(ctx, nodeID)
+		res, err := apiClient.NodeInspect(ctx, nodeID, client.NodeInspectOptions{})
 		if err != nil {
 			return err
 		}
 
-		err = mergeNode(&node)
+		err = mergeNode(&res.Node)
 		if err != nil {
-			if err == errNoRoleChange {
+			if errors.Is(err, errNoRoleChange) {
 				continue
 			}
 			return err
 		}
-		err = client.NodeUpdate(ctx, node.ID, node.Version, node.Spec)
+		_, err = apiClient.NodeUpdate(ctx, res.Node.ID, client.NodeUpdateOptions{
+			Version: res.Node.Version,
+			Spec:    res.Node.Spec,
+		})
 		if err != nil {
 			return err
 		}
@@ -111,7 +108,7 @@ func mergeNodeUpdate(flags *pflag.FlagSet) func(*swarm.Node) error {
 			for _, k := range keys {
 				// if a key doesn't exist, fail the command explicitly
 				if _, exists := spec.Annotations.Labels[k]; !exists {
-					return errors.Errorf("key %s doesn't exist in node's labels", k)
+					return fmt.Errorf("key %s doesn't exist in node's labels", k)
 				}
 				delete(spec.Annotations.Labels, k)
 			}

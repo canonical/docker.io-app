@@ -1,9 +1,9 @@
-package jsonfilelog // import "github.com/docker/docker/daemon/logger/jsonfilelog"
+package jsonfilelog
 
 import (
 	"bufio"
 	"bytes"
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,8 +13,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggertest"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/loggertest"
 	"gotest.tools/v3/assert"
 )
 
@@ -63,7 +63,7 @@ func BenchmarkJSONFileLoggerReadLogs(b *testing.B) {
 		}
 	}()
 
-	lw := jsonlogger.(*JSONFileLogger).ReadLogs(context.TODO(), logger.ReadConfig{Follow: true})
+	lw := jsonlogger.(*JSONFileLogger).ReadLogs(b.Context(), logger.ReadConfig{Follow: true})
 	for {
 		select {
 		case _, ok := <-lw.Msg:
@@ -104,7 +104,7 @@ func TestEncodeDecode(t *testing.T) {
 	assert.Assert(t, string(msg.Line) == "hello 3\n")
 
 	_, err = dec.Decode()
-	assert.Assert(t, err == io.EOF)
+	assert.Assert(t, errors.Is(err, io.EOF))
 }
 
 func TestReadLogs(t *testing.T) {

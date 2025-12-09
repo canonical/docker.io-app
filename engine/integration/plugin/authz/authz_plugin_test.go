@@ -1,9 +1,10 @@
 //go:build !windows
 
-package authz // import "github.com/docker/docker/integration/plugin/authz"
+package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,15 +17,13 @@ import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	eventtypes "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/authorization"
-	"github.com/docker/docker/testutil/environment"
 	"github.com/docker/go-connections/sockets"
 	"github.com/moby/go-archive"
+	eventtypes "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/environment"
+	"github.com/moby/moby/v2/pkg/authorization"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/skip"
 )
@@ -107,7 +106,7 @@ func TestAuthZPluginAllowRequest(t *testing.T) {
 	assertURIRecorded(t, ctrl.requestsURIs, "/containers/create")
 	assertURIRecorded(t, ctrl.requestsURIs, fmt.Sprintf("/containers/%s/start", cID))
 
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.NilError(t, err)
 	assert.Equal(t, 1, ctrl.versionReqCount)
 	assert.Equal(t, 1, ctrl.versionResCount)
@@ -138,7 +137,7 @@ func TestAuthZPluginTLS(t *testing.T) {
 	c, err := newTLSAPIClient(testDaemonHTTPSAddr, cacertPath, clientCertPath, clientKeyPath)
 	assert.NilError(t, err)
 
-	_, err = c.ServerVersion(ctx)
+	_, err = c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.NilError(t, err)
 
 	assert.Equal(t, "client", ctrl.reqUser)
@@ -150,7 +149,7 @@ func newTLSAPIClient(host, cacertPath, certPath, keyPath string) (client.APIClie
 		KeepAlive: 30 * time.Second,
 		Timeout:   30 * time.Second,
 	}
-	return client.NewClientWithOpts(
+	return client.New(
 		client.WithTLSClientConfig(cacertPath, certPath, keyPath),
 		client.WithDialContext(dialer.DialContext),
 		client.WithHost(host))
@@ -166,7 +165,7 @@ func TestAuthZPluginDenyRequest(t *testing.T) {
 	c := d.NewClientT(t)
 
 	// Ensure command is blocked
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, 1, ctrl.versionReqCount)
 	assert.Equal(t, 0, ctrl.versionResCount)
@@ -190,7 +189,7 @@ func TestAuthZPluginAPIDenyResponse(t *testing.T) {
 	socketClient, err := socketHTTPClient(daemonURL)
 	assert.NilError(t, err)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/version", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/version", http.NoBody)
 	assert.NilError(t, err)
 	req.URL.Scheme = "http"
 	req.URL.Host = client.DummyHost
@@ -212,7 +211,7 @@ func TestAuthZPluginDenyResponse(t *testing.T) {
 	c := d.NewClientT(t)
 
 	// Ensure command is blocked
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, 1, ctrl.versionReqCount)
 	assert.Equal(t, 1, ctrl.versionResCount)
@@ -255,7 +254,7 @@ func TestAuthZPluginAllowEventStream(t *testing.T) {
 				}
 			}
 		case err := <-errs:
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				t.Fatal("premature end of event stream")
 			}
 			assert.NilError(t, err)
@@ -272,27 +271,28 @@ func TestAuthZPluginAllowEventStream(t *testing.T) {
 	assertURIRecorded(t, ctrl.requestsURIs, fmt.Sprintf("/containers/%s/start", cID))
 }
 
-func systemTime(ctx context.Context, t *testing.T, client client.APIClient, testEnv *environment.Execution) time.Time {
+func systemTime(ctx context.Context, t *testing.T, apiClient client.APIClient, testEnv *environment.Execution) time.Time {
 	if testEnv.IsLocalDaemon() {
 		return time.Now()
 	}
 
-	info, err := client.Info(ctx)
+	result, err := apiClient.Info(ctx, client.InfoOptions{})
 	assert.NilError(t, err)
 
+	info := result.Info
 	dt, err := time.Parse(time.RFC3339Nano, info.SystemTime)
 	assert.NilError(t, err, "invalid time format in GET /info response")
 	return dt
 }
 
-func systemEventsSince(ctx context.Context, client client.APIClient, since string) (<-chan eventtypes.Message, <-chan error, func()) {
-	eventOptions := eventtypes.ListOptions{
+func systemEventsSince(ctx context.Context, apiClient client.APIClient, since string) (<-chan eventtypes.Message, <-chan error, func()) {
+	eventOptions := client.EventsListOptions{
 		Since: since,
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	events, errs := client.Events(ctx, eventOptions)
+	result := apiClient.Events(ctx, eventOptions)
 
-	return events, errs, cancel
+	return result.Messages, result.Err, cancel
 }
 
 func TestAuthZPluginErrorResponse(t *testing.T) {
@@ -304,7 +304,7 @@ func TestAuthZPluginErrorResponse(t *testing.T) {
 	c := d.NewClientT(t)
 
 	// Ensure command is blocked
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, fmt.Sprintf("Error response from daemon: plugin %s failed with error: %s: %s", testAuthZPlugin, authorization.AuthZApiResponse, errorMessage), err.Error())
 }
@@ -317,7 +317,7 @@ func TestAuthZPluginErrorRequest(t *testing.T) {
 	c := d.NewClientT(t)
 
 	// Ensure command is blocked
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, fmt.Sprintf("Error response from daemon: plugin %s failed with error: %s: %s", testAuthZPlugin, authorization.AuthZApiRequest, errorMessage), err.Error())
 }
@@ -331,7 +331,7 @@ func TestAuthZPluginEnsureNoDuplicatePluginRegistration(t *testing.T) {
 
 	c := d.NewClientT(t)
 
-	_, err := c.ServerVersion(ctx)
+	_, err := c.ServerVersion(ctx, client.ServerVersionOptions{})
 	assert.NilError(t, err)
 
 	// assert plugin is only called once..
@@ -363,13 +363,13 @@ func TestAuthZPluginEnsureLoadImportWorking(t *testing.T) {
 
 	cID := container.Run(ctx, t, c)
 
-	responseReader, err := c.ContainerExport(ctx, cID)
+	res, err := c.ContainerExport(ctx, cID, client.ContainerExportOptions{})
 	assert.NilError(t, err)
-	defer responseReader.Close()
+	defer func() { _ = res.Close() }()
 	file, err := os.Create(exportedImagePath)
 	assert.NilError(t, err)
-	defer file.Close()
-	_, err = io.Copy(file, responseReader)
+	defer func() { _ = file.Close() }()
+	_, err = io.Copy(file, res)
 	assert.NilError(t, err)
 
 	err = imageImport(ctx, c, exportedImagePath)
@@ -401,7 +401,7 @@ func TestAuthzPluginEnsureContainerCopyToFrom(t *testing.T) {
 	c := d.NewClientT(t)
 
 	cID := container.Run(ctx, t, c)
-	defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 	_, err = f.Seek(0, io.SeekStart)
 	assert.NilError(t, err)
@@ -415,27 +415,27 @@ func TestAuthzPluginEnsureContainerCopyToFrom(t *testing.T) {
 	dstDir, preparedArchive, err := archive.PrepareArchiveCopy(srcArchive, srcInfo, archive.CopyInfo{Path: "/test"})
 	assert.NilError(t, err)
 
-	err = c.CopyToContainer(ctx, cID, dstDir, preparedArchive, containertypes.CopyToContainerOptions{})
+	_, err = c.CopyToContainer(ctx, cID, client.CopyToContainerOptions{DestinationPath: dstDir, Content: preparedArchive})
 	assert.NilError(t, err)
 
-	rdr, _, err := c.CopyFromContainer(ctx, cID, "/test")
+	res, err := c.CopyFromContainer(ctx, cID, client.CopyFromContainerOptions{SourcePath: "/test"})
 	assert.NilError(t, err)
-	_, err = io.Copy(io.Discard, rdr)
+	_, err = io.Copy(io.Discard, res.Content)
 	assert.NilError(t, err)
 }
 
 func imageSave(ctx context.Context, apiClient client.APIClient, path, imgRef string) error {
-	responseReader, err := apiClient.ImageSave(ctx, []string{imgRef})
+	resp, err := apiClient.ImageSave(ctx, []string{imgRef})
 	if err != nil {
 		return err
 	}
-	defer responseReader.Close()
+	defer func() { _ = resp.Close() }()
 	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	_, err = io.Copy(file, responseReader)
+	_, err = io.Copy(file, resp)
+	_ = file.Close()
 	return err
 }
 
@@ -445,31 +445,32 @@ func imageLoad(ctx context.Context, apiClient client.APIClient, path string) err
 		return err
 	}
 	defer file.Close()
-	response, err := apiClient.ImageLoad(ctx, file, client.ImageLoadWithQuiet(true))
+	resp, err := apiClient.ImageLoad(ctx, file, client.ImageLoadWithQuiet(true))
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, resp)
+	_ = resp.Close()
 	return nil
 }
 
-func imageImport(ctx context.Context, client client.APIClient, path string) error {
+func imageImport(ctx context.Context, apiClient client.APIClient, path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	options := image.ImportOptions{}
 	ref := ""
-	source := image.ImportSource{
+	source := client.ImageImportSource{
 		Source:     file,
 		SourceName: "-",
 	}
-	responseReader, err := client.ImageImport(ctx, source, ref, options)
+	resp, err := apiClient.ImageImport(ctx, source, ref, client.ImageImportOptions{})
 	if err != nil {
 		return err
 	}
-	defer responseReader.Close()
+	_, _ = io.Copy(io.Discard, resp)
+	_ = resp.Close()
 	return nil
 }
 
@@ -486,7 +487,7 @@ func TestAuthZPluginHeader(t *testing.T) {
 	socketClient, err := socketHTTPClient(daemonURL)
 	assert.NilError(t, err)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/version", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/version", http.NoBody)
 	assert.NilError(t, err)
 	req.URL.Scheme = "http"
 	req.URL.Host = client.DummyHost

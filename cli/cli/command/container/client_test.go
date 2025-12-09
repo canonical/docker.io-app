@@ -3,232 +3,232 @@ package container
 import (
 	"context"
 	"io"
+	"net/http"
+	"strings"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/client"
 )
+
+func mockContainerExportResult(content string) client.ContainerExportResult {
+	return io.NopCloser(strings.NewReader(content))
+}
+
+func mockContainerLogsResult(content string) client.ContainerLogsResult {
+	return io.NopCloser(strings.NewReader(content))
+}
+
+type fakeStreamResult struct {
+	io.ReadCloser
+	client.ImagePushResponse // same interface as [client.ImagePushResponse]
+}
+
+func (e fakeStreamResult) Read(p []byte) (int, error) { return e.ReadCloser.Read(p) }
+func (e fakeStreamResult) Close() error               { return e.ReadCloser.Close() }
 
 type fakeClient struct {
 	client.Client
-	inspectFunc         func(string) (container.InspectResponse, error)
-	execInspectFunc     func(execID string) (container.ExecInspect, error)
-	execCreateFunc      func(containerID string, options container.ExecOptions) (container.ExecCreateResponse, error)
-	createContainerFunc func(config *container.Config,
-		hostConfig *container.HostConfig,
-		networkingConfig *network.NetworkingConfig,
-		platform *ocispec.Platform,
-		containerName string) (container.CreateResponse, error)
-	containerStartFunc      func(containerID string, options container.StartOptions) error
-	imageCreateFunc         func(ctx context.Context, parentReference string, options image.CreateOptions) (io.ReadCloser, error)
-	infoFunc                func() (system.Info, error)
-	containerStatPathFunc   func(containerID, path string) (container.PathStat, error)
-	containerCopyFromFunc   func(containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
-	logFunc                 func(string, container.LogsOptions) (io.ReadCloser, error)
-	waitFunc                func(string) (<-chan container.WaitResponse, <-chan error)
-	containerListFunc       func(container.ListOptions) ([]container.Summary, error)
-	containerExportFunc     func(string) (io.ReadCloser, error)
-	containerExecResizeFunc func(id string, options container.ResizeOptions) error
-	containerRemoveFunc     func(ctx context.Context, containerID string, options container.RemoveOptions) error
-	containerRestartFunc    func(ctx context.Context, containerID string, options container.StopOptions) error
-	containerStopFunc       func(ctx context.Context, containerID string, options container.StopOptions) error
-	containerKillFunc       func(ctx context.Context, containerID, signal string) error
-	containerPruneFunc      func(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error)
-	containerAttachFunc     func(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error)
-	containerDiffFunc       func(ctx context.Context, containerID string) ([]container.FilesystemChange, error)
+	inspectFunc             func(string) (client.ContainerInspectResult, error)
+	execInspectFunc         func(execID string) (client.ExecInspectResult, error)
+	execCreateFunc          func(containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
+	createContainerFunc     func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	containerStartFunc      func(containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	imagePullFunc           func(ctx context.Context, parentReference string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	infoFunc                func() (client.SystemInfoResult, error)
+	containerStatPathFunc   func(containerID, path string) (client.ContainerStatPathResult, error)
+	containerCopyFromFunc   func(containerID, srcPath string) (client.CopyFromContainerResult, error)
+	logFunc                 func(string, client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	waitFunc                func(string) client.ContainerWaitResult
+	containerListFunc       func(client.ContainerListOptions) (client.ContainerListResult, error)
+	containerExportFunc     func(string) (client.ContainerExportResult, error)
+	containerExecResizeFunc func(id string, options client.ExecResizeOptions) (client.ExecResizeResult, error)
+	containerRemoveFunc     func(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	containerRestartFunc    func(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
+	containerStopFunc       func(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	containerKillFunc       func(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
+	containerPruneFunc      func(ctx context.Context, options client.ContainerPruneOptions) (client.ContainerPruneResult, error)
+	containerAttachFunc     func(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	containerDiffFunc       func(ctx context.Context, containerID string) (client.ContainerDiffResult, error)
 	containerRenameFunc     func(ctx context.Context, oldName, newName string) error
-	containerCommitFunc     func(ctx context.Context, container string, options container.CommitOptions) (container.CommitResponse, error)
-	containerPauseFunc      func(ctx context.Context, container string) error
+	containerCommitFunc     func(ctx context.Context, container string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error)
+	containerPauseFunc      func(ctx context.Context, container string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
 	Version                 string
 }
 
-func (f *fakeClient) ContainerList(_ context.Context, options container.ListOptions) ([]container.Summary, error) {
+func (f *fakeClient) ContainerList(_ context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	if f.containerListFunc != nil {
 		return f.containerListFunc(options)
 	}
-	return []container.Summary{}, nil
+	return client.ContainerListResult{}, nil
 }
 
-func (f *fakeClient) ContainerInspect(_ context.Context, containerID string) (container.InspectResponse, error) {
+func (f *fakeClient) ContainerInspect(_ context.Context, containerID string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	if f.inspectFunc != nil {
 		return f.inspectFunc(containerID)
 	}
-	return container.InspectResponse{}, nil
+	return client.ContainerInspectResult{}, nil
 }
 
-func (f *fakeClient) ContainerExecCreate(_ context.Context, containerID string, config container.ExecOptions) (container.ExecCreateResponse, error) {
+func (f *fakeClient) ExecCreate(_ context.Context, containerID string, config client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	if f.execCreateFunc != nil {
 		return f.execCreateFunc(containerID, config)
 	}
-	return container.ExecCreateResponse{}, nil
+	return client.ExecCreateResult{}, nil
 }
 
-func (f *fakeClient) ContainerExecInspect(_ context.Context, execID string) (container.ExecInspect, error) {
+func (f *fakeClient) ExecInspect(_ context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
 	if f.execInspectFunc != nil {
 		return f.execInspectFunc(execID)
 	}
-	return container.ExecInspect{}, nil
+	return client.ExecInspectResult{}, nil
 }
 
-func (*fakeClient) ContainerExecStart(context.Context, string, container.ExecStartOptions) error {
-	return nil
+func (*fakeClient) ExecStart(context.Context, string, client.ExecStartOptions) (client.ExecStartResult, error) {
+	return client.ExecStartResult{}, nil
 }
 
-func (f *fakeClient) ContainerCreate(
-	_ context.Context,
-	config *container.Config,
-	hostConfig *container.HostConfig,
-	networkingConfig *network.NetworkingConfig,
-	platform *ocispec.Platform,
-	containerName string,
-) (container.CreateResponse, error) {
+func (f *fakeClient) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	if f.createContainerFunc != nil {
-		return f.createContainerFunc(config, hostConfig, networkingConfig, platform, containerName)
+		return f.createContainerFunc(options)
 	}
-	return container.CreateResponse{}, nil
+	return client.ContainerCreateResult{}, nil
 }
 
-func (f *fakeClient) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
+func (f *fakeClient) ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	if f.containerRemoveFunc != nil {
 		return f.containerRemoveFunc(ctx, containerID, options)
 	}
-	return nil
+	return client.ContainerRemoveResult{}, nil
 }
 
-func (f *fakeClient) ImageCreate(ctx context.Context, parentReference string, options image.CreateOptions) (io.ReadCloser, error) {
-	if f.imageCreateFunc != nil {
-		return f.imageCreateFunc(ctx, parentReference, options)
+func (f *fakeClient) ImagePull(ctx context.Context, parentReference string, options client.ImagePullOptions) (client.ImagePullResponse, error) {
+	if f.imagePullFunc != nil {
+		return f.imagePullFunc(ctx, parentReference, options)
 	}
-	return nil, nil
+	return fakeStreamResult{}, nil
 }
 
-func (f *fakeClient) Info(_ context.Context) (system.Info, error) {
+func (f *fakeClient) Info(context.Context, client.InfoOptions) (client.SystemInfoResult, error) {
 	if f.infoFunc != nil {
 		return f.infoFunc()
 	}
-	return system.Info{}, nil
+	return client.SystemInfoResult{}, nil
 }
 
-func (f *fakeClient) ContainerStatPath(_ context.Context, containerID, path string) (container.PathStat, error) {
+func (f *fakeClient) ContainerStatPath(_ context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error) {
 	if f.containerStatPathFunc != nil {
-		return f.containerStatPathFunc(containerID, path)
+		return f.containerStatPathFunc(containerID, options.Path)
 	}
-	return container.PathStat{}, nil
+	return client.ContainerStatPathResult{}, nil
 }
 
-func (f *fakeClient) CopyFromContainer(_ context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error) {
+func (f *fakeClient) CopyFromContainer(_ context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	if f.containerCopyFromFunc != nil {
-		return f.containerCopyFromFunc(containerID, srcPath)
+		return f.containerCopyFromFunc(containerID, options.SourcePath)
 	}
-	return nil, container.PathStat{}, nil
+	return client.CopyFromContainerResult{}, nil
 }
 
-func (f *fakeClient) ContainerLogs(_ context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error) {
+func (f *fakeClient) ContainerLogs(_ context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	if f.logFunc != nil {
 		return f.logFunc(containerID, options)
 	}
-	return nil, nil
+	return http.NoBody, nil
 }
 
 func (f *fakeClient) ClientVersion() string {
 	return f.Version
 }
 
-func (f *fakeClient) ContainerWait(_ context.Context, containerID string, _ container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+func (f *fakeClient) ContainerWait(_ context.Context, containerID string, _ client.ContainerWaitOptions) client.ContainerWaitResult {
 	if f.waitFunc != nil {
 		return f.waitFunc(containerID)
 	}
-	return nil, nil
+	return client.ContainerWaitResult{}
 }
 
-func (f *fakeClient) ContainerStart(_ context.Context, containerID string, options container.StartOptions) error {
+func (f *fakeClient) ContainerStart(_ context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	if f.containerStartFunc != nil {
 		return f.containerStartFunc(containerID, options)
 	}
-	return nil
+	return client.ContainerStartResult{}, nil
 }
 
-func (f *fakeClient) ContainerExport(_ context.Context, containerID string) (io.ReadCloser, error) {
+func (f *fakeClient) ContainerExport(_ context.Context, containerID string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
 	if f.containerExportFunc != nil {
 		return f.containerExportFunc(containerID)
 	}
-	return nil, nil
+	return http.NoBody, nil
 }
 
-func (f *fakeClient) ContainerExecResize(_ context.Context, id string, options container.ResizeOptions) error {
+func (f *fakeClient) ExecResize(_ context.Context, id string, options client.ExecResizeOptions) (client.ExecResizeResult, error) {
 	if f.containerExecResizeFunc != nil {
 		return f.containerExecResizeFunc(id, options)
 	}
-	return nil
+	return client.ExecResizeResult{}, nil
 }
 
-func (f *fakeClient) ContainerKill(ctx context.Context, containerID, signal string) error {
+func (f *fakeClient) ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error) {
 	if f.containerKillFunc != nil {
-		return f.containerKillFunc(ctx, containerID, signal)
+		return f.containerKillFunc(ctx, containerID, options)
 	}
-	return nil
+	return client.ContainerKillResult{}, nil
 }
 
-func (f *fakeClient) ContainersPrune(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error) {
+func (f *fakeClient) ContainerPrune(ctx context.Context, options client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
 	if f.containerPruneFunc != nil {
-		return f.containerPruneFunc(ctx, pruneFilters)
+		return f.containerPruneFunc(ctx, options)
 	}
-	return container.PruneReport{}, nil
+	return client.ContainerPruneResult{}, nil
 }
 
-func (f *fakeClient) ContainerRestart(ctx context.Context, containerID string, options container.StopOptions) error {
+func (f *fakeClient) ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error) {
 	if f.containerRestartFunc != nil {
 		return f.containerRestartFunc(ctx, containerID, options)
 	}
-	return nil
+	return client.ContainerRestartResult{}, nil
 }
 
-func (f *fakeClient) ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error {
+func (f *fakeClient) ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	if f.containerStopFunc != nil {
 		return f.containerStopFunc(ctx, containerID, options)
 	}
-	return nil
+	return client.ContainerStopResult{}, nil
 }
 
-func (f *fakeClient) ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error) {
+func (f *fakeClient) ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
 	if f.containerAttachFunc != nil {
 		return f.containerAttachFunc(ctx, containerID, options)
 	}
-	return types.HijackedResponse{}, nil
+	return client.ContainerAttachResult{}, nil
 }
 
-func (f *fakeClient) ContainerDiff(ctx context.Context, containerID string) ([]container.FilesystemChange, error) {
+func (f *fakeClient) ContainerDiff(ctx context.Context, containerID string, _ client.ContainerDiffOptions) (client.ContainerDiffResult, error) {
 	if f.containerDiffFunc != nil {
 		return f.containerDiffFunc(ctx, containerID)
 	}
 
-	return []container.FilesystemChange{}, nil
+	return client.ContainerDiffResult{}, nil
 }
 
-func (f *fakeClient) ContainerRename(ctx context.Context, oldName, newName string) error {
+func (f *fakeClient) ContainerRename(ctx context.Context, oldName string, options client.ContainerRenameOptions) (client.ContainerRenameResult, error) {
 	if f.containerRenameFunc != nil {
-		return f.containerRenameFunc(ctx, oldName, newName)
+		return client.ContainerRenameResult{}, f.containerRenameFunc(ctx, oldName, options.NewName)
 	}
 
-	return nil
+	return client.ContainerRenameResult{}, nil
 }
 
-func (f *fakeClient) ContainerCommit(ctx context.Context, containerID string, options container.CommitOptions) (container.CommitResponse, error) {
+func (f *fakeClient) ContainerCommit(ctx context.Context, containerID string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error) {
 	if f.containerCommitFunc != nil {
 		return f.containerCommitFunc(ctx, containerID, options)
 	}
-	return container.CommitResponse{}, nil
+	return client.ContainerCommitResult{}, nil
 }
 
-func (f *fakeClient) ContainerPause(ctx context.Context, containerID string) error {
+func (f *fakeClient) ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
 	if f.containerPauseFunc != nil {
-		return f.containerPauseFunc(ctx, containerID)
+		return f.containerPauseFunc(ctx, containerID, options)
 	}
 
-	return nil
+	return client.ContainerPauseResult{}, nil
 }

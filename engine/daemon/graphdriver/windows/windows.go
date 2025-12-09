@@ -1,6 +1,6 @@
 //go:build windows
 
-package windows // import "github.com/docker/docker/daemon/graphdriver/windows"
+package windows
 
 import (
 	"archive/tar"
@@ -18,19 +18,19 @@ import (
 	"sync"
 	"time"
 
-	winio "github.com/Microsoft/go-winio"
+	"github.com/Microsoft/go-winio"
 	"github.com/Microsoft/go-winio/backuptar"
 	winiofs "github.com/Microsoft/go-winio/pkg/fs"
 	"github.com/Microsoft/go-winio/vhd"
 	"github.com/Microsoft/hcsshim"
 	"github.com/Microsoft/hcsshim/osversion"
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/daemon/internal/mountref"
-	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/pkg/longpath"
 	"github.com/docker/go-units"
 	"github.com/moby/go-archive"
+	"github.com/moby/moby/v2/daemon/graphdriver"
+	"github.com/moby/moby/v2/daemon/internal/mountref"
+	"github.com/moby/moby/v2/pkg/ioutils"
+	"github.com/moby/moby/v2/pkg/longpath"
 	"github.com/moby/sys/reexec"
 	"github.com/moby/sys/user"
 	"github.com/pkg/errors"
@@ -799,37 +799,25 @@ func writeLayerReexec() {
 }
 
 // writeLayer writes a layer from a tar file.
-func writeLayer(layerData io.Reader, home string, id string, parentLayerPaths ...string) (size int64, retErr error) {
-	err := winio.EnableProcessPrivileges([]string{winio.SeSecurityPrivilege, winio.SeBackupPrivilege, winio.SeRestorePrivilege})
-	if err != nil {
-		return 0, err
-	}
-	if noreexec {
-		defer func() {
-			if err := winio.DisableProcessPrivileges([]string{winio.SeSecurityPrivilege, winio.SeBackupPrivilege, winio.SeRestorePrivilege}); err != nil {
-				// This should never happen, but just in case when in debugging mode.
-				// See https://github.com/docker/docker/pull/28002#discussion_r86259241 for rationale.
-				panic("Failed to disabled process privileges while in non re-exec mode")
-			}
-		}()
-	}
-
-	w, err := hcsshim.NewLayerWriter(hcsshim.DriverInfo{Flavour: filterDriver, HomeDir: home}, id, parentLayerPaths)
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() {
-		if err := w.Close(); err != nil {
-			// This error should not be discarded as a failure here
-			// could result in an invalid layer on disk
-			if retErr == nil {
-				retErr = err
-			}
+func writeLayer(layerData io.Reader, home string, id string, parentLayerPaths ...string) (size int64, _ error) {
+	err := winio.RunWithPrivileges([]string{winio.SeSecurityPrivilege, winio.SeBackupPrivilege, winio.SeRestorePrivilege}, func() error {
+		var err error
+		w, err := hcsshim.NewLayerWriter(hcsshim.DriverInfo{Flavour: filterDriver, HomeDir: home}, id, parentLayerPaths)
+		if err != nil {
+			return err
 		}
-	}()
 
-	return writeLayerFromTar(layerData, w, filepath.Join(home, id))
+		s, err := writeLayerFromTar(layerData, w, filepath.Join(home, id))
+		if err != nil {
+			// Close, but don't override the error from writeLayerFromTar
+			_ = w.Close()
+			return err
+		}
+
+		size = s
+		return w.Close()
+	})
+	return size, err
 }
 
 // resolveID computes the layerID information based on the given id.

@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.24
+
 package image
 
 import (
@@ -5,13 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -24,12 +30,11 @@ type imagesOptions struct {
 	showDigests bool
 	format      string
 	filter      opts.FilterOpt
-	calledAs    string
 	tree        bool
 }
 
-// NewImagesCommand creates a new `docker images` command
-func NewImagesCommand(dockerCLI command.Cli) *cobra.Command {
+// newImagesCommand creates a new `docker images` command
+func newImagesCommand(dockerCLI command.Cli) *cobra.Command {
 	options := imagesOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
@@ -40,16 +45,21 @@ func NewImagesCommand(dockerCLI command.Cli) *cobra.Command {
 			if len(args) > 0 {
 				options.matchName = args[0]
 			}
-			// Pass through how the command was invoked. We use this to print
-			// warnings when an ambiguous argument was passed when using the
-			// legacy (top-level) "docker images" subcommand.
-			options.calledAs = cmd.CalledAs()
-			return runImages(cmd.Context(), dockerCLI, options)
+			numImages, err := runImages(cmd.Context(), dockerCLI, options)
+			if err != nil {
+				return err
+			}
+			if numImages == 0 && options.matchName != "" && cmd.CalledAs() == "images" {
+				printAmbiguousHint(dockerCLI.Err(), options.matchName)
+			}
+			return nil
 		},
 		Annotations: map[string]string{
 			"category-top": "7",
 			"aliases":      "docker image ls, docker image list, docker images",
 		},
+		DisableFlagsInUseLine: true,
+		ValidArgsFunction:     completion.ImageNamesWithBase(dockerCLI, 1),
 	}
 
 	flags := cmd.Flags()
@@ -69,53 +79,58 @@ func NewImagesCommand(dockerCLI command.Cli) *cobra.Command {
 }
 
 func newListCommand(dockerCLI command.Cli) *cobra.Command {
-	cmd := *NewImagesCommand(dockerCLI)
+	cmd := *newImagesCommand(dockerCLI)
 	cmd.Aliases = []string{"list"}
 	cmd.Use = "ls [OPTIONS] [REPOSITORY[:TAG]]"
 	return &cmd
 }
 
-func runImages(ctx context.Context, dockerCLI command.Cli, options imagesOptions) error {
+func runImages(ctx context.Context, dockerCLI command.Cli, options imagesOptions) (int, error) {
 	filters := options.filter.Value()
 	if options.matchName != "" {
 		filters.Add("reference", options.matchName)
 	}
 
-	if options.tree {
-		if options.quiet {
-			return errors.New("--quiet is not yet supported with --tree")
-		}
-		if options.noTrunc {
-			return errors.New("--no-trunc is not yet supported with --tree")
-		}
-		if options.showDigests {
-			return errors.New("--show-digest is not yet supported with --tree")
-		}
-		if options.format != "" {
-			return errors.New("--format is not yet supported with --tree")
-		}
-
-		return runTree(ctx, dockerCLI, treeOptions{
-			all:     options.all,
-			filters: filters,
-		})
+	useTree, err := shouldUseTree(options)
+	if err != nil {
+		return 0, err
 	}
 
-	images, err := dockerCLI.Client().ImageList(ctx, image.ListOptions{
-		All:     options.all,
-		Filters: filters,
-	})
+	listOpts := client.ImageListOptions{
+		All:       options.all,
+		Filters:   filters,
+		Manifests: useTree,
+	}
+
+	res, err := dockerCLI.Client().ImageList(ctx, listOpts)
 	if err != nil {
-		return err
+		return 0, err
+	}
+
+	images := res.Items
+	if !options.all {
+		if _, ok := filters["dangling"]; !ok {
+			images = slices.DeleteFunc(images, isDangling)
+		}
 	}
 
 	format := options.format
 	if len(format) == 0 {
-		if len(dockerCLI.ConfigFile().ImagesFormat) > 0 && !options.quiet {
+		if len(dockerCLI.ConfigFile().ImagesFormat) > 0 && !options.quiet && !options.tree {
 			format = dockerCLI.ConfigFile().ImagesFormat
+			useTree = false
 		} else {
 			format = formatter.TableFormatKey
 		}
+	}
+
+	if useTree {
+		return runTree(ctx, dockerCLI, treeOptions{
+			images:   images,
+			all:      options.all,
+			filters:  filters,
+			expanded: options.tree,
+		})
 	}
 
 	imageCtx := formatter.ImageContext{
@@ -127,12 +142,37 @@ func runImages(ctx context.Context, dockerCLI command.Cli, options imagesOptions
 		Digest: options.showDigests,
 	}
 	if err := formatter.ImageWrite(imageCtx, images); err != nil {
-		return err
+		return 0, err
 	}
-	if options.matchName != "" && len(images) == 0 && options.calledAs == "images" {
-		printAmbiguousHint(dockerCLI.Err(), options.matchName)
+	return len(images), nil
+}
+
+func shouldUseTree(options imagesOptions) (bool, error) {
+	if options.quiet {
+		if options.tree {
+			return false, errors.New("--quiet is not yet supported with --tree")
+		}
+		return false, nil
 	}
-	return nil
+	if options.noTrunc {
+		if options.tree {
+			return false, errors.New("--no-trunc is not yet supported with --tree")
+		}
+		return false, nil
+	}
+	if options.showDigests {
+		if options.tree {
+			return false, errors.New("--show-digest is not yet supported with --tree")
+		}
+		return false, nil
+	}
+	if options.format != "" {
+		if options.tree {
+			return false, errors.New("--format is not yet supported with --tree")
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 // isDangling is a copy of [formatter.isDangling].

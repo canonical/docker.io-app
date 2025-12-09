@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 
@@ -11,14 +12,14 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
-	"github.com/hashicorp/go-multierror"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/v2/daemon/internal/filters"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
+
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/errdefs"
 )
 
 var imagesAcceptedFilters = map[string]bool{
@@ -32,8 +33,8 @@ var imagesAcceptedFilters = map[string]bool{
 // one is in progress
 var errPruneRunning = errdefs.Conflict(errors.New("a prune operation is already running"))
 
-// ImagesPrune removes unused images
-func (i *ImageService) ImagesPrune(ctx context.Context, fltrs filters.Args) (*image.PruneReport, error) {
+// ImagePrune removes unused images
+func (i *ImageService) ImagePrune(ctx context.Context, fltrs filters.Args) (*image.PruneReport, error) {
 	if !i.pruneRunning.CompareAndSwap(false, true) {
 		return nil, errPruneRunning
 	}
@@ -108,7 +109,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 	// Images considered for pruning.
 	imagesToPrune := map[string]c8dimages.Image{}
 	for _, img := range allImages {
-		digestRefCount[img.Target.Digest] += 1
+		digestRefCount[img.Target.Digest]++
 
 		if !danglingOnly || isDanglingImage(img) {
 			canBePruned := filterFunc(img)
@@ -138,7 +139,7 @@ func (i *ImageService) pruneUnused(ctx context.Context, filterFunc imageFilterFu
 		dgst := img.Target.Digest
 
 		if digestRefCount[dgst] > 1 {
-			digestRefCount[dgst] -= 1
+			digestRefCount[dgst]--
 			continue
 		}
 
@@ -218,7 +219,7 @@ func (i *ImageService) pruneAll(ctx context.Context, imagesToPrune map[string]c8
 	span.SetAttributes(tracing.Attribute("count", len(imagesToPrune)))
 	defer span.End()
 
-	var errs error
+	var errs []error
 	for _, img := range imagesToPrune {
 		log.G(ctx).WithField("image", img).Debug("pruning image")
 
@@ -229,41 +230,50 @@ func (i *ImageService) pruneAll(ctx context.Context, imagesToPrune map[string]c8
 			return nil
 		})
 		if err != nil {
-			errs = multierror.Append(errs, err)
+			errs = append(errs, err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return &report, errs
+				return &report, errors.Join(errs...)
 			}
 			continue
 		}
 		err = i.images.Delete(ctx, img.Name, c8dimages.SynchronousDelete())
 		if err != nil && !cerrdefs.IsNotFound(err) {
-			errs = multierror.Append(errs, err)
+			errs = append(errs, err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return &report, errs
+				return &report, errors.Join(errs...)
 			}
 			continue
 		}
 
+		familiarName := imageFamiliarName(img)
+		i.logImageEvent(img, familiarName, events.ActionUnTag)
 		report.ImagesDeleted = append(report.ImagesDeleted,
 			image.DeleteResponse{
-				Untagged: imageFamiliarName(img),
+				Untagged: familiarName,
 			},
 		)
 
+		var deleted bool
 		// Check which blobs have been deleted and sum their sizes
 		for _, blob := range blobs {
 			_, err := i.content.ReaderAt(ctx, blob)
 
 			if cerrdefs.IsNotFound(err) {
-				report.ImagesDeleted = append(report.ImagesDeleted,
-					image.DeleteResponse{
-						Deleted: blob.Digest.String(),
-					},
-				)
+				if c8dimages.IsManifestType(blob.MediaType) || c8dimages.IsIndexType(blob.MediaType) {
+					deleted = true
+					report.ImagesDeleted = append(report.ImagesDeleted,
+						image.DeleteResponse{
+							Deleted: blob.Digest.String(),
+						},
+					)
+				}
 				report.SpaceReclaimed += uint64(blob.Size)
 			}
 		}
+		if deleted {
+			i.logImageEvent(img, familiarName, events.ActionDelete)
+		}
 	}
 
-	return &report, errs
+	return &report, errors.Join(errs...)
 }

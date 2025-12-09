@@ -59,7 +59,6 @@ The base command for the Docker CLI.
 | [`system`](system.md)         | Manage Docker                                                                 |
 | [`tag`](tag.md)               | Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE                         |
 | [`top`](top.md)               | Display the running processes of a container                                  |
-| [`trust`](trust.md)           | Manage trust on Docker images                                                 |
 | [`unpause`](unpause.md)       | Unpause all processes within one or more containers                           |
 | [`update`](update.md)         | Update configuration of one or more containers                                |
 | [`version`](version.md)       | Show the Docker version information                                           |
@@ -74,7 +73,7 @@ The base command for the Docker CLI.
 | `--config`                       | `string` | `/root/.docker`          | Location of client config files                                                                                                       |
 | `-c`, `--context`                | `string` |                          | Name of the context to use to connect to the daemon (overrides DOCKER_HOST env var and default context set with `docker context use`) |
 | `-D`, `--debug`                  | `bool`   |                          | Enable debug mode                                                                                                                     |
-| [`-H`](#host), [`--host`](#host) | `list`   |                          | Daemon socket to connect to                                                                                                           |
+| [`-H`](#host), [`--host`](#host) | `string` |                          | Daemon socket to connect to                                                                                                           |
 | `-l`, `--log-level`              | `string` | `info`                   | Set the logging level (`debug`, `info`, `warn`, `error`, `fatal`)                                                                     |
 | `--tls`                          | `bool`   |                          | Use TLS; implied by --tlsverify                                                                                                       |
 | `--tlscacert`                    | `string` | `/root/.docker/ca.pem`   | Trust certs signed only by this CA                                                                                                    |
@@ -123,8 +122,6 @@ line:
 | `DOCKER_API_VERSION`          | Override the negotiated API version to use for debugging (e.g. `1.19`)                                                                                                                                                                                            |
 | `DOCKER_CERT_PATH`            | Location of your authentication keys. This variable is used both by the `docker` CLI and the [`dockerd` daemon](https://docs.docker.com/reference/cli/dockerd/)                                                                                                   |
 | `DOCKER_CONFIG`               | The location of your client configuration files.                                                                                                                                                                                                                  |
-| `DOCKER_CONTENT_TRUST_SERVER` | The URL of the Notary server to use. Defaults to the same URL as the registry.                                                                                                                                                                                    |
-| `DOCKER_CONTENT_TRUST`        | When set Docker uses notary to sign and verify images. Equates to `--disable-content-trust=false` for build, create, pull, push, run.                                                                                                                             |
 | `DOCKER_CONTEXT`              | Name of the `docker context` to use (overrides `DOCKER_HOST` env var and default context set with `docker context use`)                                                                                                                                           |
 | `DOCKER_CUSTOM_HEADERS`       | (Experimental) Configure [custom HTTP headers](#custom-http-headers) to be sent by the client. Headers must be provided as a comma-separated list of `name=value` pairs. This is the equivalent to the `HttpHeaders` field in the configuration file.             |
 | `DOCKER_DEFAULT_PLATFORM`     | Default platform for commands that take the `--platform` flag.                                                                                                                                                                                                    |
@@ -133,6 +130,8 @@ line:
 | `DOCKER_TLS`                  | Enable TLS for connections made by the `docker` CLI (equivalent of the `--tls` command-line option). Set to a non-empty value to enable TLS. Note that TLS is enabled automatically if any of the other TLS options are set.                                      |
 | `DOCKER_TLS_VERIFY`           | When set Docker uses TLS and verifies the remote. This variable is used both by the `docker` CLI and the [`dockerd` daemon](https://docs.docker.com/reference/cli/dockerd/)                                                                                       |
 | `BUILDKIT_PROGRESS`           | Set type of progress output (`auto`, `plain`, `tty`, `rawjson`) when [building](https://docs.docker.com/reference/cli/docker/image/build/) with [BuildKit backend](https://docs.docker.com/build/buildkit/). Use plain to show container output (default `auto`). |
+| `NO_COLOR`                    | Disable any ANSI escape codes in the output in accordance with https://no-color.org/
+                                                                                                             |
 
 Because Docker is developed using Go, you can also use any environment
 variables used by the Go runtime. In particular, you may find these useful:
@@ -320,8 +319,8 @@ be set for each environment:
 
 These settings are used to configure proxy settings for containers only, and not
 used as proxy settings for the `docker` CLI or the `dockerd` daemon. Refer to the
-[environment variables](#environment-variables) and [HTTP/HTTPS proxy](https://docs.docker.com/engine/daemon/proxy/#httphttps-proxy)
-sections for configuring proxy settings for the CLI and daemon.
+[environment variables](#environment-variables) section and the [Daemon proxy configuration](https://docs.docker.com/engine/daemon/proxy/)
+guide for configuring proxy settings for the CLI and daemon.
 
 > [!WARNING]
 > Proxy settings may contain sensitive information (for example, if the proxy

@@ -2,37 +2,36 @@ package service
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/docker/docker/api/types/filters"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 // ParseSecrets retrieves the secrets with the requested names and fills
 // secret IDs into the secret references.
-func ParseSecrets(ctx context.Context, apiClient client.SecretAPIClient, requestedSecrets []*swarmtypes.SecretReference) ([]*swarmtypes.SecretReference, error) {
+func ParseSecrets(ctx context.Context, apiClient client.SecretAPIClient, requestedSecrets []*swarm.SecretReference) ([]*swarm.SecretReference, error) {
 	if len(requestedSecrets) == 0 {
-		return []*swarmtypes.SecretReference{}, nil
+		return []*swarm.SecretReference{}, nil
 	}
 
-	secretRefs := make(map[string]*swarmtypes.SecretReference)
+	secretRefs := make(map[string]*swarm.SecretReference)
 
 	for _, secret := range requestedSecrets {
 		if _, exists := secretRefs[secret.File.Name]; exists {
-			return nil, errors.Errorf("duplicate secret target for %s not allowed", secret.SecretName)
+			return nil, fmt.Errorf("duplicate secret target for %s not allowed", secret.SecretName)
 		}
-		secretRef := new(swarmtypes.SecretReference)
+		secretRef := new(swarm.SecretReference)
 		*secretRef = *secret
 		secretRefs[secret.File.Name] = secretRef
 	}
 
-	args := filters.NewArgs()
+	args := make(client.Filters)
 	for _, s := range secretRefs {
 		args.Add("name", s.SecretName)
 	}
 
-	secrets, err := apiClient.SecretList(ctx, swarmtypes.SecretListOptions{
+	res, err := apiClient.SecretList(ctx, client.SecretListOptions{
 		Filters: args,
 	})
 	if err != nil {
@@ -40,16 +39,15 @@ func ParseSecrets(ctx context.Context, apiClient client.SecretAPIClient, request
 	}
 
 	foundSecrets := make(map[string]string)
-	for _, secret := range secrets {
+	for _, secret := range res.Items {
 		foundSecrets[secret.Spec.Annotations.Name] = secret.ID
 	}
 
-	addedSecrets := []*swarmtypes.SecretReference{}
-
+	addedSecrets := make([]*swarm.SecretReference, 0, len(secretRefs))
 	for _, ref := range secretRefs {
 		id, ok := foundSecrets[ref.SecretName]
 		if !ok {
-			return nil, errors.Errorf("secret not found: %s", ref.SecretName)
+			return nil, fmt.Errorf("secret not found: %s", ref.SecretName)
 		}
 
 		// set the id for the ref to properly assign in swarm
@@ -63,9 +61,9 @@ func ParseSecrets(ctx context.Context, apiClient client.SecretAPIClient, request
 
 // ParseConfigs retrieves the configs from the requested names and converts
 // them to config references to use with the spec
-func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, requestedConfigs []*swarmtypes.ConfigReference) ([]*swarmtypes.ConfigReference, error) {
+func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, requestedConfigs []*swarm.ConfigReference) ([]*swarm.ConfigReference, error) {
 	if len(requestedConfigs) == 0 {
-		return []*swarmtypes.ConfigReference{}, nil
+		return []*swarm.ConfigReference{}, nil
 	}
 
 	// the configRefs map has two purposes: it prevents duplication of config
@@ -79,12 +77,12 @@ func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, request
 	// are in use for the same Config, and we should deduplicate
 	// such ConfigReferences, as no matter how many times the Config is used,
 	// it is only needed to be referenced once.
-	configRefs := make(map[string]*swarmtypes.ConfigReference)
-	runtimeRefs := make(map[string]*swarmtypes.ConfigReference)
+	configRefs := make(map[string]*swarm.ConfigReference)
+	runtimeRefs := make(map[string]*swarm.ConfigReference)
 
 	for _, config := range requestedConfigs {
 		// copy the config, so we don't mutate the args
-		configRef := new(swarmtypes.ConfigReference)
+		configRef := new(swarm.ConfigReference)
 		*configRef = *config
 
 		if config.Runtime != nil {
@@ -98,13 +96,13 @@ func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, request
 		}
 
 		if _, exists := configRefs[config.File.Name]; exists {
-			return nil, errors.Errorf("duplicate config target for %s not allowed", config.ConfigName)
+			return nil, fmt.Errorf("duplicate config target for %s not allowed", config.ConfigName)
 		}
 
 		configRefs[config.File.Name] = configRef
 	}
 
-	args := filters.NewArgs()
+	args := make(client.Filters)
 	for _, s := range configRefs {
 		args.Add("name", s.ConfigName)
 	}
@@ -112,7 +110,7 @@ func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, request
 		args.Add("name", s.ConfigName)
 	}
 
-	configs, err := apiClient.ConfigList(ctx, swarmtypes.ConfigListOptions{
+	res, err := apiClient.ConfigList(ctx, client.ConfigListOptions{
 		Filters: args,
 	})
 	if err != nil {
@@ -120,16 +118,15 @@ func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, request
 	}
 
 	foundConfigs := make(map[string]string)
-	for _, config := range configs {
+	for _, config := range res.Items {
 		foundConfigs[config.Spec.Annotations.Name] = config.ID
 	}
 
-	addedConfigs := []*swarmtypes.ConfigReference{}
-
+	addedConfigs := make([]*swarm.ConfigReference, 0, len(configRefs))
 	for _, ref := range configRefs {
 		id, ok := foundConfigs[ref.ConfigName]
 		if !ok {
-			return nil, errors.Errorf("config not found: %s", ref.ConfigName)
+			return nil, fmt.Errorf("config not found: %s", ref.ConfigName)
 		}
 
 		// set the id for the ref to properly assign in swarm
@@ -144,7 +141,7 @@ func ParseConfigs(ctx context.Context, apiClient client.ConfigAPIClient, request
 	for _, ref := range runtimeRefs {
 		id, ok := foundConfigs[ref.ConfigName]
 		if !ok {
-			return nil, errors.Errorf("config not found: %s", ref.ConfigName)
+			return nil, fmt.Errorf("config not found: %s", ref.ConfigName)
 		}
 
 		ref.ConfigID = id

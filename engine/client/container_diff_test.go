@@ -1,33 +1,29 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestContainerDiffError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	_, err := client.ContainerDiff(context.Background(), "nothing")
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ContainerDiff(t.Context(), "nothing", ContainerDiffOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	_, err = client.ContainerDiff(context.Background(), "")
+	_, err = client.ContainerDiff(t.Context(), "", ContainerDiffOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	_, err = client.ContainerDiff(context.Background(), "    ")
+	_, err = client.ContainerDiff(t.Context(), "    ", ContainerDiffOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
@@ -50,23 +46,17 @@ func TestContainerDiff(t *testing.T) {
 		},
 	}
 
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			b, err := json.Marshal(expected)
-			if err != nil {
+	client, err := New(
+		WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
 				return nil, err
 			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(b)),
-			}, nil
+			return mockJSONResponse(http.StatusOK, nil, expected)(req)
 		}),
-	}
-
-	changes, err := client.ContainerDiff(context.Background(), "container_id")
+	)
 	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual(changes, expected))
+
+	result, err := client.ContainerDiff(t.Context(), "container_id", ContainerDiffOptions{})
+	assert.NilError(t, err)
+	assert.Check(t, is.DeepEqual(result.Changes, expected))
 }

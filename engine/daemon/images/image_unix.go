@@ -1,13 +1,13 @@
 //go:build linux || freebsd
 
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/image"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/image"
 )
 
 // GetLayerFolders returns the layer folders from an image RootFS

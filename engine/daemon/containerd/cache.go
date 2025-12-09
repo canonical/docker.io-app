@@ -9,14 +9,14 @@ import (
 	"github.com/containerd/containerd/v2/core/content"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/builder"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/image/cache"
-	"github.com/docker/docker/internal/multierror"
-	"github.com/docker/docker/layer"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/builder"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/image/cache"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/internal/multierror"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -34,7 +34,7 @@ func (c cacheAdaptor) Get(id image.ID) (*image.Image, error) {
 	ctx := context.TODO()
 	ref := id.String()
 
-	outImg, err := c.is.GetImage(ctx, id.String(), backend.GetImageOpts{})
+	outImg, err := c.is.GetImage(ctx, id.String(), imagebackend.GetImageOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("GetImage: %w", err)
 	}
@@ -102,7 +102,7 @@ func (c cacheAdaptor) Get(id image.ID) (*image.Image, error) {
 		}
 		return nil
 	})
-	if err != nil && err != errFound {
+	if err != nil && !errors.Is(err, errFound) {
 		return nil, err
 	}
 
@@ -110,7 +110,7 @@ func (c cacheAdaptor) Get(id image.ID) (*image.Image, error) {
 }
 
 func (c cacheAdaptor) GetByRef(ctx context.Context, refOrId string) (*image.Image, error) {
-	return c.is.GetImage(ctx, refOrId, backend.GetImageOpts{})
+	return c.is.GetImage(ctx, refOrId, imagebackend.GetImageOpts{})
 }
 
 func (c cacheAdaptor) SetParent(target, parent image.ID) error {
@@ -159,7 +159,7 @@ func (c cacheAdaptor) Create(parent *image.Image, target image.Image, extraLayer
 
 	var layerDigest digest.Digest
 	if extraLayer != "" {
-		info, err := findContentByUncompressedDigest(ctx, c.is.client.ContentStore(), digest.Digest(extraLayer))
+		info, err := findContentByUncompressedDigest(ctx, c.is.client.ContentStore(), extraLayer)
 		if err != nil {
 			return "", fmt.Errorf("failed to find content for diff ID %q: %w", extraLayer, err)
 		}
@@ -217,7 +217,7 @@ func findContentByUncompressedDigest(ctx context.Context, cs content.Manager, un
 		return errStopWalk
 	}, `labels."containerd.io/uncompressed"==`+uncompressed.String())
 
-	if err != nil && err != errStopWalk {
+	if err != nil && !errors.Is(err, errStopWalk) {
 		return out, err
 	}
 	if out.Digest == "" {

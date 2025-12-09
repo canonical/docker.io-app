@@ -1,12 +1,14 @@
-package image // import "github.com/docker/docker/integration/image"
+package image
 
 import (
 	"slices"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/internal/testutils/specialimage"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
+	iimage "github.com/moby/moby/v2/integration/internal/image"
+	"github.com/moby/moby/v2/internal/testutil/specialimage"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -18,16 +20,16 @@ func TestLoadDanglingImages(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
-	specialimage.Load(ctx, t, client, func(dir string) (*ocispec.Index, error) {
+	iimage.Load(ctx, t, apiClient, func(dir string) (*ocispec.Index, error) {
 		return specialimage.MultiLayerCustom(dir, "namedimage:latest", []specialimage.SingleFileLayer{
 			{Name: "bar", Content: []byte("1")},
 		})
 	})
 
 	// Should be one image.
-	images, err := client.ImageList(ctx, image.ListOptions{})
+	imageList, err := apiClient.ImageList(ctx, client.ImageListOptions{})
 	assert.NilError(t, err)
 
 	findImageByName := func(images []image.Summary, imageName string) (image.Summary, error) {
@@ -40,20 +42,20 @@ func TestLoadDanglingImages(t *testing.T) {
 		return images[index], nil
 	}
 
-	oldImage, err := findImageByName(images, "namedimage:latest")
+	oldImage, err := findImageByName(imageList.Items, "namedimage:latest")
 	assert.NilError(t, err)
 
 	// Retain a copy of the old image and then replace it with a new one.
-	specialimage.Load(ctx, t, client, func(dir string) (*ocispec.Index, error) {
+	iimage.Load(ctx, t, apiClient, func(dir string) (*ocispec.Index, error) {
 		return specialimage.MultiLayerCustom(dir, "namedimage:latest", []specialimage.SingleFileLayer{
 			{Name: "bar", Content: []byte("2")},
 		})
 	})
 
-	images, err = client.ImageList(ctx, image.ListOptions{})
+	imageList, err = apiClient.ImageList(ctx, client.ImageListOptions{})
 	assert.NilError(t, err)
 
-	newImage, err := findImageByName(images, "namedimage:latest")
+	newImage, err := findImageByName(imageList.Items, "namedimage:latest")
 	assert.NilError(t, err)
 
 	// IDs should be different.
@@ -70,7 +72,7 @@ func TestLoadDanglingImages(t *testing.T) {
 		return images[index], nil
 	}
 
-	danglingImage, err := findImageById(images, oldImage.ID)
+	danglingImage, err := findImageById(imageList.Items, oldImage.ID)
 	assert.NilError(t, err)
 	assert.Check(t, is.Len(danglingImage.RepoTags, 0))
 }

@@ -1,14 +1,14 @@
-package convert // import "github.com/docker/docker/daemon/cluster/convert"
+package convert
 
 import (
 	"fmt"
 	"strings"
 
-	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/swarm/runtime"
-	"github.com/docker/docker/pkg/namesgenerator"
 	"github.com/gogo/protobuf/proto"
 	gogotypes "github.com/gogo/protobuf/types"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/internal/runtime"
+	"github.com/moby/moby/v2/internal/namesgenerator"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/moby/swarmkit/v2/api/genericresource"
 	"github.com/pkg/errors"
@@ -94,15 +94,28 @@ func serviceSpecFromGRPC(spec *swarmapi.ServiceSpec) (*types.ServiceSpec, error)
 		return nil, nil
 	}
 
-	serviceNetworks := make([]types.NetworkAttachmentConfig, 0, len(spec.Networks))
-	for _, n := range spec.Networks {
-		netConfig := types.NetworkAttachmentConfig{Target: n.Target, Aliases: n.Aliases, DriverOpts: n.DriverAttachmentOpts}
-		serviceNetworks = append(serviceNetworks, netConfig)
-	}
-
 	taskTemplate, err := taskSpecFromGRPC(spec.Task)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(taskTemplate.Networks) == 0 && len(spec.Networks) > 0 {
+		// The ServiceSpec.Networks field was deprecated in API v1.25, with
+		// the deprecation notice updated in API v1.44. We only consider this
+		// field on API < v1.44 and if the replacement TaskSpec.Networks is
+		// not set.
+		//
+		// Account for any service that was created using the old spec.
+		//
+		// TODO(thaJeztah): would swarm still return this? Remove this when we drop API v1.25
+		taskTemplate.Networks = make([]types.NetworkAttachmentConfig, 0, len(spec.Networks))
+		for _, n := range spec.Networks {
+			taskTemplate.Networks = append(taskTemplate.Networks, types.NetworkAttachmentConfig{
+				Target:     n.Target,
+				Aliases:    n.Aliases,
+				DriverOpts: n.DriverAttachmentOpts,
+			})
+		}
 	}
 
 	switch t := spec.Task.GetRuntime().(type) {
@@ -125,7 +138,6 @@ func serviceSpecFromGRPC(spec *swarmapi.ServiceSpec) (*types.ServiceSpec, error)
 	convertedSpec := &types.ServiceSpec{
 		Annotations:  annotationsFromGRPC(spec.Annotations),
 		TaskTemplate: taskTemplate,
-		Networks:     serviceNetworks,
 		EndpointSpec: endpointSpecFromGRPC(spec.Endpoint),
 	}
 
@@ -160,16 +172,15 @@ func ServiceSpecToGRPC(s types.ServiceSpec) (swarmapi.ServiceSpec, error) {
 		name = namesgenerator.GetRandomName(0)
 	}
 
-	serviceNetworks := make([]*swarmapi.NetworkAttachmentConfig, 0, len(s.Networks)) //nolint:staticcheck // ignore SA1019: field is deprecated.
-	for _, n := range s.Networks {                                                   //nolint:staticcheck // ignore SA1019: field is deprecated.
-		netConfig := &swarmapi.NetworkAttachmentConfig{Target: n.Target, Aliases: n.Aliases, DriverAttachmentOpts: n.DriverOpts}
-		serviceNetworks = append(serviceNetworks, netConfig)
-	}
-
 	taskNetworks := make([]*swarmapi.NetworkAttachmentConfig, 0, len(s.TaskTemplate.Networks))
 	for _, n := range s.TaskTemplate.Networks {
 		netConfig := &swarmapi.NetworkAttachmentConfig{Target: n.Target, Aliases: n.Aliases, DriverAttachmentOpts: n.DriverOpts}
 		taskNetworks = append(taskNetworks, netConfig)
+	}
+
+	resources, err := resourcesToGRPC(s.TaskTemplate.Resources)
+	if err != nil {
+		return swarmapi.ServiceSpec{}, err
 	}
 
 	spec := swarmapi.ServiceSpec{
@@ -178,12 +189,11 @@ func ServiceSpecToGRPC(s types.ServiceSpec) (swarmapi.ServiceSpec, error) {
 			Labels: s.Labels,
 		},
 		Task: swarmapi.TaskSpec{
-			Resources:   resourcesToGRPC(s.TaskTemplate.Resources),
+			Resources:   resources,
 			LogDriver:   driverToGRPC(s.TaskTemplate.LogDriver),
 			Networks:    taskNetworks,
 			ForceUpdate: s.TaskTemplate.ForceUpdate,
 		},
-		Networks: serviceNetworks,
 	}
 
 	switch s.TaskTemplate.Runtime {
@@ -210,7 +220,8 @@ func ServiceSpecToGRPC(s types.ServiceSpec) (swarmapi.ServiceSpec, error) {
 
 			s.Mode.Global = &types.GlobalService{} // must always be global
 
-			pluginSpec, err := proto.Marshal(s.TaskTemplate.PluginSpec)
+			ps := runtime.FromAPI(*s.TaskTemplate.PluginSpec)
+			pluginSpec, err := proto.Marshal(&ps)
 			if err != nil {
 				return swarmapi.ServiceSpec{}, err
 			}
@@ -318,7 +329,7 @@ func ServiceSpecToGRPC(s types.ServiceSpec) (swarmapi.ServiceSpec, error) {
 	}
 
 	if numModes > 1 {
-		return swarmapi.ServiceSpec{}, fmt.Errorf("must specify only one service mode")
+		return swarmapi.ServiceSpec{}, errors.New("must specify only one service mode")
 	}
 
 	if s.Mode.Global != nil {
@@ -433,9 +444,18 @@ func resourcesFromGRPC(ts *swarmapi.TaskSpec) *types.ResourceRequirements {
 				GenericResources: GenericResourcesFromGRPC(res.Reservations.Generic),
 			}
 		}
+		resources.SwapBytes = int64PointerFromGRPC(res.SwapBytes)
+		resources.MemorySwappiness = int64PointerFromGRPC(res.MemorySwappiness)
 	}
 
 	return resources
+}
+
+func int64PointerFromGRPC(v *gogotypes.Int64Value) *int64 {
+	if v == nil {
+		return nil
+	}
+	return &v.Value
 }
 
 // GenericResourcesToGRPC converts a GenericResource to a GRPC GenericResource
@@ -456,7 +476,7 @@ func GenericResourcesToGRPC(genericRes []types.GenericResource) []*swarmapi.Gene
 	return generic
 }
 
-func resourcesToGRPC(res *types.ResourceRequirements) *swarmapi.ResourceRequirements {
+func resourcesToGRPC(res *types.ResourceRequirements) (*swarmapi.ResourceRequirements, error) {
 	var reqs *swarmapi.ResourceRequirements
 	if res != nil {
 		reqs = &swarmapi.ResourceRequirements{}
@@ -474,8 +494,21 @@ func resourcesToGRPC(res *types.ResourceRequirements) *swarmapi.ResourceRequirem
 				Generic:     GenericResourcesToGRPC(res.Reservations.GenericResources),
 			}
 		}
+		reqs.SwapBytes = int64PointerToGRPC(res.SwapBytes)
+		reqs.MemorySwappiness = int64PointerToGRPC(res.MemorySwappiness)
+
+		if reqs.SwapBytes != nil && (reqs.Limits == nil || reqs.Limits.MemoryBytes == 0) {
+			return nil, errors.New("memory swap provided, but no memory-limit was set")
+		}
 	}
-	return reqs
+	return reqs, nil
+}
+
+func int64PointerToGRPC(v *int64) *gogotypes.Int64Value {
+	if v == nil {
+		return nil
+	}
+	return &gogotypes.Int64Value{Value: *v}
 }
 
 func restartPolicyFromGRPC(p *swarmapi.RestartPolicy) *types.RestartPolicy {
@@ -671,8 +704,11 @@ func networkAttachmentSpecFromGRPC(attachment swarmapi.NetworkAttachmentSpec) *t
 func taskSpecFromGRPC(taskSpec swarmapi.TaskSpec) (types.TaskSpec, error) {
 	taskNetworks := make([]types.NetworkAttachmentConfig, 0, len(taskSpec.Networks))
 	for _, n := range taskSpec.Networks {
-		netConfig := types.NetworkAttachmentConfig{Target: n.Target, Aliases: n.Aliases, DriverOpts: n.DriverAttachmentOpts}
-		taskNetworks = append(taskNetworks, netConfig)
+		taskNetworks = append(taskNetworks, types.NetworkAttachmentConfig{
+			Target:     n.Target,
+			Aliases:    n.Aliases,
+			DriverOpts: n.DriverAttachmentOpts,
+		})
 	}
 
 	t := types.TaskSpec{
@@ -699,7 +735,8 @@ func taskSpecFromGRPC(taskSpec swarmapi.TaskSpec) (types.TaskSpec, error) {
 				if err := proto.Unmarshal(g.Payload.Value, &p); err != nil {
 					return t, errors.Wrap(err, "error unmarshalling plugin spec")
 				}
-				t.PluginSpec = &p
+				ap := runtime.ToAPI(p)
+				t.PluginSpec = &ap
 			}
 		}
 	case *swarmapi.TaskSpec_Attachment:

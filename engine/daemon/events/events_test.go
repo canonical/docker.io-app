@@ -5,25 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/events"
-	timetypes "github.com/docker/docker/api/types/time"
-	eventstestutils "github.com/docker/docker/daemon/events/testutils"
+	"github.com/moby/moby/api/types/events"
+	eventstestutils "github.com/moby/moby/v2/daemon/events/testutils"
+	"github.com/moby/moby/v2/daemon/internal/timestamp"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
-
-// validateLegacyFields validates that the legacy "Status", "ID", and "From"
-// fields are set to the same value as their "current" (non-legacy) fields.
-//
-// These fields were deprecated since v1.10 (https://github.com/moby/moby/pull/18888).
-//
-// TODO remove this once we removed the deprecated `ID`, `Status`, and `From` fields.
-func validateLegacyFields(t *testing.T, msg events.Message) {
-	t.Helper()
-	assert.Check(t, is.Equal(msg.Status, string(msg.Action)), "Legacy Status field does not match Action")
-	assert.Check(t, is.Equal(msg.ID, msg.Actor.ID), "Legacy ID field does not match Actor.ID")
-	assert.Check(t, is.Equal(msg.From, msg.Actor.Attributes["image"]), "Legacy From field does not match Actor.Attributes.image")
-}
 
 func TestEventsLog(t *testing.T) {
 	e := New()
@@ -44,7 +31,6 @@ func TestEventsLog(t *testing.T) {
 
 		jmsg, ok := msg.(events.Message)
 		assert.Assert(t, ok, "unexpected type: %T", msg)
-		validateLegacyFields(t, jmsg)
 		assert.Check(t, is.Equal(jmsg.Action, events.Action("test")))
 		assert.Check(t, is.Equal(jmsg.Actor.ID, "cont"))
 		assert.Check(t, is.Equal(jmsg.Actor.Attributes["image"], "image"))
@@ -57,7 +43,6 @@ func TestEventsLog(t *testing.T) {
 
 		jmsg, ok := msg.(events.Message)
 		assert.Assert(t, ok, "unexpected type: %T", msg)
-		validateLegacyFields(t, jmsg)
 		assert.Check(t, is.Equal(jmsg.Action, events.Action("test")))
 		assert.Check(t, is.Equal(jmsg.Actor.ID, "cont"))
 		assert.Check(t, is.Equal(jmsg.Actor.Attributes["image"], "image"))
@@ -120,7 +105,6 @@ func TestLogEvents(t *testing.T) {
 	assert.Assert(t, is.Len(current, eventsLimit))
 
 	first := current[0]
-	validateLegacyFields(t, first)
 	assert.Check(t, is.Equal(first.Action, events.Action("action_16")))
 
 	last := current[len(current)-1]
@@ -142,10 +126,10 @@ func TestLogEvents(t *testing.T) {
 //	2016-03-07T17:28:03.129014751+02:00 container destroy 0b863f2a26c18557fc6cdadda007c459f9ec81b874780808138aea78a3595079 (image=ubuntu, name=small_hoover)
 func TestLoadBufferedEvents(t *testing.T) {
 	now := time.Now()
-	f, err := timetypes.GetTimestamp("2016-03-07T17:28:03.100000000+02:00", now)
+	f, err := timestamp.GetTimestamp("2016-03-07T17:28:03.100000000+02:00", now)
 	assert.NilError(t, err)
 
-	s, sNano, err := timetypes.ParseTimestamps(f, -1)
+	s, sNano, err := timestamp.ParseTimestamps(f, -1)
 	assert.NilError(t, err)
 
 	m1, err := eventstestutils.Scan("2016-03-07T17:28:03.022433271+02:00 container die 0b863f2a26c18557fc6cdadda007c459f9ec81b874780808138aea78a3595079 (image=ubuntu, name=small_hoover)")
@@ -170,16 +154,16 @@ func TestLoadBufferedEvents(t *testing.T) {
 
 func TestLoadBufferedEventsOnlyFromPast(t *testing.T) {
 	now := time.Now()
-	f, err := timetypes.GetTimestamp("2016-03-07T17:28:03.090000000+02:00", now)
+	f, err := timestamp.GetTimestamp("2016-03-07T17:28:03.090000000+02:00", now)
 	assert.NilError(t, err)
 
-	s, sNano, err := timetypes.ParseTimestamps(f, 0)
+	s, sNano, err := timestamp.ParseTimestamps(f, 0)
 	assert.NilError(t, err)
 
-	f, err = timetypes.GetTimestamp("2016-03-07T17:28:03.100000000+02:00", now)
+	f, err = timestamp.GetTimestamp("2016-03-07T17:28:03.100000000+02:00", now)
 	assert.NilError(t, err)
 
-	u, uNano, err := timetypes.ParseTimestamps(f, 0)
+	u, uNano, err := timestamp.ParseTimestamps(f, 0)
 	assert.NilError(t, err)
 
 	m1, err := eventstestutils.Scan("2016-03-07T17:28:03.022433271+02:00 container die 0b863f2a26c18557fc6cdadda007c459f9ec81b874780808138aea78a3595079 (image=ubuntu, name=small_hoover)")

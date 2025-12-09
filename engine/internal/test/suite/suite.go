@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/v2/internal/testutil"
 )
 
 // TimeoutFlag is the flag to set a per-test timeout when running tests. Defaults to `-timeout`.
@@ -19,7 +19,7 @@ var TimeoutFlag = flag.Duration("timeout", 0, "DO NOT USE")
 var typTestingT = reflect.TypeOf(new(testing.T))
 
 // Run takes a testing suite and runs all of the tests attached to it.
-func Run(ctx context.Context, t *testing.T, suite interface{}) {
+func Run(ctx context.Context, t *testing.T, suite any) {
 	defer failOnPanic(t)
 
 	ctx = testutil.StartSpan(ctx, t)
@@ -71,7 +71,7 @@ func Run(ctx context.Context, t *testing.T, suite interface{}) {
 	}
 }
 
-func getSetupAllSuite(suite interface{}) (SetupAllSuite, bool) {
+func getSetupAllSuite(suite any) (SetupAllSuite, bool) {
 	setupAllSuite, ok := suite.(SetupAllSuite)
 	if ok {
 		return setupAllSuite, ok
@@ -86,7 +86,7 @@ func getSetupAllSuite(suite interface{}) (SetupAllSuite, bool) {
 	return nil, false
 }
 
-func getSetupTestSuite(suite interface{}) (SetupTestSuite, bool) {
+func getSetupTestSuite(suite any) (SetupTestSuite, bool) {
 	setupAllTest, ok := suite.(SetupTestSuite)
 	if ok {
 		return setupAllTest, ok
@@ -101,7 +101,7 @@ func getSetupTestSuite(suite interface{}) (SetupTestSuite, bool) {
 	return nil, false
 }
 
-func getTearDownTestSuite(suite interface{}) (TearDownTestSuite, bool) {
+func getTearDownTestSuite(suite any) (TearDownTestSuite, bool) {
 	tearDownTest, ok := suite.(TearDownTestSuite)
 	if ok {
 		return tearDownTest, ok
@@ -116,7 +116,7 @@ func getTearDownTestSuite(suite interface{}) (TearDownTestSuite, bool) {
 	return nil, false
 }
 
-func getTeardownAllSuite(suite interface{}) (TearDownAllSuite, bool) {
+func getTeardownAllSuite(suite any) (TearDownAllSuite, bool) {
 	tearDownAll, ok := suite.(TearDownAllSuite)
 	if ok {
 		return tearDownAll, ok

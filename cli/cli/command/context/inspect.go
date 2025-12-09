@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package context
 
@@ -35,7 +35,8 @@ func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 			}
 			return runInspect(dockerCLI, opts)
 		},
-		ValidArgsFunction: completeContextNames(dockerCLI, -1, false),
+		ValidArgsFunction:     completeContextNames(dockerCLI, -1, false),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()

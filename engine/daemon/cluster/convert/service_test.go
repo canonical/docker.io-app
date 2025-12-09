@@ -1,13 +1,13 @@
-package convert // import "github.com/docker/docker/daemon/cluster/convert"
+package convert
 
 import (
+	"errors"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/swarm/runtime"
 	google_protobuf3 "github.com/gogo/protobuf/types"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -88,7 +88,7 @@ func TestServiceConvertToGRPCGenericRuntimePlugin(t *testing.T) {
 	s := swarmtypes.ServiceSpec{
 		TaskTemplate: swarmtypes.TaskSpec{
 			Runtime:    swarmtypes.RuntimePlugin,
-			PluginSpec: &runtime.PluginSpec{},
+			PluginSpec: &swarmtypes.RuntimeSpec{},
 		},
 		Mode: swarmtypes.ServiceMode{
 			Global: &swarmtypes.GlobalService{},
@@ -148,7 +148,7 @@ func TestServiceConvertToGRPCGenericRuntimeCustom(t *testing.T) {
 		},
 	}
 
-	if _, err := ServiceSpecToGRPC(s); err != ErrUnsupportedRuntime {
+	if _, err := ServiceSpecToGRPC(s); !errors.Is(err, ErrUnsupportedRuntime) {
 		t.Fatal(err)
 	}
 }
@@ -409,7 +409,7 @@ func TestServiceConvertToGRPCNetworkAttachmentRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error %v but got no error", ErrUnsupportedRuntime)
 	}
-	if err != ErrUnsupportedRuntime {
+	if !errors.Is(err, ErrUnsupportedRuntime) {
 		t.Fatalf("expected error %v but got error %v", ErrUnsupportedRuntime, err)
 	}
 }
@@ -424,7 +424,7 @@ func TestServiceConvertToGRPCMismatchedRuntime(t *testing.T) {
 	} {
 		for j, spec := range []swarmtypes.TaskSpec{
 			{ContainerSpec: &swarmtypes.ContainerSpec{}},
-			{PluginSpec: &runtime.PluginSpec{}},
+			{PluginSpec: &swarmtypes.RuntimeSpec{}},
 		} {
 			// skip the cases, where the indices match, which would not error
 			if i == j {
@@ -436,7 +436,7 @@ func TestServiceConvertToGRPCMismatchedRuntime(t *testing.T) {
 			}
 			s.TaskTemplate.Runtime = rt
 
-			if _, err := ServiceSpecToGRPC(s); err != ErrMismatchedRuntime {
+			if _, err := ServiceSpecToGRPC(s); !errors.Is(err, ErrMismatchedRuntime) {
 				t.Fatalf("expected %v got %v", ErrMismatchedRuntime, err)
 			}
 		}

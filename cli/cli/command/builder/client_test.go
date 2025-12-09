@@ -3,18 +3,17 @@ package builder
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type fakeClient struct {
 	client.Client
-	builderPruneFunc func(ctx context.Context, opts build.CachePruneOptions) (*build.CachePruneReport, error)
+	builderPruneFunc func(ctx context.Context, opts client.BuildCachePruneOptions) (client.BuildCachePruneResult, error)
 }
 
-func (c *fakeClient) BuildCachePrune(ctx context.Context, opts build.CachePruneOptions) (*build.CachePruneReport, error) {
+func (c *fakeClient) BuildCachePrune(ctx context.Context, opts client.BuildCachePruneOptions) (client.BuildCachePruneResult, error) {
 	if c.builderPruneFunc != nil {
 		return c.builderPruneFunc(ctx, opts)
 	}
-	return nil, nil
+	return client.BuildCachePruneResult{}, nil
 }
