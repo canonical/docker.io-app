@@ -36,9 +36,9 @@ override_dh_gencontrol:
 	# use "dh_golang" to generate "misc:Built-Using" (via "go list")
 	DH_GOLANG_BUILDPKG=' \
 		-tags "$(DOCKER_BUILDTAGS)" \
-		github.com/docker/docker/cmd/dockerd \
+		github.com/moby/moby/v2/cmd/dockerd \
 		github.com/docker/cli/cmd/docker \
-		github.com/docker/docker/cmd/docker-proxy \
+		github.com/moby/moby/v2/cmd/docker-proxy \
 	' dh_golang --builddirectory='$(OUR_GOPATH:$(CURDIR)/%=%)'
 	dh_gencontrol
 
@@ -48,8 +48,8 @@ override_dh_auto_configure:
 	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
 	ln -sfT '$(CURDIR)/cli' '$(OUR_GOPATH)/src/github.com/docker/cli'
 	# engine
-	mkdir -p '$(OUR_GOPATH)/src/github.com/docker'
-	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/docker/docker'
+	mkdir -p '$(OUR_GOPATH)/src/github.com/moby/moby'
+	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/moby/moby/v2'
 
 override_dh_auto_build: _check-manpages _build-tini _build-proxy _build-cli _build-engine
 	@#
@@ -64,7 +64,7 @@ _build-tini: # (docker-init)
 		&& make tini-static
 
 _build-proxy: # (from libnetwork)
-	go build -o libnetwork/docker-proxy github.com/docker/docker/cmd/docker-proxy
+	go build -o libnetwork/docker-proxy github.com/moby/moby/v2/cmd/docker-proxy
 
 _build-cli:
 	DISABLE_WARN_OUTSIDE_CONTAINER=1 \
