@@ -2,6 +2,7 @@
 
 # https://github.com/docker/docker-ce/blob/v19.03.2/components/packaging/deb/common/rules#L36
 cli/build/docker => usr/bin/docker
+cli/build/docker-trust => usr/libexec/docker/cli-plugins/docker-trust
 engine/bundles/dynbinary-daemon/dockerd => usr/bin/dockerd
 libnetwork/docker-proxy => usr/bin/docker-proxy
 tini/build/tini-static => usr/bin/docker-init
