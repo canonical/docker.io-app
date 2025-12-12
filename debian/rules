@@ -50,8 +50,10 @@ override_dh_auto_configure:
 	# engine
 	mkdir -p '$(OUR_GOPATH)/src/github.com/moby/moby'
 	ln -sfT '$(CURDIR)/engine' '$(OUR_GOPATH)/src/github.com/moby/moby/v2'
+	# vendorize docker-trust dependencies
+	ln -sfT '$(CURDIR)/debian/extra/vendor' '$(CURDIR)/cli/cmd/docker-trust/vendor'
 
-override_dh_auto_build: _check-manpages _build-tini _build-proxy _build-cli _build-engine
+override_dh_auto_build: _check-manpages _build-tini _build-proxy _build-cli _build-engine _build-trust-plugin
 	@#
 
 # several "supporting binaries" need to be built and installed
@@ -73,6 +75,14 @@ _build-cli:
 			VERSION='$(VERSION)' \
 			GITCOMMIT='$(DOCKER_GITCOMMIT)' \
 			dynbinary
+
+_build-trust-plugin:
+	DISABLE_WARN_OUTSIDE_CONTAINER=1 \
+		make -C cli \
+			LDFLAGS='' \
+			VERSION='$(VERSION)' \
+			GITCOMMIT='$(DOCKER_GITCOMMIT)' \
+			trust-plugin
 
 _check-manpages:
 ifeq ($(VERSION), $(MANPAGES_VERSION))
@@ -96,6 +106,8 @@ override_dh_auto_test:
 	./cli/build/docker --version
 	# engine
 	./engine/bundles/dynbinary-daemon/dockerd --version
+	# docker-trust plugin (no version command)
+	cli/build/docker-trust --help
 
 override_dh_auto_install:
 	# we use dh_install / dh-exec for installing files where they need to be
@@ -127,6 +139,7 @@ override_dh_shlibdeps:
 
 override_dh_auto_clean:
 	@# stop debhelper from doing "make clean"
+	rm -rf $(CURDIR)/cli/cmd/docker-trust/vendor
 
 override_dh_dwz:
 	# do not call dh_dwz to avoid "dwz: Too few files for multifile optimization"
