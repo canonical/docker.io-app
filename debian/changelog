@@ -1,3 +1,25 @@
+docker.io-app (29.1.2-0ubuntu1) resolute; urgency=medium
+
+  * New upstream version 29.1.2
+  * d/watch: accept new upstream tarball format
+  * d/h/tini-upstream-version.sh: accept new upstream URL format
+  * d/get-orig-source.sh: accept new upstream paths
+  * d/manpages/*: update manpages for version 29.1.2
+  * d/extra/vendor: vendorize docker-trust dependencies
+  * d/copyright: update copyright data
+  * d/control: B-D on libnftables-dev
+  * d/s/include-binaries: allow vendorized code binary files
+  * d/docker.io.docs: update NOTICE files
+  * d/docker.io.install: install new docker-trust plugin
+  * d/docker.io.lintian-overrides: remove obsolete lintian overrides
+  * d/s/lintian-overrides: suppress non-relevant lintian warnings
+  * d/rules:
+    - Use moby/moby namespace
+    - Build docker-trust plugin
+  * d/t/docker-in-lxd: workaround cloud-init bug (LP: #2131809)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Fri, 12 Dec 2025 10:35:58 -0300
+
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
   * New upstream version 28.2.2
