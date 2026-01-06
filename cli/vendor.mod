@@ -14,7 +14,7 @@ require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.7
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
-	github.com/docker/cli-docs-tool v0.10.0
+	github.com/docker/cli-docs-tool v0.11.0
 	github.com/docker/distribution v2.8.3+incompatible
 	github.com/docker/docker-credential-helpers v0.9.4
 	github.com/docker/go-connections v0.6.0
@@ -38,12 +38,12 @@ require (
 	github.com/moby/sys/signal v0.7.1
 	github.com/moby/sys/symlink v0.3.0
 	github.com/moby/term v0.5.2
-	github.com/morikuni/aec v1.0.0
+	github.com/morikuni/aec v1.1.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/sirupsen/logrus v1.9.3
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/tonistiigi/go-rosetta v0.0.0-20220804170347-3f4430f2d346
 	github.com/xeipuuv/gojsonschema v1.2.0
@@ -55,11 +55,11 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/sdk/metric v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.18.0
 	golang.org/x/sys v0.38.0
 	golang.org/x/term v0.37.0
 	golang.org/x/text v0.31.0
-	gopkg.in/yaml.v3 v3.0.1
 	gotest.tools/v3 v3.5.2
 	tags.cncf.io/container-device-interface v1.0.1
 )
@@ -82,7 +82,7 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/user v0.4.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
