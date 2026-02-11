@@ -1,8 +1,14 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.24
+
 package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,14 +18,12 @@ import (
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/opts/swarmopts"
-	"github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/moby/swarmkit/v2/api/defaults"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -34,21 +38,22 @@ func newUpdateCommand(dockerCLI command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdate(cmd.Context(), dockerCLI, cmd.Flags(), options, args[0])
 		},
-		ValidArgsFunction: completeServiceNames(dockerCLI),
+		ValidArgsFunction:     completeServiceNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 	flags.String("image", "", "Service image tag")
 	flags.Var(&ShlexOpt{}, "args", "Service command args")
 	flags.Bool(flagRollback, false, "Rollback to previous specification")
-	flags.SetAnnotation(flagRollback, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagRollback, "version", []string{"1.25"})
 	flags.Bool("force", false, "Force update even if no changes require it")
-	flags.SetAnnotation("force", "version", []string{"1.25"})
+	_ = flags.SetAnnotation("force", "version", []string{"1.25"})
 	addServiceFlags(flags, options, nil)
 
 	flags.Var(newListOptsVar(), flagEnvRemove, "Remove an environment variable")
 	flags.Var(newListOptsVar(), flagGroupRemove, "Remove a previously added supplementary user group from the container")
-	flags.SetAnnotation(flagGroupRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagGroupRemove, "version", []string{"1.25"})
 	flags.Var(newListOptsVar(), flagLabelRemove, "Remove a label by its key")
 	flags.Var(newListOptsVar(), flagContainerLabelRemove, "Remove a container label by its key")
 	flags.Var(newListOptsVar(), flagMountRemove, "Remove a mount by its target path")
@@ -56,72 +61,72 @@ func newUpdateCommand(dockerCLI command.Cli) *cobra.Command {
 	flags.Var(&swarmopts.PortOpt{}, flagPublishRemove, "Remove a published port by its target port")
 	flags.Var(newListOptsVar(), flagConstraintRemove, "Remove a constraint")
 	flags.Var(newListOptsVar(), flagDNSRemove, "Remove a custom DNS server")
-	flags.SetAnnotation(flagDNSRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSRemove, "version", []string{"1.25"})
 	flags.Var(newListOptsVar(), flagDNSOptionRemove, "Remove a DNS option")
-	flags.SetAnnotation(flagDNSOptionRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSOptionRemove, "version", []string{"1.25"})
 	flags.Var(newListOptsVar(), flagDNSSearchRemove, "Remove a DNS search domain")
-	flags.SetAnnotation(flagDNSSearchRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSSearchRemove, "version", []string{"1.25"})
 	flags.Var(newListOptsVar(), flagHostRemove, `Remove a custom host-to-IP mapping ("host:ip")`)
-	flags.SetAnnotation(flagHostRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagHostRemove, "version", []string{"1.25"})
 	flags.Var(&options.labels, flagLabelAdd, "Add or update a service label")
 	flags.Var(&options.containerLabels, flagContainerLabelAdd, "Add or update a container label")
 	flags.Var(&options.env, flagEnvAdd, "Add or update an environment variable")
 	flags.Var(newListOptsVar(), flagSecretRemove, "Remove a secret")
-	flags.SetAnnotation(flagSecretRemove, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagSecretRemove, "version", []string{"1.25"})
 	flags.Var(&options.secrets, flagSecretAdd, "Add or update a secret on a service")
-	flags.SetAnnotation(flagSecretAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagSecretAdd, "version", []string{"1.25"})
 
 	flags.Var(newListOptsVar(), flagConfigRemove, "Remove a configuration file")
-	flags.SetAnnotation(flagConfigRemove, "version", []string{"1.30"})
+	_ = flags.SetAnnotation(flagConfigRemove, "version", []string{"1.30"})
 	flags.Var(&options.configs, flagConfigAdd, "Add or update a config file on a service")
-	flags.SetAnnotation(flagConfigAdd, "version", []string{"1.30"})
+	_ = flags.SetAnnotation(flagConfigAdd, "version", []string{"1.30"})
 
 	flags.Var(&options.mounts, flagMountAdd, "Add or update a mount on a service")
 	flags.Var(&options.constraints, flagConstraintAdd, "Add or update a placement constraint")
 	flags.Var(&options.placementPrefs, flagPlacementPrefAdd, "Add a placement preference")
-	flags.SetAnnotation(flagPlacementPrefAdd, "version", []string{"1.28"})
+	_ = flags.SetAnnotation(flagPlacementPrefAdd, "version", []string{"1.28"})
 	flags.Var(&placementPrefOpts{}, flagPlacementPrefRemove, "Remove a placement preference")
-	flags.SetAnnotation(flagPlacementPrefRemove, "version", []string{"1.28"})
+	_ = flags.SetAnnotation(flagPlacementPrefRemove, "version", []string{"1.28"})
 	flags.Var(&options.networks, flagNetworkAdd, "Add a network")
-	flags.SetAnnotation(flagNetworkAdd, "version", []string{"1.29"})
+	_ = flags.SetAnnotation(flagNetworkAdd, "version", []string{"1.29"})
 	flags.Var(newListOptsVar(), flagNetworkRemove, "Remove a network")
-	flags.SetAnnotation(flagNetworkRemove, "version", []string{"1.29"})
+	_ = flags.SetAnnotation(flagNetworkRemove, "version", []string{"1.29"})
 	flags.Var(&options.endpoint.publishPorts, flagPublishAdd, "Add or update a published port")
 	flags.Var(&options.groups, flagGroupAdd, "Add an additional supplementary user group to the container")
-	flags.SetAnnotation(flagGroupAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagGroupAdd, "version", []string{"1.25"})
 	flags.Var(&options.dns, flagDNSAdd, "Add or update a custom DNS server")
-	flags.SetAnnotation(flagDNSAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSAdd, "version", []string{"1.25"})
 	flags.Var(&options.dnsOption, flagDNSOptionAdd, "Add or update a DNS option")
-	flags.SetAnnotation(flagDNSOptionAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSOptionAdd, "version", []string{"1.25"})
 	flags.Var(&options.dnsSearch, flagDNSSearchAdd, "Add or update a custom DNS search domain")
-	flags.SetAnnotation(flagDNSSearchAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagDNSSearchAdd, "version", []string{"1.25"})
 	flags.Var(&options.hosts, flagHostAdd, `Add a custom host-to-IP mapping ("host:ip")`)
-	flags.SetAnnotation(flagHostAdd, "version", []string{"1.25"})
+	_ = flags.SetAnnotation(flagHostAdd, "version", []string{"1.25"})
 	flags.BoolVar(&options.init, flagInit, false, "Use an init inside each service container to forward signals and reap processes")
-	flags.SetAnnotation(flagInit, "version", []string{"1.37"})
+	_ = flags.SetAnnotation(flagInit, "version", []string{"1.37"})
 	flags.Var(&options.sysctls, flagSysCtlAdd, "Add or update a Sysctl option")
-	flags.SetAnnotation(flagSysCtlAdd, "version", []string{"1.40"})
+	_ = flags.SetAnnotation(flagSysCtlAdd, "version", []string{"1.40"})
 	flags.Var(newListOptsVar(), flagSysCtlRemove, "Remove a Sysctl option")
-	flags.SetAnnotation(flagSysCtlRemove, "version", []string{"1.40"})
+	_ = flags.SetAnnotation(flagSysCtlRemove, "version", []string{"1.40"})
 	flags.Var(&options.ulimits, flagUlimitAdd, "Add or update a ulimit option")
-	flags.SetAnnotation(flagUlimitAdd, "version", []string{"1.41"})
+	_ = flags.SetAnnotation(flagUlimitAdd, "version", []string{"1.41"})
 	flags.Var(newListOptsVar(), flagUlimitRemove, "Remove a ulimit option")
-	flags.SetAnnotation(flagUlimitRemove, "version", []string{"1.41"})
+	_ = flags.SetAnnotation(flagUlimitRemove, "version", []string{"1.41"})
 	flags.Int64Var(&options.oomScoreAdj, flagOomScoreAdj, 0, "Tune host's OOM preferences (-1000 to 1000) ")
-	flags.SetAnnotation(flagOomScoreAdj, "version", []string{"1.46"})
+	_ = flags.SetAnnotation(flagOomScoreAdj, "version", []string{"1.46"})
 
 	// Add needs parsing, Remove only needs the key
 	flags.Var(newListOptsVar(), flagGenericResourcesRemove, "Remove a Generic resource")
-	flags.SetAnnotation(flagHostAdd, "version", []string{"1.32"})
+	_ = flags.SetAnnotation(flagGenericResourcesRemove, "version", []string{"1.32"})
 	flags.Var(newListOptsVarWithValidator(ValidateSingleGenericResource), flagGenericResourcesAdd, "Add a Generic resource")
-	flags.SetAnnotation(flagHostAdd, "version", []string{"1.32"})
+	_ = flags.SetAnnotation(flagGenericResourcesAdd, "version", []string{"1.32"})
 
 	// TODO(thaJeztah): add completion for capabilities, stop-signal (currently non-exported in container package)
 	// _ = cmd.RegisterFlagCompletionFunc(flagCapAdd, completeLinuxCapabilityNames)
 	// _ = cmd.RegisterFlagCompletionFunc(flagCapDrop, completeLinuxCapabilityNames)
 	// _ = cmd.RegisterFlagCompletionFunc(flagStopSignal, completeSignals)
 
-	_ = cmd.RegisterFlagCompletionFunc(flagEnvAdd, completion.EnvVarNames)
+	_ = cmd.RegisterFlagCompletionFunc(flagEnvAdd, completion.EnvVarNames())
 	// TODO(thaJeztah): flagEnvRemove (needs to read current env-vars on the service)
 	_ = cmd.RegisterFlagCompletionFunc("image", completion.ImageNames(dockerCLI, -1))
 	_ = cmd.RegisterFlagCompletionFunc(flagNetworkAdd, completion.NetworkNames(dockerCLI))
@@ -133,12 +138,6 @@ func newUpdateCommand(dockerCLI command.Cli) *cobra.Command {
 	_ = cmd.RegisterFlagCompletionFunc(flagUpdateFailureAction, completion.FromList("pause", "continue", "rollback"))
 
 	completion.ImageNames(dockerCLI, -1)
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
 
 	return cmd
 }
@@ -155,7 +154,7 @@ func newListOptsVarWithValidator(validator opts.ValidatorFctType) *opts.ListOpts
 func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet, options *serviceOptions, serviceID string) error {
 	apiClient := dockerCLI.Client()
 
-	service, _, err := apiClient.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
+	res, err := apiClient.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
 	if err != nil {
 		return err
 	}
@@ -165,15 +164,6 @@ func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 		return err
 	}
 
-	// There are two ways to do user-requested rollback. The old way is
-	// client-side, but with a sufficiently recent daemon we prefer
-	// server-side, because it will honor the rollback parameters.
-	var (
-		clientSideRollback bool
-		serverSideRollback bool
-	)
-
-	spec := &service.Spec
 	if rollback {
 		// Rollback can't be combined with other flags.
 		otherFlagsPassed := false
@@ -188,49 +178,34 @@ func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 		if otherFlagsPassed {
 			return errors.New("other flags may not be combined with --rollback")
 		}
-
-		if versions.LessThan(apiClient.ClientVersion(), "1.28") {
-			clientSideRollback = true
-			spec = service.PreviousSpec
-			if spec == nil {
-				return errors.Errorf("service does not have a previous specification to roll back to")
-			}
-		} else {
-			serverSideRollback = true
-		}
 	}
 
-	updateOpts := swarm.ServiceUpdateOptions{}
-	if serverSideRollback {
-		updateOpts.Rollback = "previous"
+	updateOpts := client.ServiceUpdateOptions{}
+	rollbackAction := "none"
+	if rollback {
+		rollbackAction = "previous"
 	}
 
+	spec := &res.Service.Spec
 	err = updateService(ctx, apiClient, flags, spec)
 	if err != nil {
 		return err
 	}
 
 	if flags.Changed("image") {
-		if err := resolveServiceImageDigestContentTrust(dockerCLI, spec); err != nil {
-			return err
-		}
-		if !options.noResolveImage && versions.GreaterThanOrEqualTo(apiClient.ClientVersion(), "1.30") {
-			updateOpts.QueryRegistry = true
-		}
+		updateOpts.QueryRegistry = !options.noResolveImage
 	}
 
 	updatedSecrets, err := getUpdatedSecrets(ctx, apiClient, flags, spec.TaskTemplate.ContainerSpec.Secrets)
 	if err != nil {
 		return err
 	}
-
 	spec.TaskTemplate.ContainerSpec.Secrets = updatedSecrets
 
 	updatedConfigs, err := getUpdatedConfigs(ctx, apiClient, flags, spec.TaskTemplate.ContainerSpec)
 	if err != nil {
 		return err
 	}
-
 	spec.TaskTemplate.ContainerSpec.Configs = updatedConfigs
 
 	// set the credential spec value after get the updated configs, because we
@@ -239,27 +214,31 @@ func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 	updateCredSpecConfig(flags, spec.TaskTemplate.ContainerSpec)
 
 	// only send auth if flag was set
-	sendAuth, err := flags.GetBool(flagRegistryAuth)
-	if err != nil {
+	var encodedAuth string
+	var registryAuthFrom string
+	if ok, err := flags.GetBool(flagRegistryAuth); err != nil {
 		return err
-	}
-	switch {
-	case sendAuth:
+	} else if ok {
 		// Retrieve encoded auth token from the image reference
 		// This would be the old image if it didn't change in this update
-		image := spec.TaskTemplate.ContainerSpec.Image
-		encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), image)
+		var err error
+		encodedAuth, err = command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), spec.TaskTemplate.ContainerSpec.Image)
 		if err != nil {
 			return err
 		}
 		updateOpts.EncodedRegistryAuth = encodedAuth
-	case clientSideRollback:
-		updateOpts.RegistryAuthFrom = swarm.RegistryAuthFromPreviousSpec
-	default:
-		updateOpts.RegistryAuthFrom = swarm.RegistryAuthFromSpec
+	} else {
+		registryAuthFrom = string(swarm.RegistryAuthFromSpec)
 	}
 
-	response, err := apiClient.ServiceUpdate(ctx, service.ID, service.Version, *spec, updateOpts)
+	response, err := apiClient.ServiceUpdate(ctx, res.Service.ID, client.ServiceUpdateOptions{
+		Version: res.Service.Version,
+		Spec:    *spec,
+
+		EncodedRegistryAuth: encodedAuth,
+		RegistryAuthFrom:    swarm.RegistryAuthSource(registryAuthFrom),
+		Rollback:            rollbackAction,
+	})
 	if err != nil {
 		return err
 	}
@@ -270,7 +249,7 @@ func runUpdate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 
 	_, _ = fmt.Fprintln(dockerCLI.Out(), serviceID)
 
-	if options.detach || versions.LessThan(apiClient.ClientVersion(), "1.29") {
+	if options.detach {
 		return nil
 	}
 
@@ -454,9 +433,15 @@ func updateService(ctx context.Context, apiClient client.NetworkAPIClient, flags
 		updateUint64(flagUpdateParallelism, &spec.UpdateConfig.Parallelism)
 		updateDuration(flagUpdateDelay, &spec.UpdateConfig.Delay)
 		updateDuration(flagUpdateMonitor, &spec.UpdateConfig.Monitor)
-		updateString(flagUpdateFailureAction, &spec.UpdateConfig.FailureAction)
+		if flags.Changed(flagUpdateFailureAction) {
+			value, _ := flags.GetString(flagUpdateFailureAction)
+			spec.UpdateConfig.FailureAction = swarm.FailureAction(value)
+		}
 		updateFloatValue(flagUpdateMaxFailureRatio, &spec.UpdateConfig.MaxFailureRatio)
-		updateString(flagUpdateOrder, &spec.UpdateConfig.Order)
+		if flags.Changed(flagUpdateOrder) {
+			value, _ := flags.GetString(flagUpdateOrder)
+			spec.UpdateConfig.Order = swarm.UpdateOrder(value)
+		}
 	}
 
 	if anyChanged(flags, flagRollbackParallelism, flagRollbackDelay, flagRollbackMonitor, flagRollbackFailureAction, flagRollbackMaxFailureRatio, flagRollbackOrder) {
@@ -466,9 +451,15 @@ func updateService(ctx context.Context, apiClient client.NetworkAPIClient, flags
 		updateUint64(flagRollbackParallelism, &spec.RollbackConfig.Parallelism)
 		updateDuration(flagRollbackDelay, &spec.RollbackConfig.Delay)
 		updateDuration(flagRollbackMonitor, &spec.RollbackConfig.Monitor)
-		updateString(flagRollbackFailureAction, &spec.RollbackConfig.FailureAction)
+		if flags.Changed(flagRollbackFailureAction) {
+			value, _ := flags.GetString(flagRollbackFailureAction)
+			spec.RollbackConfig.FailureAction = swarm.FailureAction(value)
+		}
 		updateFloatValue(flagRollbackMaxFailureRatio, &spec.RollbackConfig.MaxFailureRatio)
-		updateString(flagRollbackOrder, &spec.RollbackConfig.Order)
+		if flags.Changed(flagRollbackOrder) {
+			value, _ := flags.GetString(flagRollbackOrder)
+			spec.RollbackConfig.Order = swarm.UpdateOrder(value)
+		}
 	}
 
 	if flags.Changed(flagEndpointMode) {
@@ -943,33 +934,33 @@ func removeItems(
 	return newSeq
 }
 
-func updateMounts(flags *pflag.FlagSet, mounts *[]mounttypes.Mount) error {
-	mountsByTarget := map[string]mounttypes.Mount{}
+func updateMounts(flags *pflag.FlagSet, mounts *[]mount.Mount) error {
+	mountsByTarget := map[string]mount.Mount{}
 
 	if flags.Changed(flagMountAdd) {
 		values := flags.Lookup(flagMountAdd).Value.(*opts.MountOpt).Value()
-		for _, mount := range values {
-			if _, ok := mountsByTarget[mount.Target]; ok {
-				return errors.Errorf("duplicate mount target")
+		for _, mnt := range values {
+			if _, ok := mountsByTarget[mnt.Target]; ok {
+				return errors.New("duplicate mount target")
 			}
-			mountsByTarget[mount.Target] = mount
+			mountsByTarget[mnt.Target] = mnt
 		}
 	}
 
 	// Add old list of mount points minus updated one.
-	for _, mount := range *mounts {
-		if _, ok := mountsByTarget[mount.Target]; !ok {
-			mountsByTarget[mount.Target] = mount
+	for _, mnt := range *mounts {
+		if _, ok := mountsByTarget[mnt.Target]; !ok {
+			mountsByTarget[mnt.Target] = mnt
 		}
 	}
 
-	newMounts := []mounttypes.Mount{}
+	newMounts := make([]mount.Mount, 0, len(mountsByTarget))
 
 	toRemove := buildToRemoveSet(flags, flagMountRemove)
 
-	for _, mount := range mountsByTarget {
-		if _, exists := toRemove[mount.Target]; !exists {
-			newMounts = append(newMounts, mount)
+	for _, mnt := range mountsByTarget {
+		if _, exists := toRemove[mnt.Target]; !exists {
+			newMounts = append(newMounts, mnt)
 		}
 	}
 	sort.Slice(newMounts, func(i, j int) bool {
@@ -1005,9 +996,9 @@ func updateGroups(flags *pflag.FlagSet, groups *[]string) error {
 	return nil
 }
 
-func removeDuplicates(entries []string) []string {
-	hit := map[string]bool{}
-	newEntries := []string{}
+func removeDuplicates[T comparable](entries []T) []T {
+	hit := map[T]bool{}
+	newEntries := []T{}
 	for _, v := range entries {
 		if !hit[v] {
 			newEntries = append(newEntries, v)
@@ -1023,24 +1014,34 @@ func updateDNSConfig(flags *pflag.FlagSet, config **swarm.DNSConfig) error {
 	nameservers := (*config).Nameservers
 	if flags.Changed(flagDNSAdd) {
 		values := flags.Lookup(flagDNSAdd).Value.(*opts.ListOpts).GetSlice()
-		nameservers = append(nameservers, values...)
+		var ips []netip.Addr
+		for _, ip := range values {
+			a, err := netip.ParseAddr(ip)
+			if err != nil {
+				return err
+			}
+			ips = append(ips, a)
+		}
+		nameservers = append(nameservers, ips...)
 	}
 	nameservers = removeDuplicates(nameservers)
 	toRemove := buildToRemoveSet(flags, flagDNSRemove)
 	for _, nameserver := range nameservers {
-		if _, exists := toRemove[nameserver]; !exists {
+		if _, exists := toRemove[nameserver.String()]; !exists {
 			newConfig.Nameservers = append(newConfig.Nameservers, nameserver)
 		}
 	}
 	// Sort so that result is predictable.
-	sort.Strings(newConfig.Nameservers)
+	slices.SortFunc(newConfig.Nameservers, func(a, b netip.Addr) int {
+		return a.Compare(b)
+	})
 
 	search := (*config).Search
 	if flags.Changed(flagDNSSearchAdd) {
 		values := flags.Lookup(flagDNSSearchAdd).Value.(*opts.ListOpts).GetSlice()
 		search = append(search, values...)
 	}
-	search = removeDuplicates(search)
+	search = slices.Compact(search)
 	toRemove = buildToRemoveSet(flags, flagDNSSearchRemove)
 	for _, entry := range search {
 		if _, exists := toRemove[entry]; !exists {
@@ -1055,7 +1056,7 @@ func updateDNSConfig(flags *pflag.FlagSet, config **swarm.DNSConfig) error {
 		values := flags.Lookup(flagDNSOptionAdd).Value.(*opts.ListOpts).GetSlice()
 		options = append(options, values...)
 	}
-	options = removeDuplicates(options)
+	options = slices.Compact(options)
 	toRemove = buildToRemoveSet(flags, flagDNSOptionRemove)
 	for _, option := range options {
 		if _, exists := toRemove[option]; !exists {
@@ -1126,16 +1127,16 @@ portLoop:
 	return nil
 }
 
-func equalProtocol(prot1, prot2 swarm.PortConfigProtocol) bool {
+func equalProtocol(prot1, prot2 network.IPProtocol) bool {
 	return prot1 == prot2 ||
-		(prot1 == swarm.PortConfigProtocol("") && prot2 == swarm.PortConfigProtocolTCP) ||
-		(prot2 == swarm.PortConfigProtocol("") && prot1 == swarm.PortConfigProtocolTCP)
+		(prot1 == "" && prot2 == network.TCP) ||
+		(prot2 == "" && prot1 == network.TCP)
 }
 
 func equalPublishMode(mode1, mode2 swarm.PortConfigPublishMode) bool {
 	return mode1 == mode2 ||
-		(mode1 == swarm.PortConfigPublishMode("") && mode2 == swarm.PortConfigPublishModeIngress) ||
-		(mode2 == swarm.PortConfigPublishMode("") && mode1 == swarm.PortConfigPublishModeIngress)
+		(mode1 == "" && mode2 == swarm.PortConfigPublishModeIngress) ||
+		(mode2 == "" && mode1 == swarm.PortConfigPublishModeIngress)
 }
 
 func updateReplicas(flags *pflag.FlagSet, serviceMode *swarm.ServiceMode) error {
@@ -1144,7 +1145,7 @@ func updateReplicas(flags *pflag.FlagSet, serviceMode *swarm.ServiceMode) error 
 	}
 
 	if serviceMode == nil || serviceMode.Replicated == nil {
-		return errors.Errorf("replicas can only be used with replicated mode")
+		return errors.New("replicas can only be used with replicated mode")
 	}
 	serviceMode.Replicated.Replicas = flags.Lookup(flagReplicas).Value.(*Uint64Opt).Value()
 	return nil
@@ -1284,7 +1285,7 @@ func updateHealthcheck(flags *pflag.FlagSet, containerSpec *swarm.ContainerSpec)
 			}
 			return nil
 		}
-		return errors.Errorf("--%s conflicts with --health-* options", flagNoHealthcheck)
+		return fmt.Errorf("--%s conflicts with --health-* options", flagNoHealthcheck)
 	}
 	if len(containerSpec.Healthcheck.Test) > 0 && containerSpec.Healthcheck.Test[0] == "NONE" {
 		containerSpec.Healthcheck.Test = nil
@@ -1320,19 +1321,15 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 	// spec.Networks field. If spec.Network is in use, we'll migrate those
 	// values to spec.TaskTemplate.Networks.
 	specNetworks := spec.TaskTemplate.Networks
-	if len(specNetworks) == 0 {
-		specNetworks = spec.Networks //nolint:staticcheck // ignore SA1019: field is deprecated.
-	}
-	spec.Networks = nil //nolint:staticcheck // ignore SA1019: field is deprecated.
 
 	toRemove := buildToRemoveSet(flags, flagNetworkRemove)
 	idsToRemove := make(map[string]struct{})
 	for networkIDOrName := range toRemove {
-		nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, network.InspectOptions{Scope: "swarm"})
+		nw, err := apiClient.NetworkInspect(ctx, networkIDOrName, client.NetworkInspectOptions{Scope: "swarm"})
 		if err != nil {
 			return err
 		}
-		idsToRemove[nw.ID] = struct{}{}
+		idsToRemove[nw.Network.ID] = struct{}{}
 	}
 
 	existingNetworks := make(map[string]struct{})
@@ -1355,7 +1352,7 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 				return err
 			}
 			if _, exists := existingNetworks[nwID]; exists {
-				return errors.Errorf("service is already attached to network %s", nw.Target)
+				return fmt.Errorf("service is already attached to network %s", nw.Target)
 			}
 			nw.Target = nwID
 			newNetworks = append(newNetworks, nw)

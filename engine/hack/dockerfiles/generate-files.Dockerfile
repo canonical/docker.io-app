@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.24.3
+ARG GO_VERSION=1.25.5
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG PROTOC_VERSION=3.11.4
 
@@ -17,7 +17,7 @@ RUN <<EOT
   wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${TARGETOS}-${arch}.zip
   unzip protoc-${PROTOC_VERSION}-${TARGETOS}-${arch}.zip -d /usr/local
 EOT
-WORKDIR /go/src/github.com/docker/docker
+WORKDIR /go/src/github.com/moby/moby
 
 FROM base AS src
 WORKDIR /out
@@ -35,12 +35,12 @@ FROM base AS tools
 RUN --mount=from=src,source=/out,target=.,rw \
     --mount=type=cache,target=/root/.cache/go-build <<EOT
   set -ex
-  ./hack/with-go-mod.sh go install -v -mod=vendor -modfile=vendor.mod \
+  go install -v \
     github.com/gogo/protobuf/protoc-gen-gogo \
     github.com/gogo/protobuf/protoc-gen-gogofaster \
     github.com/gogo/protobuf/protoc-gen-gogoslick \
     github.com/golang/protobuf/protoc-gen-go
-  ./hack/with-go-mod.sh go build -v -mod=vendor -modfile=vendor.mod \
+  go build -v \
     -o /usr/bin/pluginrpc-gen \
     ./pkg/plugins/pluginrpc-gen
 EOT

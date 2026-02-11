@@ -1,13 +1,16 @@
-package service // import "github.com/docker/docker/integration/service"
+package service
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/integration/internal/swarm"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/container"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/swarm"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -20,22 +23,23 @@ func TestInspect(t *testing.T) {
 	ctx := setupTest(t)
 	d := swarm.NewSwarm(ctx, t, testEnv)
 	defer d.Stop(t)
-	client := d.NewClientT(t)
-	defer client.Close()
+	apiClient := d.NewClientT(t)
+	defer apiClient.Close()
 
 	now := time.Now()
 	var instances uint64 = 2
 	serviceSpec := fullSwarmServiceSpec("test-service-inspect"+t.Name(), instances)
 
-	resp, err := client.ServiceCreate(ctx, serviceSpec, swarmtypes.ServiceCreateOptions{
+	resp, err := apiClient.ServiceCreate(ctx, client.ServiceCreateOptions{
+		Spec:          serviceSpec,
 		QueryRegistry: false,
 	})
 	assert.NilError(t, err)
 
 	id := resp.ID
-	poll.WaitOn(t, swarm.RunningTasksCount(ctx, client, id, instances))
+	poll.WaitOn(t, swarm.RunningTasksCount(ctx, apiClient, id, instances))
 
-	service, _, err := client.ServiceInspectWithRaw(ctx, id, swarmtypes.ServiceInspectOptions{})
+	result, err := apiClient.ServiceInspect(ctx, id, client.ServiceInspectOptions{})
 	assert.NilError(t, err)
 
 	expected := swarmtypes.Service{
@@ -47,7 +51,7 @@ func TestInspect(t *testing.T) {
 			UpdatedAt: now,
 		},
 	}
-	assert.Check(t, is.DeepEqual(service, expected, cmpServiceOpts()))
+	assert.Check(t, is.DeepEqual(result.Service, expected, cmpServiceOpts()))
 }
 
 // TODO: use helpers from gotest.tools/assert/opt when available
@@ -66,7 +70,10 @@ func cmpServiceOpts() cmp.Option {
 		return delta < threshold && delta > -threshold
 	})
 
-	return cmp.FilterPath(metaTimeFields, withinThreshold)
+	return cmp.Options{
+		cmp.FilterPath(metaTimeFields, withinThreshold),
+		cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}),
+	}
 }
 
 func fullSwarmServiceSpec(name string, replicas uint64) swarmtypes.ServiceSpec {
@@ -94,7 +101,7 @@ func fullSwarmServiceSpec(name string, replicas uint64) swarmtypes.ServiceSpec {
 				StopGracePeriod: &restartDelay,
 				Hosts:           []string{"8.8.8.8  google"},
 				DNSConfig: &swarmtypes.DNSConfig{
-					Nameservers: []string{"8.8.8.8"},
+					Nameservers: []netip.Addr{netip.MustParseAddr("8.8.8.8")},
 					Search:      []string{"somedomain"},
 				},
 				Isolation: container.IsolationDefault,

@@ -13,13 +13,10 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/cli/internal/test/notary"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
 	"github.com/google/go-cmp/cmp"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -116,36 +113,31 @@ func TestCreateContainerImagePullPolicy(t *testing.T) {
 		t.Run(tc.PullPolicy, func(t *testing.T) {
 			pullCounter := 0
 
-			client := &fakeClient{
-				createContainerFunc: func(
-					config *container.Config,
-					hostConfig *container.HostConfig,
-					networkingConfig *network.NetworkingConfig,
-					platform *ocispec.Platform,
-					containerName string,
-				) (container.CreateResponse, error) {
+			apiClient := &fakeClient{
+				createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 					defer func() { tc.ResponseCounter++ }()
 					switch tc.ResponseCounter {
 					case 0:
-						return container.CreateResponse{}, fakeNotFound{}
+						return client.ContainerCreateResult{}, fakeNotFound{}
 					default:
-						return container.CreateResponse{ID: containerID}, nil
+						return client.ContainerCreateResult{ID: containerID}, nil
 					}
 				},
-				imageCreateFunc: func(ctx context.Context, parentReference string, options image.CreateOptions) (io.ReadCloser, error) {
+				imagePullFunc: func(ctx context.Context, parentReference string, options client.ImagePullOptions) (client.ImagePullResponse, error) {
 					defer func() { pullCounter++ }()
-					return io.NopCloser(strings.NewReader("")), nil
+					return fakeStreamResult{ReadCloser: io.NopCloser(strings.NewReader(""))}, nil
 				},
-				infoFunc: func() (system.Info, error) {
-					return system.Info{IndexServerAddress: "https://indexserver.example.com"}, nil
+				infoFunc: func() (client.SystemInfoResult, error) {
+					return client.SystemInfoResult{
+						Info: system.Info{IndexServerAddress: "https://indexserver.example.com"},
+					}, nil
 				},
 			}
-			fakeCLI := test.NewFakeCli(client)
+			fakeCLI := test.NewFakeCli(apiClient)
 			id, err := createContainer(context.Background(), fakeCLI, config, &createOptions{
-				name:      "name",
-				platform:  runtime.GOOS,
-				untrusted: true,
-				pull:      tc.PullPolicy,
+				name:     "name",
+				platform: runtime.GOOS,
+				pull:     tc.PullPolicy,
 			})
 
 			if tc.ExpectedErrMsg != "" {
@@ -206,7 +198,7 @@ func TestCreateContainerValidateFlags(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewCreateCommand(test.NewFakeCli(&fakeClient{}))
+			cmd := newCreateCommand(test.NewFakeCli(&fakeClient{}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
@@ -217,55 +209,6 @@ func TestCreateContainerValidateFlags(t *testing.T) {
 			} else {
 				assert.Check(t, is.Nil(err))
 			}
-		})
-	}
-}
-
-func TestNewCreateCommandWithContentTrustErrors(t *testing.T) {
-	testCases := []struct {
-		name          string
-		args          []string
-		expectedError string
-		notaryFunc    test.NotaryClientFuncType
-	}{
-		{
-			name:          "offline-notary-server",
-			notaryFunc:    notary.GetOfflineNotaryRepository,
-			expectedError: "client is offline",
-			args:          []string{"image:tag"},
-		},
-		{
-			name:          "uninitialized-notary-server",
-			notaryFunc:    notary.GetUninitializedNotaryRepository,
-			expectedError: "remote trust data does not exist",
-			args:          []string{"image:tag"},
-		},
-		{
-			name:          "empty-notary-server",
-			notaryFunc:    notary.GetEmptyTargetsNotaryRepository,
-			expectedError: "No valid trust data for tag",
-			args:          []string{"image:tag"},
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeCLI := test.NewFakeCli(&fakeClient{
-				createContainerFunc: func(config *container.Config,
-					hostConfig *container.HostConfig,
-					networkingConfig *network.NetworkingConfig,
-					platform *ocispec.Platform,
-					containerName string,
-				) (container.CreateResponse, error) {
-					return container.CreateResponse{}, errors.New("shouldn't try to pull image")
-				},
-			}, test.EnableContentTrust)
-			fakeCLI.SetNotaryClient(tc.notaryFunc)
-			cmd := NewCreateCommand(fakeCLI)
-			cmd.SetOut(io.Discard)
-			cmd.SetErr(io.Discard)
-			cmd.SetArgs(tc.args)
-			err := cmd.Execute()
-			assert.ErrorContains(t, err, tc.expectedError)
 		})
 	}
 }
@@ -291,30 +234,15 @@ func TestNewCreateCommandWithWarnings(t *testing.T) {
 			args:     []string{"image:tag"},
 			warnings: []string{"warning from daemon", "another warning from daemon"},
 		},
-		{
-			name:    "container-create-localhost-dns",
-			args:    []string{"--dns=127.0.0.11", "image:tag"},
-			warning: true,
-		},
-		{
-			name:    "container-create-localhost-dns-ipv6",
-			args:    []string{"--dns=::1", "image:tag"},
-			warning: true,
-		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeCLI := test.NewFakeCli(&fakeClient{
-				createContainerFunc: func(config *container.Config,
-					hostConfig *container.HostConfig,
-					networkingConfig *network.NetworkingConfig,
-					platform *ocispec.Platform,
-					containerName string,
-				) (container.CreateResponse, error) {
-					return container.CreateResponse{Warnings: tc.warnings}, nil
+				createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+					return client.ContainerCreateResult{Warnings: tc.warnings}, nil
 				},
 			})
-			cmd := NewCreateCommand(fakeCLI)
+			cmd := newCreateCommand(fakeCLI)
 			cmd.SetOut(io.Discard)
 			cmd.SetArgs(tc.args)
 			err := cmd.Execute()
@@ -344,15 +272,10 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 	sort.Strings(expected)
 
 	fakeCLI := test.NewFakeCli(&fakeClient{
-		createContainerFunc: func(config *container.Config,
-			hostConfig *container.HostConfig,
-			networkingConfig *network.NetworkingConfig,
-			platform *ocispec.Platform,
-			containerName string,
-		) (container.CreateResponse, error) {
-			sort.Strings(config.Env)
-			assert.DeepEqual(t, config.Env, expected)
-			return container.CreateResponse{}, nil
+		createContainerFunc: func(options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			sort.Strings(options.Config.Env)
+			assert.DeepEqual(t, options.Config.Env, expected)
+			return client.ContainerCreateResult{}, nil
 		},
 	})
 	fakeCLI.SetConfigFile(&configfile.ConfigFile{
@@ -366,7 +289,7 @@ func TestCreateContainerWithProxyConfig(t *testing.T) {
 			},
 		},
 	})
-	cmd := NewCreateCommand(fakeCLI)
+	cmd := newCreateCommand(fakeCLI)
 	cmd.SetOut(io.Discard)
 	cmd.SetArgs([]string{"image:tag"})
 	err := cmd.Execute()

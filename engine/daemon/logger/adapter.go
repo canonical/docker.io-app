@@ -1,4 +1,4 @@
-package logger // import "github.com/docker/docker/daemon/logger"
+package logger
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/plugins/logdriver"
-	"github.com/docker/docker/pkg/plugingetter"
+	"github.com/moby/moby/v2/daemon/logger/internal/logdriver"
+	"github.com/moby/moby/v2/pkg/plugingetter"
 	"github.com/pkg/errors"
 )
 
@@ -107,7 +107,7 @@ func (a *pluginAdapterWithRead) ReadLogs(ctx context.Context, config ReadConfig)
 
 			var buf logdriver.LogEntry
 			if err := dec.Decode(&buf); err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					return
 				}
 				watcher.Err <- errors.Wrap(err, "error decoding log message")

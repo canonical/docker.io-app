@@ -1,162 +1,206 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
+	"github.com/containerd/errdefs"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func TestContainerExecCreateError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+func TestExecCreateError(t *testing.T) {
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
 
-	_, err := client.ContainerExecCreate(context.Background(), "container_id", container.ExecOptions{})
+	_, err = client.ExecCreate(t.Context(), "container_id", ExecCreateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 
-	_, err = client.ContainerExecCreate(context.Background(), "", container.ExecOptions{})
+	_, err = client.ExecCreate(t.Context(), "", ExecCreateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 
-	_, err = client.ContainerExecCreate(context.Background(), "    ", container.ExecOptions{})
+	_, err = client.ExecCreate(t.Context(), "    ", ExecCreateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
 	assert.Check(t, is.ErrorContains(err, "value is empty"))
 }
 
-// TestContainerExecCreateConnectionError verifies that connection errors occurring
+// TestExecCreateConnectionError verifies that connection errors occurring
 // during API-version negotiation are not shadowed by API-version errors.
 //
 // Regression test for https://github.com/docker/cli/issues/4890
-func TestContainerExecCreateConnectionError(t *testing.T) {
-	client, err := NewClientWithOpts(WithAPIVersionNegotiation(), WithHost("tcp://no-such-host.invalid"))
+func TestExecCreateConnectionError(t *testing.T) {
+	client, err := New(WithHost("tcp://no-such-host.invalid"))
 	assert.NilError(t, err)
 
-	_, err = client.ContainerExecCreate(context.Background(), "container_id", container.ExecOptions{})
+	_, err = client.ExecCreate(t.Context(), "container_id", ExecCreateOptions{})
 	assert.Check(t, is.ErrorType(err, IsErrConnectionFailed))
 }
 
-func TestContainerExecCreate(t *testing.T) {
-	expectedURL := "/containers/container_id/exec"
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			if req.Method != http.MethodPost {
-				return nil, fmt.Errorf("expected POST method, got %s", req.Method)
+func TestExecCreate(t *testing.T) {
+	const expectedURL = "/containers/container_id/exec"
+	client, err := New(
+		WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodPost, expectedURL); err != nil {
+				return nil, err
 			}
 			// FIXME validate the content is the given ExecConfig ?
 			if err := req.ParseForm(); err != nil {
 				return nil, err
 			}
-			execConfig := &container.ExecOptions{}
+			execConfig := &container.ExecCreateRequest{}
 			if err := json.NewDecoder(req.Body).Decode(execConfig); err != nil {
 				return nil, err
 			}
 			if execConfig.User != "user" {
 				return nil, fmt.Errorf("expected an execConfig with User == 'user', got %v", execConfig)
 			}
-			b, err := json.Marshal(container.ExecCreateResponse{
+			return mockJSONResponse(http.StatusOK, nil, container.ExecCreateResponse{
 				ID: "exec_id",
-			})
-			if err != nil {
-				return nil, err
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(b)),
-			}, nil
+			})(req)
 		}),
-	}
+	)
+	assert.NilError(t, err)
 
-	r, err := client.ContainerExecCreate(context.Background(), "container_id", container.ExecOptions{
+	res, err := client.ExecCreate(t.Context(), "container_id", ExecCreateOptions{
 		User: "user",
 	})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(r.ID, "exec_id"))
+	assert.Check(t, is.Equal(res.ID, "exec_id"))
 }
 
-func TestContainerExecStartError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
-	err := client.ContainerExecStart(context.Background(), "nothing", container.ExecStartOptions{})
+func TestExecStartError(t *testing.T) {
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ExecStart(t.Context(), "nothing", ExecStartOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
-func TestContainerExecStart(t *testing.T) {
-	expectedURL := "/exec/exec_id/start"
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
+func TestExecStart(t *testing.T) {
+	const expectedURL = "/exec/exec_id/start"
+	client, err := New(
+		WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodPost, expectedURL); err != nil {
+				return nil, err
 			}
 			if err := req.ParseForm(); err != nil {
 				return nil, err
 			}
-			options := &container.ExecStartOptions{}
-			if err := json.NewDecoder(req.Body).Decode(options); err != nil {
+			request := &container.ExecStartRequest{}
+			if err := json.NewDecoder(req.Body).Decode(request); err != nil {
 				return nil, err
 			}
-			if options.Tty || !options.Detach {
-				return nil, fmt.Errorf("expected ExecStartOptions{Detach:true,Tty:false}, got %v", options)
+			if request.Tty || !request.Detach {
+				return nil, fmt.Errorf("expected ExecStartOptions{Detach:true,Tty:false}, got %v", request)
 			}
-
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(""))),
-			}, nil
+			return mockResponse(http.StatusOK, nil, "")(req)
 		}),
-	}
+	)
+	assert.NilError(t, err)
 
-	err := client.ContainerExecStart(context.Background(), "exec_id", container.ExecStartOptions{
+	_, err = client.ExecStart(t.Context(), "exec_id", ExecStartOptions{
 		Detach: true,
-		Tty:    false,
+		TTY:    false,
 	})
 	assert.NilError(t, err)
 }
 
-func TestContainerExecInspectError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+func TestExecStartConsoleSize(t *testing.T) {
+	tests := []struct {
+		doc     string
+		options ExecStartOptions
+		expErr  string
+		expReq  container.ExecStartRequest
+	}{
+		{
+			doc: "without TTY",
+			options: ExecStartOptions{
+				Detach:      true,
+				TTY:         false,
+				ConsoleSize: ConsoleSize{Height: 100, Width: 200},
+			},
+			expErr: "console size is only supported when TTY is enabled",
+		},
+		{
+			doc: "with TTY",
+			options: ExecStartOptions{
+				Detach:      true,
+				TTY:         true,
+				ConsoleSize: ConsoleSize{Height: 100, Width: 200},
+			},
+			expReq: container.ExecStartRequest{
+				Detach:      true,
+				Tty:         true,
+				ConsoleSize: &[2]uint{100, 200},
+			},
+		},
 	}
-	_, err := client.ContainerExecInspect(context.Background(), "nothing")
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
+			var actualReq container.ExecStartRequest
+			client, err := New(
+				WithMockClient(func(req *http.Request) (*http.Response, error) {
+					if tc.expErr != "" {
+						return nil, fmt.Errorf("should not have made API request")
+					}
+					if err := json.NewDecoder(req.Body).Decode(&actualReq); err != nil {
+						return nil, err
+					}
+
+					return mockJSONResponse(http.StatusOK, nil, ExecStartResult{})(req)
+				}),
+			)
+			assert.NilError(t, err)
+
+			_, err = client.ExecStart(t.Context(), "exec_id", tc.options)
+			if tc.expErr != "" {
+				assert.Check(t, is.ErrorType(err, errdefs.IsInvalidArgument))
+				assert.Check(t, is.ErrorContains(err, tc.expErr))
+				assert.Check(t, is.DeepEqual(actualReq, tc.expReq))
+			} else {
+				assert.NilError(t, err)
+				assert.Check(t, is.DeepEqual(actualReq, tc.expReq))
+			}
+		})
+	}
+}
+
+func TestExecInspectError(t *testing.T) {
+	client, err := New(
+		WithMockClient(errorMock(http.StatusInternalServerError, "Server error")),
+	)
+	assert.NilError(t, err)
+
+	_, err = client.ExecInspect(t.Context(), "nothing", ExecInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
-func TestContainerExecInspect(t *testing.T) {
-	expectedURL := "/exec/exec_id/json"
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
-			b, err := json.Marshal(container.ExecInspect{
-				ExecID:      "exec_id",
-				ContainerID: "container_id",
-			})
-			if err != nil {
+func TestExecInspect(t *testing.T) {
+	const expectedURL = "/exec/exec_id/json"
+	client, err := New(
+		WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodGet, expectedURL); err != nil {
 				return nil, err
 			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(b)),
-			}, nil
+			return mockJSONResponse(http.StatusOK, nil, container.ExecInspectResponse{
+				ID:          "exec_id",
+				ContainerID: "container_id",
+			})(req)
 		}),
-	}
-
-	inspect, err := client.ContainerExecInspect(context.Background(), "exec_id")
+	)
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(inspect.ExecID, "exec_id"))
+
+	inspect, err := client.ExecInspect(t.Context(), "exec_id", ExecInspectOptions{})
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(inspect.ID, "exec_id"))
 	assert.Check(t, is.Equal(inspect.ContainerID, "container_id"))
 }

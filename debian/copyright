@@ -134,10 +134,6 @@ Files: engine/vendor/github.com/moby/sys/symlink/fs.go
 Copyright: 2012 The Go Authors
 License: BSD-3-clause-Google
 
-Files: engine/vendor/github.com/syndtr/gocapability/*
-Copyright: 2013 Suryandaru Triandana <syndtr@gmail.com>
-License: BSD-2-clause-gocapability
-
 Files: engine/vendor/github.com/gogo/protobuf/*
 Copyright: 2013-2018 The GoGo Authors
            2010-2018 The Go Authors
@@ -414,7 +410,7 @@ Copyright: 2012-2018 Mat Ryer
            2012-2018 Tyler Bunnell
 License: Expat
 
-Files: engine/vendor/github.com/cenkalti/backoff/v4/*
+Files: engine/vendor/github.com/cenkalti/backoff/v5/*
 Copyright: 2014, Cenk Altı
 License: Expat
 
@@ -514,7 +510,7 @@ Files: cli/vendor/github.com/distribution/reference/sort.go
 Copyright: The containerd Authors
 License: Apache-2.0
 
-Files: cli/vendor/github.com/cenkalti/backoff/v4/*
+Files: cli/vendor/github.com/cenkalti/backoff/v5/*
 Copyright: 2014, Cenk Altı
 License: Expat
 
@@ -575,10 +571,6 @@ Files: cli/vendor/github.com/gogo/protobuf/protoc-gen-gogo/descriptor/helper.go
 Copyright: 2013 The GoGo Authors
 License: BSD-2-clause
 
-Files: cli/vendor/github.com/pkg/errors/*
-Copyright: 2015 Dave Cheney <dave@cheney.net>
-License: BSD-2-clause
-
 Files: cli/vendor/github.com/fvbommel/sortorder/*
 Copyright: 2015 Frits van Bommel
 License: Expat
@@ -603,22 +595,22 @@ Files: cli/vendor/github.com/morikuni/aec/*
 Copyright: 2016 Taihei Morikuni
 License: Expat
 
-Files: cli/vendor/github.com/theupdateframework/notary/tuf/*
+Files: debian/extra/vendor/github.com/theupdateframework/notary/tuf/*
 Copyright: 2015, Docker Inc
            2014-2015 Prime Directive, Inc
 License: BSD-3-clause-Prime
 
-Files: cli/vendor/github.com/theupdateframework/notary/tuf/utils/pkcs8.go
+Files: debian/extra/vendor/github.com/theupdateframework/notary/tuf/utils/pkcs8.go
 Copyright: 2014 youmark
 License: Expat
 
-Files: cli/vendor/github.com/miekg/pkcs11/*
+Files: debian/extra/vendor/github.com/miekg/pkcs11/*
 Copyright: 2013 Miek Gieben
 License: BSD-3-clause-miekg
 
-Files: cli/vendor/github.com/miekg/pkcs11/pkcs11.h
-       cli/vendor/github.com/miekg/pkcs11/pkcs11f.h
-       cli/vendor/github.com/miekg/pkcs11/pkcs11t.h
+Files: debian/extra/vendor/github.com/miekg/pkcs11/pkcs11.h
+       debian/extra/vendor/github.com/miekg/pkcs11/pkcs11f.h
+       debian/extra/vendor/github.com/miekg/pkcs11/pkcs11t.h
 Copyright: 2016 OASIS Open
 License: OASIS-IPR-Policy
 
@@ -680,11 +672,11 @@ Files: cli/vendor/github.com/docker/docker-credential-helpers/*
 Copyright: 2016 David Calavera
 License: Expat
 
-Files: cli/vendor/github.com/docker/go/*
+Files: debian/extra/vendor/github.com/docker/go/*
 Copyright: 2012 The Go Authors
 License: BSD-3-clause-Google
 
-Files: cli/vendor/github.com/docker/go/canonical/json/*
+Files: debian/extra/vendor/github.com/docker/go/canonical/json/*
 Copyright: 2010-2013 The Go Authors
 License: BSD-3-clause-Google
 
@@ -885,29 +877,6 @@ License: Expat
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
-
-License: BSD-2-clause-gocapability
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are
- met:
- .
- * Redistributions of source code must retain the above copyright
- notice, this list of conditions and the following disclaimer.
- * Redistributions in binary form must reproduce the above copyright
- .
- notice, this list of conditions and the following disclaimer in the
- documentation and/or other materials provided with the distribution.
- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 License: MPL-2.0
  Mozilla Public License, version 2.0

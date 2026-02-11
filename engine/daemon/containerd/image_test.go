@@ -13,7 +13,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/log/logtest"
 	"github.com/distribution/reference"
-	dockerimages "github.com/docker/docker/daemon/images"
+	dockerimages "github.com/moby/moby/v2/daemon/images"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
@@ -24,7 +24,7 @@ import (
 )
 
 func TestLookup(t *testing.T) {
-	ctx := namespaces.WithNamespace(context.TODO(), "testing")
+	ctx := namespaces.WithNamespace(t.Context(), "testing")
 	ctx = logtest.WithT(ctx, t)
 	mdb := newTestDB(ctx, t)
 	service := &ImageService{

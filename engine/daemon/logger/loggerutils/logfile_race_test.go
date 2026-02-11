@@ -1,6 +1,6 @@
 //go:build race
 
-package loggerutils // import "github.com/docker/docker/daemon/logger/loggerutils"
+package loggerutils
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/pkg/tailfile"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/pkg/tailfile"
 	"golang.org/x/sync/errgroup"
 	"gotest.tools/v3/assert"
 )

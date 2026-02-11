@@ -1,17 +1,18 @@
 //go:build !windows
 
-package container // import "github.com/docker/docker/daemon/cluster/executor/container"
+package container
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	eventtypes "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon"
-	"github.com/docker/docker/daemon/events"
+	containertypes "github.com/moby/moby/api/types/container"
+	eventtypes "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/events"
 	"github.com/moby/swarmkit/v2/api"
 )
 
@@ -80,7 +81,7 @@ func TestHealthStates(t *testing.T) {
 
 		select {
 		case err := <-errChan:
-			if err != expectedErr {
+			if !errors.Is(err, expectedErr) {
 				t.Fatalf("expect error %v, but get %v", expectedErr, err)
 			}
 		case <-timer.C:

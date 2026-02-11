@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/docker/docker/api/types/plugins/logdriver"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/errdefs"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/internal/logdriver"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
@@ -46,7 +46,7 @@ func getTailReader(ctx context.Context, r loggerutils.SizeReaderAt, req int) (lo
 		}
 
 		n, err := r.ReadAt(buf, offset-encodeBinaryLen64)
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, 0, errors.Wrap(err, "error reading log message footer")
 		}
 
@@ -57,7 +57,7 @@ func getTailReader(ctx context.Context, r loggerutils.SizeReaderAt, req int) (lo
 		msgLen := binary.BigEndian.Uint32(buf)
 
 		n, err = r.ReadAt(buf, offset-encodeBinaryLen64-encodeBinaryLen64-int64(msgLen))
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, 0, errors.Wrap(err, "error reading log message header")
 		}
 

@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -13,15 +13,15 @@ import (
 	"github.com/containerd/containerd/v2/pkg/apparmor"
 	coci "github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/log"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
-	dconfig "github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/rootless/mountopts"
-	"github.com/docker/docker/internal/rootless/specconv"
-	"github.com/docker/docker/oci"
-	"github.com/docker/docker/oci/caps"
-	volumemounts "github.com/docker/docker/volume/mounts"
+	containertypes "github.com/moby/moby/api/types/container"
+	dconfig "github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/rootless/mountopts"
+	"github.com/moby/moby/v2/daemon/internal/rootless/specconv"
+	"github.com/moby/moby/v2/daemon/pkg/oci"
+	"github.com/moby/moby/v2/daemon/pkg/oci/caps"
+	volumemounts "github.com/moby/moby/v2/daemon/volume/mounts"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"github.com/moby/sys/user"
@@ -153,19 +153,20 @@ func WithApparmor(c *container.Container) coci.SpecOpts {
 	}
 }
 
-// WithCapabilities sets the container's capabilities
-func WithCapabilities(c *container.Container) coci.SpecOpts {
-	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+// WithCapabilities adjusts the container's capabilities based on the
+// "CapAdd", "CapDrop", and "Privileged" fields in the container's HostConfig.
+func WithCapabilities(ctr *container.Container) coci.SpecOpts {
+	return func(ctx context.Context, client coci.Client, c *containers.Container, s *specs.Spec) (err error) {
 		capabilities, err := caps.TweakCapabilities(
 			caps.DefaultCapabilities(),
-			c.HostConfig.CapAdd,
-			c.HostConfig.CapDrop,
-			c.HostConfig.Privileged,
+			ctr.HostConfig.CapAdd,
+			ctr.HostConfig.CapDrop,
+			ctr.HostConfig.Privileged,
 		)
 		if err != nil {
 			return err
 		}
-		return oci.SetCapabilities(s, capabilities)
+		return coci.WithCapabilities(capabilities)(ctx, client, c, s)
 	}
 }
 
@@ -715,7 +716,7 @@ func withCommonOptions(daemon *Daemon, daemonCfg *dconfig.Config, c *container.C
 			return err
 		}
 		cwd := c.Config.WorkingDir
-		if len(cwd) == 0 {
+		if cwd == "" {
 			cwd = "/"
 		}
 		if s.Process == nil {

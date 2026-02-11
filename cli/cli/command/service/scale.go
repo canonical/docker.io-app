@@ -9,9 +9,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +17,7 @@ type scaleOptions struct {
 	detach bool
 }
 
-func newScaleCommand(dockerCli command.Cli) *cobra.Command {
+func newScaleCommand(dockerCLI command.Cli) *cobra.Command {
 	options := &scaleOptions{}
 
 	cmd := &cobra.Command{
@@ -27,9 +25,10 @@ func newScaleCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Scale one or multiple replicated services",
 		Args:  scaleArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runScale(cmd.Context(), dockerCli, options, args)
+			return runScale(cmd.Context(), dockerCLI, options, args)
 		},
-		ValidArgsFunction: completeScaleArgs(dockerCli),
+		ValidArgsFunction:     completeScaleArgs(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -83,7 +82,7 @@ func runScale(ctx context.Context, dockerCLI command.Cli, options *scaleOptions,
 		serviceIDs = append(serviceIDs, serviceID)
 	}
 
-	if len(serviceIDs) > 0 && !options.detach && versions.GreaterThanOrEqualTo(dockerCLI.Client().ClientVersion(), "1.29") {
+	if len(serviceIDs) > 0 && !options.detach {
 		for _, serviceID := range serviceIDs {
 			if err := WaitOnService(ctx, dockerCLI, serviceID, false); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %v", serviceID, err))
@@ -94,12 +93,12 @@ func runScale(ctx context.Context, dockerCLI command.Cli, options *scaleOptions,
 }
 
 func runServiceScale(ctx context.Context, apiClient client.ServiceAPIClient, serviceID string, scale uint64) (warnings []string, _ error) {
-	service, _, err := apiClient.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
+	res, err := apiClient.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	serviceMode := &service.Spec.Mode
+	serviceMode := &res.Service.Spec.Mode
 	switch {
 	case serviceMode.Replicated != nil:
 		serviceMode.Replicated.Replicas = &scale
@@ -109,7 +108,10 @@ func runServiceScale(ctx context.Context, apiClient client.ServiceAPIClient, ser
 		return nil, errors.New("scale can only be used with replicated or replicated-job mode")
 	}
 
-	response, err := apiClient.ServiceUpdate(ctx, service.ID, service.Version, service.Spec, swarm.ServiceUpdateOptions{})
+	response, err := apiClient.ServiceUpdate(ctx, res.Service.ID, client.ServiceUpdateOptions{
+		Version: res.Service.Version,
+		Spec:    res.Service.Spec,
+	})
 	if err != nil {
 		return nil, err
 	}

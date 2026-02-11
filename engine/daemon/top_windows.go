@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/container"
+	libcontainerdtypes "github.com/moby/moby/v2/daemon/internal/libcontainerd/types"
 )
 
 // ContainerTop handles `docker top` client requests.
@@ -45,7 +45,7 @@ func (daemon *Daemon) ContainerTop(name string, psArgs string) (*container.TopRe
 		if err != nil {
 			return nil, err
 		}
-		if ctr.Restarting {
+		if ctr.State.Restarting {
 			return nil, errContainerIsRestarting(ctr.ID)
 		}
 		return task, nil

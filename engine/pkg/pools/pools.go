@@ -7,14 +7,14 @@
 //
 // Utility functions which operate on pools should be added to this
 // package to allow them to be reused.
-package pools // import "github.com/docker/docker/pkg/pools"
+package pools
 
 import (
 	"bufio"
 	"io"
 	"sync"
 
-	"github.com/docker/docker/pkg/ioutils"
+	"github.com/moby/moby/v2/pkg/ioutils"
 )
 
 const buffer32K = 32 * 1024
@@ -37,7 +37,7 @@ type BufioReaderPool struct {
 func newBufioReaderPoolWithSize(size int) *BufioReaderPool {
 	return &BufioReaderPool{
 		pool: sync.Pool{
-			New: func() interface{} { return bufio.NewReaderSize(nil, size) },
+			New: func() any { return bufio.NewReaderSize(nil, size) },
 		},
 	}
 }
@@ -62,7 +62,7 @@ type bufferPool struct {
 func newBufferPoolWithSize(size int) *bufferPool {
 	return &bufferPool{
 		pool: sync.Pool{
-			New: func() interface{} { s := make([]byte, size); return &s },
+			New: func() any { s := make([]byte, size); return &s },
 		},
 	}
 }
@@ -105,7 +105,7 @@ type BufioWriterPool struct {
 func newBufioWriterPoolWithSize(size int) *BufioWriterPool {
 	return &BufioWriterPool{
 		pool: sync.Pool{
-			New: func() interface{} { return bufio.NewWriterSize(nil, size) },
+			New: func() any { return bufio.NewWriterSize(nil, size) },
 		},
 	}
 }

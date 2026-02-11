@@ -7,36 +7,32 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestRunCommit(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		containerCommitFunc: func(
-			ctx context.Context,
-			ctr string,
-			options container.CommitOptions,
-		) (container.CommitResponse, error) {
+		containerCommitFunc: func(ctx context.Context, ctr string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error) {
 			assert.Check(t, is.Equal(options.Author, "Author Name <author@name.com>"))
 			assert.Check(t, is.DeepEqual(options.Changes, []string{"EXPOSE 80"}))
 			assert.Check(t, is.Equal(options.Comment, "commit message"))
-			assert.Check(t, is.Equal(options.Pause, false))
+			assert.Check(t, is.Equal(options.NoPause, true))
 			assert.Check(t, is.Equal(ctr, "container-id"))
 
-			return container.CommitResponse{ID: "image-id"}, nil
+			return client.ContainerCommitResult{ID: "image-id"}, nil
 		},
 	})
 
-	cmd := NewCommitCommand(cli)
+	cmd := newCommitCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetArgs(
 		[]string{
 			"--author", "Author Name <author@name.com>",
 			"--change", "EXPOSE 80",
 			"--message", "commit message",
-			"--pause=false",
+			"--no-pause",
 			"container-id",
 		},
 	)
@@ -51,16 +47,12 @@ func TestRunCommitClientError(t *testing.T) {
 	clientError := errors.New("client error")
 
 	cli := test.NewFakeCli(&fakeClient{
-		containerCommitFunc: func(
-			ctx context.Context,
-			ctr string,
-			options container.CommitOptions,
-		) (container.CommitResponse, error) {
-			return container.CommitResponse{}, clientError
+		containerCommitFunc: func(ctx context.Context, ctr string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error) {
+			return client.ContainerCommitResult{}, clientError
 		},
 	})
 
-	cmd := NewCommitCommand(cli)
+	cmd := newCommitCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"container-id"})

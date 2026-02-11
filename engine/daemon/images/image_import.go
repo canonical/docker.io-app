@@ -1,4 +1,4 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
@@ -8,14 +8,13 @@ import (
 
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/builder/dockerfile"
-	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
 	"github.com/moby/go-archive/compression"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/builder/dockerfile"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -53,13 +52,12 @@ func (i *ImageService) ImportImage(ctx context.Context, newRef reference.Named, 
 	created := time.Now().UTC()
 	imgConfig, err := json.Marshal(&image.Image{
 		V1Image: image.V1Image{
-			DockerVersion: dockerversion.Version,
-			Config:        config,
-			Architecture:  platform.Architecture,
-			Variant:       platform.Variant,
-			OS:            platform.OS,
-			Created:       &created,
-			Comment:       msg,
+			Config:       config,
+			Architecture: platform.Architecture,
+			Variant:      platform.Variant,
+			OS:           platform.OS,
+			Created:      &created,
+			Comment:      msg,
 		},
 		RootFS: &image.RootFS{
 			Type:    "layers",

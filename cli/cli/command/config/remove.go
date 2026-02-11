@@ -7,39 +7,31 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-// RemoveOptions contains options for the docker config rm command.
-type RemoveOptions struct {
-	Names []string
-}
-
-func newConfigRemoveCommand(dockerCli command.Cli) *cobra.Command {
+func newConfigRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm CONFIG [CONFIG...]",
 		Aliases: []string{"remove"},
 		Short:   "Remove one or more configs",
 		Args:    cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := RemoveOptions{
-				Names: args,
-			}
-			return RunConfigRemove(cmd.Context(), dockerCli, opts)
+			return runRemove(cmd.Context(), dockerCLI, args)
 		},
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			return completeNames(dockerCli)(cmd, args, toComplete)
-		},
+		ValidArgsFunction:     completeNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 }
 
-// RunConfigRemove removes the given Swarm configs.
-func RunConfigRemove(ctx context.Context, dockerCLI command.Cli, opts RemoveOptions) error {
+// runRemove removes the given Swarm configs.
+func runRemove(ctx context.Context, dockerCLI command.Cli, names []string) error {
 	apiClient := dockerCLI.Client()
 
 	var errs []error
-	for _, name := range opts.Names {
-		if err := apiClient.ConfigRemove(ctx, name); err != nil {
+	for _, name := range names {
+		if _, err := apiClient.ConfigRemove(ctx, name, client.ConfigRemoveOptions{}); err != nil {
 			errs = append(errs, err)
 			continue
 		}

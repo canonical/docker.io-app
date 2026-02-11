@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,13 +6,13 @@ import (
 	"strings"
 
 	"github.com/containerd/log"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/container"
-	volumesservice "github.com/docker/docker/volume/service"
+	mounttypes "github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/v2/daemon/container"
+	volumesservice "github.com/moby/moby/v2/daemon/volume/service"
 )
 
 func (daemon *Daemon) prepareMountPoints(container *container.Container) error {
-	alive := container.IsRunning()
+	alive := container.State.IsRunning()
 	for _, config := range container.MountPoints {
 		if err := daemon.lazyInitializeVolume(container.ID, config); err != nil {
 			return err

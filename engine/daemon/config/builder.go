@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/docker/docker/api/types/filters"
 	bkconfig "github.com/moby/buildkit/cmd/buildkitd/config"
+	"github.com/moby/moby/v2/daemon/internal/filters"
 )
 
 // BuilderGCRule represents a GC rule for buildkit cache
@@ -135,6 +135,7 @@ type BuilderHistoryConfig struct {
 type BuilderEntitlements struct {
 	NetworkHost      *bool `json:"network-host,omitempty"`
 	SecurityInsecure *bool `json:"security-insecure,omitempty"`
+	Device           *bool `json:"device,omitempty"`
 }
 
 // BuilderConfig contains config for the builder

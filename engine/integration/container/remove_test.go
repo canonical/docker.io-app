@@ -1,14 +1,14 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"os"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/integration/internal/container"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/fs"
@@ -40,12 +40,12 @@ func TestRemoveContainerWithRemovedVolume(t *testing.T) {
 	err := os.RemoveAll(tempDir.Path())
 	assert.NilError(t, err)
 
-	err = apiClient.ContainerRemove(ctx, cID, containertypes.RemoveOptions{
+	_, err = apiClient.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{
 		RemoveVolumes: true,
 	})
 	assert.NilError(t, err)
 
-	_, _, err = apiClient.ContainerInspectWithRaw(ctx, cID, true)
+	_, err = apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.Check(t, is.ErrorContains(err, "No such container"))
 }
@@ -57,24 +57,24 @@ func TestRemoveContainerWithVolume(t *testing.T) {
 
 	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
 
-	cID := container.Run(ctx, t, apiClient, container.WithCmd("true"), container.WithVolume(prefix+slash+"srv"))
-	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
+	cID := container.Run(ctx, t, apiClient, container.WithVolume(prefix+slash+"srv"))
 
-	insp, _, err := apiClient.ContainerInspectWithRaw(ctx, cID, true)
+	inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(1, len(insp.Mounts)))
-	volName := insp.Mounts[0].Name
+	assert.Check(t, is.Equal(1, len(inspect.Container.Mounts)))
+	volName := inspect.Container.Mounts[0].Name
 
-	err = apiClient.ContainerRemove(ctx, cID, containertypes.RemoveOptions{
+	_, err = apiClient.VolumeInspect(ctx, volName, client.VolumeInspectOptions{})
+	assert.NilError(t, err)
+
+	_, err = apiClient.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{
+		Force:         true,
 		RemoveVolumes: true,
 	})
 	assert.NilError(t, err)
 
-	volumes, err := apiClient.VolumeList(ctx, volume.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("name", volName)),
-	})
-	assert.NilError(t, err)
-	assert.Check(t, is.Equal(0, len(volumes.Volumes)))
+	_, err = apiClient.VolumeInspect(ctx, volName, client.VolumeInspectOptions{})
+	assert.ErrorType(t, err, cerrdefs.IsNotFound, "Expected anonymous volume to be removed")
 }
 
 func TestRemoveContainerRunning(t *testing.T) {
@@ -83,7 +83,7 @@ func TestRemoveContainerRunning(t *testing.T) {
 
 	cID := container.Run(ctx, t, apiClient)
 
-	err := apiClient.ContainerRemove(ctx, cID, containertypes.RemoveOptions{})
+	_, err := apiClient.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsConflict))
 	assert.Check(t, is.ErrorContains(err, "container is running"))
 }
@@ -94,7 +94,7 @@ func TestRemoveContainerForceRemoveRunning(t *testing.T) {
 
 	cID := container.Run(ctx, t, apiClient)
 
-	err := apiClient.ContainerRemove(ctx, cID, containertypes.RemoveOptions{
+	_, err := apiClient.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{
 		Force: true,
 	})
 	assert.NilError(t, err)
@@ -104,7 +104,30 @@ func TestRemoveInvalidContainer(t *testing.T) {
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
-	err := apiClient.ContainerRemove(ctx, "unknown", containertypes.RemoveOptions{})
+	_, err := apiClient.ContainerRemove(ctx, "unknown", client.ContainerRemoveOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
 	assert.Check(t, is.ErrorContains(err, "No such container"))
+}
+
+func TestRemoveDeadContainersOnDaemonRestart(t *testing.T) {
+	skip.If(t, testEnv.IsRemoteDaemon)
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "FIXME: Windows CI does not support multiple daemons yet")
+
+	ctx := setupTest(t)
+	d := daemon.New(t)
+	d.StartWithBusybox(ctx, t)
+	defer d.Stop(t)
+
+	apiClient := d.NewClientT(t)
+	container.Run(ctx, t, apiClient, container.WithCmd("top"), container.WithAutoRemove)
+
+	list, err := apiClient.ContainerList(ctx, client.ContainerListOptions{All: true})
+	assert.NilError(t, err)
+	assert.Check(t, is.Len(list.Items, 1))
+
+	d.Restart(t)
+
+	list, err = apiClient.ContainerList(ctx, client.ContainerListOptions{All: true})
+	assert.NilError(t, err)
+	assert.Check(t, is.Len(list.Items, 0))
 }

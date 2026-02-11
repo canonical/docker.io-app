@@ -2,17 +2,16 @@ package container
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
 	"github.com/docker/cli/templates"
-	"github.com/docker/docker/api/types/container"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -28,8 +27,8 @@ type psOptions struct {
 	filter      opts.FilterOpt
 }
 
-// NewPsCommand creates a new cobra.Command for `docker ps`
-func NewPsCommand(dockerCLI command.Cli) *cobra.Command {
+// newPsCommand creates a new cobra.Command for "docker container ps"
+func newPsCommand(dockerCLI command.Cli) *cobra.Command {
 	options := psOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
@@ -44,7 +43,8 @@ func NewPsCommand(dockerCLI command.Cli) *cobra.Command {
 			"category-top": "3",
 			"aliases":      "docker container ls, docker container list, docker container ps, docker ps",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -62,14 +62,14 @@ func NewPsCommand(dockerCLI command.Cli) *cobra.Command {
 }
 
 func newListCommand(dockerCLI command.Cli) *cobra.Command {
-	cmd := *NewPsCommand(dockerCLI)
+	cmd := *newPsCommand(dockerCLI)
 	cmd.Aliases = []string{"ps", "list"}
 	cmd.Use = "ls [OPTIONS]"
 	return &cmd
 }
 
-func buildContainerListOptions(options *psOptions) (*container.ListOptions, error) {
-	listOptions := &container.ListOptions{
+func buildContainerListOptions(options *psOptions) (client.ContainerListOptions, error) {
+	listOptions := client.ContainerListOptions{
 		All:     options.all,
 		Limit:   options.last,
 		Size:    options.size,
@@ -82,9 +82,9 @@ func buildContainerListOptions(options *psOptions) (*container.ListOptions, erro
 
 	// always validate template when `--format` is used, for consistency
 	if len(options.format) > 0 {
-		tmpl, err := templates.NewParse("", options.format)
+		tmpl, err := templates.Parse(options.format)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to parse template")
+			return client.ContainerListOptions{}, fmt.Errorf("failed to parse template: %w", err)
 		}
 
 		optionsProcessor := formatter.NewContainerContext()
@@ -92,7 +92,7 @@ func buildContainerListOptions(options *psOptions) (*container.ListOptions, erro
 		// This shouldn't error out but swallowing the error makes it harder
 		// to track down if preProcessor issues come up.
 		if err := tmpl.Execute(io.Discard, optionsProcessor); err != nil {
-			return nil, errors.Wrap(err, "failed to execute template")
+			return client.ContainerListOptions{}, fmt.Errorf("failed to execute template: %w", err)
 		}
 
 		// if `size` was not explicitly set to false (with `--size=false`)
@@ -127,7 +127,7 @@ func runPs(ctx context.Context, dockerCLI command.Cli, options *psOptions) error
 		return err
 	}
 
-	containers, err := dockerCLI.Client().ContainerList(ctx, *listOptions)
+	res, err := dockerCLI.Client().ContainerList(ctx, listOptions)
 	if err != nil {
 		return err
 	}
@@ -137,5 +137,5 @@ func runPs(ctx context.Context, dockerCLI command.Cli, options *psOptions) error
 		Format: formatter.NewContainerFormat(options.format, options.quiet, listOptions.Size),
 		Trunc:  !options.noTrunc,
 	}
-	return formatter.ContainerWrite(containerCtx, containers)
+	return formatter.ContainerWrite(containerCtx, res.Items)
 }

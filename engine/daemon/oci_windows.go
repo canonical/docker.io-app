@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -12,16 +12,16 @@ import (
 	"github.com/Microsoft/hcsshim"
 	coci "github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/oci"
-	"github.com/docker/docker/pkg/system"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/pkg/oci"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -93,7 +93,7 @@ func (daemon *Daemon) isHyperV(c *container.Container) bool {
 }
 
 func (daemon *Daemon) createSpec(ctx context.Context, daemonCfg *configStore, c *container.Container, mounts []container.Mount) (*specs.Spec, error) {
-	img, err := daemon.imageService.GetImage(ctx, string(c.ImageID), backend.GetImageOpts{})
+	img, err := daemon.imageService.GetImage(ctx, string(c.ImageID), imagebackend.GetImageOpts{})
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (daemon *Daemon) createSpec(ctx context.Context, daemonCfg *configStore, c 
 			}
 
 			if data["GW_INFO"] != nil {
-				gwInfo := data["GW_INFO"].(map[string]interface{})
+				gwInfo := data["GW_INFO"].(map[string]any)
 				if gwInfo["hnsid"] != nil {
 					gwHNSID = gwInfo["hnsid"].(string)
 				}
@@ -240,7 +240,7 @@ func (daemon *Daemon) createSpecWindowsFields(c *container.Container, s *specs.S
 	if c.Config.ArgsEscaped {
 		s.Process.CommandLine = c.Path
 		if len(c.Args) > 0 {
-			s.Process.CommandLine += " " + system.EscapeArgs(c.Args)
+			s.Process.CommandLine += " " + escapeArgs(c.Args)
 		}
 	} else {
 		s.Process.Args = append([]string{c.Path}, c.Args...)
@@ -292,6 +292,15 @@ func (daemon *Daemon) createSpecWindowsFields(c *container.Container, s *specs.S
 	s.Windows.Devices = append(s.Windows.Devices, devices...)
 
 	return nil
+}
+
+// escapeArgs makes a Windows-style escaped command line from a set of arguments
+func escapeArgs(args []string) string {
+	escapedArgs := make([]string, len(args))
+	for i, a := range args {
+		escapedArgs[i] = windows.EscapeArg(a)
+	}
+	return strings.Join(escapedArgs, " ")
 }
 
 // getBackingDeviceForContainerdMount extracts the backing device or directory mounted at mountPoint

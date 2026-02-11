@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/image"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestImageContext(t *testing.T) {
-	imageID := stringid.GenerateRandomID()
+	imageID := test.RandomID()
 	unix := time.Now().Unix()
 	zeroTime := int64(-62135596800)
 
@@ -27,7 +26,7 @@ func TestImageContext(t *testing.T) {
 	}{
 		{
 			imageCtx: imageContext{i: image.Summary{ID: imageID}, trunc: true},
-			expValue: stringid.TruncateID(imageID),
+			expValue: TruncateID(imageID),
 			call:     ctx.ID,
 		},
 		{
@@ -68,11 +67,6 @@ func TestImageContext(t *testing.T) {
 			imageCtx: imageContext{i: image.Summary{Containers: 10}},
 			expValue: "10",
 			call:     ctx.Containers,
-		},
-		{
-			imageCtx: imageContext{i: image.Summary{Size: 10000}},
-			expValue: "10kB",
-			call:     ctx.VirtualSize, //nolint:nolintlint,staticcheck // ignore SA1019: field is deprecated, but still set on API < v1.44.
 		},
 		{
 			imageCtx: imageContext{i: image.Summary{SharedSize: 10000}},

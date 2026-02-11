@@ -1,14 +1,14 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package idresolver
 
 import (
 	"context"
+	"errors"
 
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 // IDResolver provides ID to Name resolution.
@@ -30,27 +30,27 @@ func New(apiClient client.APIClient, noResolve bool) *IDResolver {
 func (r *IDResolver) get(ctx context.Context, t any, id string) (string, error) {
 	switch t.(type) {
 	case swarm.Node:
-		node, _, err := r.client.NodeInspectWithRaw(ctx, id)
+		res, err := r.client.NodeInspect(ctx, id, client.NodeInspectOptions{})
 		if err != nil {
 			// TODO(thaJeztah): should error-handling be more specific, or is it ok to ignore any error?
 			return id, nil //nolint:nilerr // ignore nil-error being returned, as this is a best-effort.
 		}
-		if node.Spec.Annotations.Name != "" {
-			return node.Spec.Annotations.Name, nil
+		if res.Node.Spec.Annotations.Name != "" {
+			return res.Node.Spec.Annotations.Name, nil
 		}
-		if node.Description.Hostname != "" {
-			return node.Description.Hostname, nil
+		if res.Node.Description.Hostname != "" {
+			return res.Node.Description.Hostname, nil
 		}
 		return id, nil
 	case swarm.Service:
-		service, _, err := r.client.ServiceInspectWithRaw(ctx, id, swarm.ServiceInspectOptions{})
+		res, err := r.client.ServiceInspect(ctx, id, client.ServiceInspectOptions{})
 		if err != nil {
 			// TODO(thaJeztah): should error-handling be more specific, or is it ok to ignore any error?
 			return id, nil //nolint:nilerr // ignore nil-error being returned, as this is a best-effort.
 		}
-		return service.Spec.Annotations.Name, nil
+		return res.Service.Spec.Annotations.Name, nil
 	default:
-		return "", errors.Errorf("unsupported type")
+		return "", errors.New("unsupported type")
 	}
 }
 

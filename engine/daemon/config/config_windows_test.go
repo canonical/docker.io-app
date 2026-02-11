@@ -1,9 +1,9 @@
-package config // import "github.com/docker/docker/daemon/config"
+package config
 
 import (
 	"testing"
 
-	"github.com/docker/docker/opts"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"

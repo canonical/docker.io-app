@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"bufio"
@@ -11,9 +11,9 @@ import (
 	"sync"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/libnetwork/ns"
-	"github.com/docker/docker/libnetwork/resolvconf"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/libnetwork/ns"
+	"github.com/moby/moby/v2/daemon/libnetwork/resolvconf"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"github.com/pkg/errors"
@@ -146,6 +146,7 @@ func setupResolvConf(config *config.Config) {
 	if config.ResolvConf != "" {
 		return
 	}
+	// FIXME(thaJeztah): we can't use [github.com/moby/moby/v2/daemon/libnetwork/internal/resolvconf.Path] here, because it's internal to libnetwork.
 	config.ResolvConf = resolvconf.Path()
 }
 

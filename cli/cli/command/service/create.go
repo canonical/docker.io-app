@@ -8,9 +8,8 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	cliopts "github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -29,7 +28,8 @@ func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 			}
 			return runCreate(cmd.Context(), dockerCLI, cmd.Flags(), opts)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 	flags := cmd.Flags()
 	flags.StringVar(&opts.mode, flagMode, "replicated", `Service mode ("replicated", "global", "replicated-job", "global-job")`)
@@ -81,8 +81,8 @@ func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	// _ = cmd.RegisterFlagCompletionFunc(flagStopSignal, completeSignals)
 
 	_ = cmd.RegisterFlagCompletionFunc(flagMode, completion.FromList("replicated", "global", "replicated-job", "global-job"))
-	_ = cmd.RegisterFlagCompletionFunc(flagEnv, completion.EnvVarNames) // TODO(thaJeztah): flagEnvRemove (needs to read current env-vars on the service)
-	_ = cmd.RegisterFlagCompletionFunc(flagEnvFile, completion.FileNames)
+	_ = cmd.RegisterFlagCompletionFunc(flagEnv, completion.EnvVarNames()) // TODO(thaJeztah): flagEnvRemove (needs to read current env-vars on the service)
+	_ = cmd.RegisterFlagCompletionFunc(flagEnvFile, completion.FileNames())
 	_ = cmd.RegisterFlagCompletionFunc(flagNetwork, completion.NetworkNames(dockerCLI))
 	_ = cmd.RegisterFlagCompletionFunc(flagRestartCondition, completion.FromList("none", "on-failure", "any"))
 	_ = cmd.RegisterFlagCompletionFunc(flagRollbackOrder, completion.FromList("start-first", "stop-first"))
@@ -90,18 +90,11 @@ func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	_ = cmd.RegisterFlagCompletionFunc(flagUpdateOrder, completion.FromList("start-first", "stop-first"))
 	_ = cmd.RegisterFlagCompletionFunc(flagUpdateFailureAction, completion.FromList("pause", "continue", "rollback"))
 
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
 	return cmd
 }
 
 func runCreate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet, opts *serviceOptions) error {
 	apiClient := dockerCLI.Client()
-	createOpts := swarm.ServiceCreateOptions{}
 
 	service, err := opts.ToService(ctx, apiClient, flags)
 	if err != nil {
@@ -122,26 +115,23 @@ func runCreate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 		return err
 	}
 
-	if err := resolveServiceImageDigestContentTrust(dockerCLI, &service); err != nil {
-		return err
-	}
-
 	// only send auth if flag was set
+	var encodedAuth string
 	if opts.registryAuth {
 		// Retrieve encoded auth token from the image reference
-		encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), opts.image)
+		var err error
+		encodedAuth, err = command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), opts.image)
 		if err != nil {
 			return err
 		}
-		createOpts.EncodedRegistryAuth = encodedAuth
 	}
 
-	// query registry if flag disabling it was not set
-	if !opts.noResolveImage && versions.GreaterThanOrEqualTo(apiClient.ClientVersion(), "1.30") {
-		createOpts.QueryRegistry = true
-	}
+	response, err := apiClient.ServiceCreate(ctx, client.ServiceCreateOptions{
+		Spec: service,
 
-	response, err := apiClient.ServiceCreate(ctx, service, createOpts)
+		EncodedRegistryAuth: encodedAuth,
+		QueryRegistry:       !opts.noResolveImage, // query registry if flag disabling it was not set.
+	})
 	if err != nil {
 		return err
 	}
@@ -152,7 +142,7 @@ func runCreate(ctx context.Context, dockerCLI command.Cli, flags *pflag.FlagSet,
 
 	_, _ = fmt.Fprintln(dockerCLI.Out(), response.ID)
 
-	if opts.detach || versions.LessThan(apiClient.ClientVersion(), "1.29") {
+	if opts.detach {
 		return nil
 	}
 

@@ -1,6 +1,6 @@
 //go:build !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -13,12 +13,11 @@ import (
 
 	runcoptions "github.com/containerd/containerd/api/types/runc/options"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/pkg/rootless"
-	"github.com/docker/docker/pkg/sysinfo"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/internal/rootless"
+	"github.com/moby/moby/v2/pkg/sysinfo"
 	"github.com/pkg/errors"
 	rkclient "github.com/rootless-containers/rootlesskit/v2/pkg/api/client"
 )
@@ -34,8 +33,6 @@ func (daemon *Daemon) fillPlatformInfo(ctx context.Context, v *system.Info, sysI
 	if v.CgroupDriver != cgroupNoneDriver {
 		v.MemoryLimit = sysInfo.MemoryLimit
 		v.SwapLimit = sysInfo.SwapLimit
-		v.KernelMemory = sysInfo.KernelMemory
-		v.KernelMemoryTCP = sysInfo.KernelMemoryTCP
 		v.OomKillDisable = sysInfo.OomKillDisable
 		v.CPUCfsPeriod = sysInfo.CPUCfs
 		v.CPUCfsQuota = sysInfo.CPUCfs
@@ -94,11 +91,6 @@ func (daemon *Daemon) fillPlatformInfo(ctx context.Context, v *system.Info, sysI
 		if !v.SwapLimit {
 			v.Warnings = append(v.Warnings, "WARNING: No swap limit support")
 		}
-		if !v.KernelMemoryTCP && v.CgroupVersion == "1" {
-			// kernel memory is not available for cgroup v2.
-			// Warning is not printed on cgroup v2, because there is no action user can take.
-			v.Warnings = append(v.Warnings, "WARNING: No kernel memory TCP limit support")
-		}
 		if !v.OomKillDisable && v.CgroupVersion == "1" {
 			// oom kill disable is not available for cgroup v2.
 			// Warning is not printed on cgroup v2, because there is no action user can take.
@@ -155,6 +147,9 @@ func (daemon *Daemon) fillPlatformInfo(ctx context.Context, v *system.Info, sysI
 			}
 		}
 	}
+	if v.CgroupVersion == "1" {
+		v.Warnings = append(v.Warnings, "WARNING: Support for cgroup v1 is deprecated and planned to be removed by no later than May 2029 (https://github.com/moby/moby/issues/51111)")
+	}
 	if !v.IPv4Forwarding {
 		v.Warnings = append(v.Warnings, "WARNING: IPv4 forwarding is disabled")
 	}
@@ -165,7 +160,7 @@ func (daemon *Daemon) fillPlatformInfo(ctx context.Context, v *system.Info, sysI
 	return nil
 }
 
-func (daemon *Daemon) fillPlatformVersion(ctx context.Context, v *types.Version, cfg *configStore) error {
+func (daemon *Daemon) fillPlatformVersion(ctx context.Context, v *system.VersionResponse, cfg *configStore) error {
 	if err := daemon.populateContainerdVersion(ctx, v); err != nil {
 		return err
 	}
@@ -222,7 +217,7 @@ func (daemon *Daemon) populateInitCommit(ctx context.Context, v *system.Info, cf
 	return nil
 }
 
-func (daemon *Daemon) fillRootlessVersion(ctx context.Context, v *types.Version) error {
+func (daemon *Daemon) fillRootlessVersion(ctx context.Context, v *system.VersionResponse) error {
 	if !rootless.RunningWithRootlessKit() {
 		return nil
 	}
@@ -234,7 +229,7 @@ func (daemon *Daemon) fillRootlessVersion(ctx context.Context, v *types.Version)
 	if err != nil {
 		return errors.Wrap(err, "failed to retrieve RootlessKit version")
 	}
-	rlV := types.ComponentVersion{
+	rlV := system.ComponentVersion{
 		Name:    "rootlesskit",
 		Version: rlInfo.Version,
 		Details: map[string]string{
@@ -273,7 +268,7 @@ func (daemon *Daemon) fillRootlessVersion(ctx context.Context, v *types.Version)
 				log.G(ctx).WithError(err).Warn("Failed to parse slirp4netns version")
 				return nil
 			}
-			v.Components = append(v.Components, types.ComponentVersion{
+			v.Components = append(v.Components, system.ComponentVersion{
 				Name:    "slirp4netns",
 				Version: ver,
 				Details: map[string]string{
@@ -295,7 +290,7 @@ func (daemon *Daemon) fillRootlessVersion(ctx context.Context, v *types.Version)
 				log.G(ctx).WithError(err).Warn("Failed to retrieve vpnkit version")
 				return nil
 			}
-			v.Components = append(v.Components, types.ComponentVersion{
+			v.Components = append(v.Components, system.ComponentVersion{
 				Name:    "vpnkit",
 				Version: strings.TrimSpace(strings.TrimSpace(string(out))),
 			})
@@ -435,7 +430,7 @@ func (daemon *Daemon) populateContainerdCommit(ctx context.Context, v *system.Co
 	return nil
 }
 
-func (daemon *Daemon) populateContainerdVersion(ctx context.Context, v *types.Version) error {
+func (daemon *Daemon) populateContainerdVersion(ctx context.Context, v *system.VersionResponse) error {
 	rv, err := daemon.containerd.Version(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -445,7 +440,7 @@ func (daemon *Daemon) populateContainerdVersion(ctx context.Context, v *types.Ve
 		return nil
 	}
 
-	v.Components = append(v.Components, types.ComponentVersion{
+	v.Components = append(v.Components, system.ComponentVersion{
 		Name:    "containerd",
 		Version: rv.Version,
 		Details: map[string]string{
@@ -455,12 +450,12 @@ func (daemon *Daemon) populateContainerdVersion(ctx context.Context, v *types.Ve
 	return nil
 }
 
-func populateRuncVersion(cfg *configStore, v *types.Version) error {
+func populateRuncVersion(cfg *configStore, v *system.VersionResponse) error {
 	_, ver, commit, err := parseDefaultRuntimeVersion(&cfg.Runtimes)
 	if err != nil {
 		return err
 	}
-	v.Components = append(v.Components, types.ComponentVersion{
+	v.Components = append(v.Components, system.ComponentVersion{
 		Name:    cfg.Runtimes.Default,
 		Version: ver,
 		Details: map[string]string{
@@ -470,7 +465,7 @@ func populateRuncVersion(cfg *configStore, v *types.Version) error {
 	return nil
 }
 
-func populateInitVersion(ctx context.Context, cfg *configStore, v *types.Version) error {
+func populateInitVersion(ctx context.Context, cfg *configStore, v *system.VersionResponse) error {
 	initBinary, err := cfg.LookupInitPath()
 	if err != nil {
 		log.G(ctx).WithError(err).Warn("Failed to find docker-init")
@@ -491,7 +486,7 @@ func populateInitVersion(ctx context.Context, cfg *configStore, v *types.Version
 		log.G(ctx).WithError(err).Warnf("failed to parse %s version", initBinary)
 		return nil
 	}
-	v.Components = append(v.Components, types.ComponentVersion{
+	v.Components = append(v.Components, system.ComponentVersion{
 		Name:    filepath.Base(initBinary),
 		Version: ver,
 		Details: map[string]string{

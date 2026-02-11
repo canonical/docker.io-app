@@ -1,13 +1,13 @@
 //go:build !linux
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
 
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/libcontainerd/types"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/libcontainerd/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 

@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,9 +6,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/apparmor"
 	coci "github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/oci/caps"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/pkg/oci/caps"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -43,7 +43,7 @@ func getUserFromContainerd(ctx context.Context, containerdCli *containerd.Client
 }
 
 func (daemon *Daemon) execSetPlatformOpt(ctx context.Context, daemonCfg *config.Config, ec *container.ExecConfig, p *specs.Process) error {
-	if len(ec.User) > 0 {
+	if ec.User != "" {
 		var err error
 		if daemon.UsesSnapshotter() {
 			p.User, err = getUserFromContainerd(ctx, daemon.containerdClient, ec)

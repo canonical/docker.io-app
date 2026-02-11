@@ -1,23 +1,21 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 type inspectOptions struct {
@@ -26,7 +24,7 @@ type inspectOptions struct {
 	pretty bool
 }
 
-func newInspectCommand(dockerCli command.Cli) *cobra.Command {
+func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts inspectOptions
 
 	cmd := &cobra.Command{
@@ -37,28 +35,23 @@ func newInspectCommand(dockerCli command.Cli) *cobra.Command {
 			opts.refs = args
 
 			if opts.pretty && len(opts.format) > 0 {
-				return errors.Errorf("--format is incompatible with human friendly format")
+				return errors.New("--format is incompatible with human friendly format")
 			}
-			return runInspect(cmd.Context(), dockerCli, opts)
+			return runInspect(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: completeServiceNames(dockerCli),
+		ValidArgsFunction:     completeServiceNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 	flags.StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
 	flags.BoolVar(&opts.pretty, "pretty", false, "Print the information in a human friendly format")
 
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
 	return cmd
 }
 
-func runInspect(ctx context.Context, dockerCli command.Cli, opts inspectOptions) error {
-	client := dockerCli.Client()
+func runInspect(ctx context.Context, dockerCLI command.Cli, opts inspectOptions) error {
+	apiClient := dockerCLI.Client()
 
 	if opts.pretty {
 		opts.format = "pretty"
@@ -66,41 +59,41 @@ func runInspect(ctx context.Context, dockerCli command.Cli, opts inspectOptions)
 
 	getRef := func(ref string) (any, []byte, error) {
 		// Service inspect shows defaults values in empty fields.
-		service, _, err := client.ServiceInspectWithRaw(ctx, ref, swarm.ServiceInspectOptions{InsertDefaults: true})
-		if err == nil || !cerrdefs.IsNotFound(err) {
-			return service, nil, err
+		res, err := apiClient.ServiceInspect(ctx, ref, client.ServiceInspectOptions{InsertDefaults: true})
+		if err == nil || !errdefs.IsNotFound(err) {
+			return res.Service, res.Raw, err
 		}
-		return nil, nil, errors.Errorf("Error: no such service: %s", ref)
+		return nil, nil, fmt.Errorf("no such service: %s", ref)
 	}
 
 	getNetwork := func(ref string) (any, []byte, error) {
-		nw, _, err := client.NetworkInspectWithRaw(ctx, ref, network.InspectOptions{Scope: "swarm"})
-		if err == nil || !cerrdefs.IsNotFound(err) {
-			return nw, nil, err
+		res, err := apiClient.NetworkInspect(ctx, ref, client.NetworkInspectOptions{Scope: "swarm"})
+		if err == nil || !errdefs.IsNotFound(err) {
+			return res.Network, res.Raw, err
 		}
-		return nil, nil, errors.Errorf("Error: no such network: %s", ref)
+		return nil, nil, fmt.Errorf("no such network: %s", ref)
 	}
 
 	f := opts.format
 	if len(f) == 0 {
 		f = "raw"
-		if len(dockerCli.ConfigFile().ServiceInspectFormat) > 0 {
-			f = dockerCli.ConfigFile().ServiceInspectFormat
+		if len(dockerCLI.ConfigFile().ServiceInspectFormat) > 0 {
+			f = dockerCLI.ConfigFile().ServiceInspectFormat
 		}
 	}
 
 	// check if the user is trying to apply a template to the pretty format, which
 	// is not supported
 	if strings.HasPrefix(f, "pretty") && f != "pretty" {
-		return errors.Errorf("Cannot supply extra formatting options to the pretty template")
+		return errors.New("cannot supply extra formatting options to the pretty template")
 	}
 
 	serviceCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewFormat(f),
+		Output: dockerCLI.Out(),
+		Format: newFormat(f),
 	}
 
-	if err := InspectFormatWrite(serviceCtx, opts.refs, getRef, getNetwork); err != nil {
+	if err := inspectFormatWrite(serviceCtx, opts.refs, getRef, getNetwork); err != nil {
 		return cli.StatusError{StatusCode: 1, Status: err.Error()}
 	}
 	return nil

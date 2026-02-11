@@ -2,32 +2,33 @@ package image
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
+	"io"
+	"os"
 
+	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/cli/cli/trust"
-	"github.com/pkg/errors"
+	"github.com/docker/cli/cli/streams"
+	"github.com/docker/cli/internal/jsonstream"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
-// PullOptions defines what and how to pull
-type PullOptions = pullOptions
-
 // pullOptions defines what and how to pull.
 type pullOptions struct {
-	remote    string
-	all       bool
-	platform  string
-	quiet     bool
-	untrusted bool
+	remote   string
+	all      bool
+	platform string
+	quiet    bool
 }
 
-// NewPullCommand creates a new `docker pull` command
-func NewPullCommand(dockerCli command.Cli) *cobra.Command {
+// newPullCommand creates a new `docker pull` command
+func newPullCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts pullOptions
 
 	cmd := &cobra.Command{
@@ -36,13 +37,16 @@ func NewPullCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.remote = args[0]
-			return runPull(cmd.Context(), dockerCli, opts)
+			return runPull(cmd.Context(), dockerCLI, opts)
 		},
 		Annotations: map[string]string{
 			"category-top": "5",
 			"aliases":      "docker image pull, docker pull",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		// Complete with local images to help pulling the latest version
+		// of images that are in the image cache.
+		ValidArgsFunction:     completion.ImageNames(dockerCLI, 1),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -50,17 +54,15 @@ func NewPullCommand(dockerCli command.Cli) *cobra.Command {
 	flags.BoolVarP(&opts.all, "all-tags", "a", false, "Download all tagged images in the repository")
 	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress verbose output")
 
-	command.AddPlatformFlag(flags, &opts.platform)
-	command.AddTrustVerificationFlags(flags, &opts.untrusted, dockerCli.ContentTrustEnabled())
+	// TODO(thaJeztah): DEPRECATED: remove in v29.1 or v30
+	flags.Bool("disable-content-trust", true, "Skip image verification (deprecated)")
+	_ = flags.MarkDeprecated("disable-content-trust", "support for docker content trust was removed")
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	flags.StringVar(&opts.platform, "platform", os.Getenv("DOCKER_DEFAULT_PLATFORM"), "Set platform if server is multi-platform capable")
+	_ = flags.SetAnnotation("platform", "version", []string{"1.32"})
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 
 	return cmd
-}
-
-// RunPull performs a pull against the engine based on the specified options
-func RunPull(ctx context.Context, dockerCLI command.Cli, opts PullOptions) error {
-	return runPull(ctx, dockerCLI, opts)
 }
 
 // runPull performs a pull against the engine based on the specified options
@@ -78,24 +80,39 @@ func runPull(ctx context.Context, dockerCLI command.Cli, opts pullOptions) error
 		}
 	}
 
-	imgRefAndAuth, err := trust.GetImageReferencesAndAuth(ctx, AuthResolver(dockerCLI), distributionRef.String())
+	var ociPlatforms []ocispec.Platform
+	if opts.platform != "" {
+		// TODO(thaJeztah): add a platform option-type / flag-type.
+		p, err := platforms.Parse(opts.platform)
+		if err != nil {
+			return err
+		}
+		ociPlatforms = append(ociPlatforms, p)
+	}
+
+	encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), distributionRef.String())
 	if err != nil {
 		return err
 	}
 
-	// Check if reference has a digest
-	_, isCanonical := distributionRef.(reference.Canonical)
-	if !opts.untrusted && !isCanonical {
-		err = trustedPull(ctx, dockerCLI, imgRefAndAuth, opts)
-	} else {
-		err = imagePullPrivileged(ctx, dockerCLI, imgRefAndAuth, opts)
-	}
+	responseBody, err := dockerCLI.Client().ImagePull(ctx, reference.FamiliarString(distributionRef), client.ImagePullOptions{
+		RegistryAuth:  encodedAuth,
+		PrivilegeFunc: nil,
+		All:           opts.all,
+		Platforms:     ociPlatforms,
+	})
 	if err != nil {
-		if strings.Contains(err.Error(), "when fetching 'plugin'") {
-			return errors.New(err.Error() + " - Use `docker plugin install`")
-		}
 		return err
 	}
-	_, _ = fmt.Fprintln(dockerCLI.Out(), imgRefAndAuth.Reference().String())
+	defer responseBody.Close()
+
+	out := dockerCLI.Out()
+	if opts.quiet {
+		out = streams.NewOut(io.Discard)
+	}
+	if err := jsonstream.Display(ctx, responseBody, out); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(dockerCLI.Out(), distributionRef.String())
 	return nil
 }

@@ -8,7 +8,7 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -20,8 +20,8 @@ type restartOptions struct {
 	containers []string
 }
 
-// NewRestartCommand creates a new cobra.Command for `docker restart`
-func NewRestartCommand(dockerCli command.Cli) *cobra.Command {
+// newRestartCommand creates a new cobra.Command for "docker container restart".
+func newRestartCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts restartOptions
 
 	cmd := &cobra.Command{
@@ -34,12 +34,13 @@ func NewRestartCommand(dockerCli command.Cli) *cobra.Command {
 			}
 			opts.containers = args
 			opts.timeoutChanged = cmd.Flags().Changed("timeout") || cmd.Flags().Changed("time")
-			return runRestart(cmd.Context(), dockerCli, &opts)
+			return runRestart(cmd.Context(), dockerCLI, &opts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker container restart, docker restart",
 		},
-		ValidArgsFunction: completion.ContainerNames(dockerCli, true),
+		ValidArgsFunction:     completion.ContainerNames(dockerCLI, true),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -65,7 +66,7 @@ func runRestart(ctx context.Context, dockerCLI command.Cli, opts *restartOptions
 	var errs []error
 	// TODO(thaJeztah): consider using parallelOperation for restart, similar to "stop" and "remove"
 	for _, name := range opts.containers {
-		err := apiClient.ContainerRestart(ctx, name, container.StopOptions{
+		_, err := apiClient.ContainerRestart(ctx, name, client.ContainerRestartOptions{
 			Signal:  opts.signal,
 			Timeout: timeout,
 		})

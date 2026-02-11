@@ -6,13 +6,11 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
-	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -30,38 +28,38 @@ func (c fakeCLI) Client() client.APIClient {
 
 type fakeClient struct {
 	client.Client
-	containerListFunc func(options container.ListOptions) ([]container.Summary, error)
-	imageListFunc     func(options image.ListOptions) ([]image.Summary, error)
-	networkListFunc   func(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
-	volumeListFunc    func(filter filters.Args) (volume.ListResponse, error)
+	containerListFunc func(context.Context, client.ContainerListOptions) (client.ContainerListResult, error)
+	imageListFunc     func(context.Context, client.ImageListOptions) (client.ImageListResult, error)
+	networkListFunc   func(context.Context, client.NetworkListOptions) (client.NetworkListResult, error)
+	volumeListFunc    func(context.Context, client.VolumeListOptions) (client.VolumeListResult, error)
 }
 
-func (c *fakeClient) ContainerList(_ context.Context, options container.ListOptions) ([]container.Summary, error) {
+func (c *fakeClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	if c.containerListFunc != nil {
-		return c.containerListFunc(options)
+		return c.containerListFunc(ctx, options)
 	}
-	return []container.Summary{}, nil
+	return client.ContainerListResult{}, nil
 }
 
-func (c *fakeClient) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
+func (c *fakeClient) ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error) {
 	if c.imageListFunc != nil {
-		return c.imageListFunc(options)
+		return c.imageListFunc(ctx, options)
 	}
-	return []image.Summary{}, nil
+	return client.ImageListResult{}, nil
 }
 
-func (c *fakeClient) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error) {
+func (c *fakeClient) NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error) {
 	if c.networkListFunc != nil {
 		return c.networkListFunc(ctx, options)
 	}
-	return []network.Inspect{}, nil
+	return client.NetworkListResult{}, nil
 }
 
-func (c *fakeClient) VolumeList(_ context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+func (c *fakeClient) VolumeList(ctx context.Context, options client.VolumeListOptions) (client.VolumeListResult, error) {
 	if c.volumeListFunc != nil {
-		return c.volumeListFunc(options.Filters)
+		return c.volumeListFunc(ctx, options)
 	}
-	return volume.ListResponse{}, nil
+	return client.VolumeListResult{}, nil
 }
 
 func TestCompleteContainerNames(t *testing.T) {
@@ -71,7 +69,7 @@ func TestCompleteContainerNames(t *testing.T) {
 		filters          []func(container.Summary) bool
 		containers       []container.Summary
 		expOut           []string
-		expOpts          container.ListOptions
+		expOpts          client.ContainerListOptions
 		expDirective     cobra.ShellCompDirective
 	}{
 		{
@@ -87,7 +85,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-c", "container-c/link-b", "container-b", "container-a"},
-			expOpts:      container.ListOptions{All: true},
+			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
 		{
@@ -100,7 +98,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"id-c", "container-c", "container-c/link-b", "id-b", "container-b", "id-a", "container-a"},
-			expOpts:      container.ListOptions{All: true},
+			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
 		{
@@ -124,7 +122,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-b"},
-			expOpts:      container.ListOptions{All: true},
+			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
 		{
@@ -140,7 +138,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-a", State: container.StateCreated, Names: []string{"/container-a"}},
 			},
 			expOut:       []string{"container-a"},
-			expOpts:      container.ListOptions{All: true},
+			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
 		{
@@ -155,12 +153,12 @@ func TestCompleteContainerNames(t *testing.T) {
 				t.Setenv("DOCKER_COMPLETION_SHOW_CONTAINER_IDS", "yes")
 			}
 			comp := ContainerNames(fakeCLI{&fakeClient{
-				containerListFunc: func(opts container.ListOptions) ([]container.Summary, error) {
-					assert.Check(t, is.DeepEqual(opts, tc.expOpts, cmpopts.IgnoreUnexported(container.ListOptions{}, filters.Args{})))
+				containerListFunc: func(_ context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
+					assert.Check(t, is.DeepEqual(opts, tc.expOpts))
 					if tc.expDirective == cobra.ShellCompDirectiveError {
-						return nil, errors.New("some error occurred")
+						return client.ContainerListResult{}, errors.New("some error occurred")
 					}
-					return tc.containers, nil
+					return client.ContainerListResult{Items: tc.containers}, nil
 				},
 			}}, tc.showAll, tc.filters...)
 
@@ -176,7 +174,7 @@ func TestCompleteEnvVarNames(t *testing.T) {
 		"ENV_A": "hello-a",
 		"ENV_B": "hello-b",
 	})
-	values, directives := EnvVarNames(nil, nil, "")
+	values, directives := EnvVarNames()(nil, nil, "")
 	assert.Check(t, is.Equal(directives&cobra.ShellCompDirectiveNoFileComp, cobra.ShellCompDirectiveNoFileComp), "Should not perform file completion")
 
 	sort.Strings(values)
@@ -185,7 +183,7 @@ func TestCompleteEnvVarNames(t *testing.T) {
 }
 
 func TestCompleteFileNames(t *testing.T) {
-	values, directives := FileNames(nil, nil, "")
+	values, directives := FileNames()(nil, nil, "")
 	assert.Check(t, is.Equal(directives, cobra.ShellCompDirectiveDefault))
 	assert.Check(t, is.Len(values, 0))
 }
@@ -228,11 +226,11 @@ func TestCompleteImageNames(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := ImageNames(fakeCLI{&fakeClient{
-				imageListFunc: func(options image.ListOptions) ([]image.Summary, error) {
+				imageListFunc: func(context.Context, client.ImageListOptions) (client.ImageListResult, error) {
 					if tc.expDirective == cobra.ShellCompDirectiveError {
-						return nil, errors.New("some error occurred")
+						return client.ImageListResult{}, errors.New("some error occurred")
 					}
-					return tc.images, nil
+					return client.ImageListResult{Items: tc.images}, nil
 				},
 			}}, -1)
 
@@ -257,9 +255,24 @@ func TestCompleteNetworkNames(t *testing.T) {
 		{
 			doc: "with results",
 			networks: []network.Summary{
-				{ID: "nw-c", Name: "network-c"},
-				{ID: "nw-b", Name: "network-b"},
-				{ID: "nw-a", Name: "network-a"},
+				{
+					Network: network.Network{
+						ID:   "nw-c",
+						Name: "network-c",
+					},
+				},
+				{
+					Network: network.Network{
+						ID:   "nw-b",
+						Name: "network-b",
+					},
+				},
+				{
+					Network: network.Network{
+						ID:   "nw-a",
+						Name: "network-a",
+					},
+				},
 			},
 			expOut:       []string{"network-c", "network-b", "network-a"},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
@@ -273,11 +286,11 @@ func TestCompleteNetworkNames(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := NetworkNames(fakeCLI{&fakeClient{
-				networkListFunc: func(ctx context.Context, options network.ListOptions) ([]network.Summary, error) {
+				networkListFunc: func(context.Context, client.NetworkListOptions) (client.NetworkListResult, error) {
 					if tc.expDirective == cobra.ShellCompDirectiveError {
-						return nil, errors.New("some error occurred")
+						return client.NetworkListResult{}, errors.New("some error occurred")
 					}
-					return tc.networks, nil
+					return client.NetworkListResult{Items: tc.networks}, nil
 				},
 			}})
 
@@ -288,14 +301,8 @@ func TestCompleteNetworkNames(t *testing.T) {
 	}
 }
 
-func TestCompleteNoComplete(t *testing.T) {
-	values, directives := NoComplete(nil, nil, "")
-	assert.Check(t, is.Equal(directives, cobra.ShellCompDirectiveNoFileComp))
-	assert.Check(t, is.Len(values, 0))
-}
-
 func TestCompletePlatforms(t *testing.T) {
-	values, directives := Platforms(nil, nil, "")
+	values, directives := Platforms()(nil, nil, "")
 	assert.Check(t, is.Equal(directives&cobra.ShellCompDirectiveNoFileComp, cobra.ShellCompDirectiveNoFileComp), "Should not perform file completion")
 	assert.Check(t, is.DeepEqual(values, commonPlatforms))
 }
@@ -303,7 +310,7 @@ func TestCompletePlatforms(t *testing.T) {
 func TestCompleteVolumeNames(t *testing.T) {
 	tests := []struct {
 		doc          string
-		volumes      []*volume.Volume
+		volumes      []volume.Volume
 		expOut       []string
 		expDirective cobra.ShellCompDirective
 	}{
@@ -313,7 +320,7 @@ func TestCompleteVolumeNames(t *testing.T) {
 		},
 		{
 			doc: "with results",
-			volumes: []*volume.Volume{
+			volumes: []volume.Volume{
 				{Name: "volume-c"},
 				{Name: "volume-b"},
 				{Name: "volume-a"},
@@ -330,11 +337,11 @@ func TestCompleteVolumeNames(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
 			comp := VolumeNames(fakeCLI{&fakeClient{
-				volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
+				volumeListFunc: func(context.Context, client.VolumeListOptions) (client.VolumeListResult, error) {
 					if tc.expDirective == cobra.ShellCompDirectiveError {
-						return volume.ListResponse{}, errors.New("some error occurred")
+						return client.VolumeListResult{}, errors.New("some error occurred")
 					}
-					return volume.ListResponse{Volumes: tc.volumes}, nil
+					return client.VolumeListResult{Items: tc.volumes}, nil
 				},
 			}})
 

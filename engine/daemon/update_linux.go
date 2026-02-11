@@ -1,10 +1,10 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
+	"github.com/moby/moby/api/types/container"
+	libcontainerdtypes "github.com/moby/moby/v2/daemon/internal/libcontainerd/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -58,9 +58,6 @@ func toContainerdResources(resources container.Resources) *libcontainerdtypes.Re
 	}
 	if resources.MemoryReservation != 0 {
 		memory.Reservation = &resources.MemoryReservation
-	}
-	if resources.KernelMemory != 0 { //nolint:staticcheck // ignore SA1019: memory.Kernel is deprecated: kernel-memory limits are not supported in cgroups v2, and were obsoleted in [kernel v5.4]. This field should no longer be used, as it may be ignored by runtimes.
-		memory.Kernel = &resources.KernelMemory //nolint:staticcheck // ignore SA1019: memory.Kernel is deprecated: kernel-memory limits are not supported in cgroups v2, and were obsoleted in [kernel v5.4]. This field should no longer be used, as it may be ignored by runtimes.
 	}
 	if resources.MemorySwap > 0 {
 		memory.Swap = &resources.MemorySwap

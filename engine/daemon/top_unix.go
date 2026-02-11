@@ -1,6 +1,6 @@
 //go:build !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"bytes"
@@ -10,17 +10,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/lazyregexp"
-	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/internal/lazyregexp"
+	libcontainerdtypes "github.com/moby/moby/v2/daemon/internal/libcontainerd/types"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
 // NOTE: \\s does not detect unicode whitespaces.
 // So we use fieldsASCII instead of strings.Fields in parsePSOutput.
-// See https://github.com/docker/docker/pull/24358
+// See https://github.com/moby/moby/pull/24358
 var psArgsRegexp = lazyregexp.New("\\s+([^\\s]*)=\\s*(PID[^\\s]*)")
 
 func validatePSArgs(psArgs string) error {
@@ -79,7 +79,7 @@ func parsePSOutput(output []byte, procs []uint32) (*container.TopResponse, error
 		}
 	}
 	if pidIndex == -1 {
-		return nil, fmt.Errorf("Couldn't find PID field in ps output")
+		return nil, errors.New("Couldn't find PID field in ps output")
 	}
 
 	// loop through the output and extract the PID from each line
@@ -87,7 +87,7 @@ func parsePSOutput(output []byte, procs []uint32) (*container.TopResponse, error
 	// in "docker top" client command
 	preContainedPidFlag := false
 	for _, line := range lines[1:] {
-		if len(line) == 0 {
+		if line == "" {
 			continue
 		}
 		fields := fieldsASCII(line)
@@ -159,7 +159,7 @@ func (daemon *Daemon) ContainerTop(name string, psArgs string) (*container.TopRe
 		if err != nil {
 			return nil, err
 		}
-		if ctr.Restarting {
+		if ctr.State.Restarting {
 			return nil, errContainerIsRestarting(ctr.ID)
 		}
 		return tsk, nil

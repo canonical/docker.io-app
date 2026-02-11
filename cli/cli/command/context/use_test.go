@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"testing"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/config/configfile"
@@ -23,9 +23,8 @@ func TestUse(t *testing.T) {
 	configFilePath := filepath.Join(configDir, "config.json")
 	testCfg := configfile.New(configFilePath)
 	cli := makeFakeCli(t, withCliConfig(testCfg))
-	err := RunCreate(cli, &CreateOptions{
-		Name:   "test",
-		Docker: map[string]string{},
+	err := runCreate(cli, "test", createOptions{
+		endpoint: map[string]string{},
 	})
 	assert.NilError(t, err)
 	assert.NilError(t, newUseCommand(cli).RunE(nil, []string{"test"}))
@@ -47,7 +46,7 @@ func TestUse(t *testing.T) {
 func TestUseNoExist(t *testing.T) {
 	cli := makeFakeCli(t)
 	err := newUseCommand(cli).RunE(nil, []string{"test"})
-	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
+	assert.Check(t, is.ErrorType(err, errdefs.IsNotFound))
 }
 
 // TestUseDefaultWithoutConfigFile verifies that the CLI does not create
@@ -89,9 +88,8 @@ func TestUseHostOverride(t *testing.T) {
 	configFilePath := filepath.Join(configDir, "config.json")
 	testCfg := configfile.New(configFilePath)
 	cli := makeFakeCli(t, withCliConfig(testCfg))
-	err := RunCreate(cli, &CreateOptions{
-		Name:   "test",
-		Docker: map[string]string{},
+	err := runCreate(cli, "test", createOptions{
+		endpoint: map[string]string{},
 	})
 	assert.NilError(t, err)
 
@@ -136,9 +134,8 @@ func TestUseHostOverrideEmpty(t *testing.T) {
 		assert.NilError(t, cli.Initialize(flags.NewClientOptions()))
 	}
 	loadCli()
-	err := RunCreate(cli, &CreateOptions{
-		Name:   "test",
-		Docker: map[string]string{"host": socketPath},
+	err := runCreate(cli, "test", createOptions{
+		endpoint: map[string]string{"host": socketPath},
 	})
 	assert.NilError(t, err)
 

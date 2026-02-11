@@ -1,42 +1,33 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/image"
 
-	"github.com/docker/docker/api/types/filters"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func TestImagesPruneError(t *testing.T) {
-	client := &Client{
-		client:  newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-		version: "1.25",
-	}
+func TestImagePruneError(t *testing.T) {
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.ImagesPrune(context.Background(), filters.NewArgs())
+	_, err = client.ImagePrune(t.Context(), ImagePruneOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
-func TestImagesPrune(t *testing.T) {
-	const expectedURL = "/v1.25/images/prune"
+func TestImagePrune(t *testing.T) {
+	const expectedURL = "/images/prune"
 
 	listCases := []struct {
-		filters             filters.Args
+		filters             Filters
 		expectedQueryParams map[string]string
 	}{
 		{
-			filters: filters.Args{},
+			filters: Filters{},
 			expectedQueryParams: map[string]string{
 				"until":   "",
 				"filter":  "",
@@ -44,7 +35,7 @@ func TestImagesPrune(t *testing.T) {
 			},
 		},
 		{
-			filters: filters.NewArgs(filters.Arg("dangling", "true")),
+			filters: make(Filters).Add("dangling", "true"),
 			expectedQueryParams: map[string]string{
 				"until":   "",
 				"filter":  "",
@@ -52,7 +43,7 @@ func TestImagesPrune(t *testing.T) {
 			},
 		},
 		{
-			filters: filters.NewArgs(filters.Arg("dangling", "false")),
+			filters: make(Filters).Add("dangling", "false"),
 			expectedQueryParams: map[string]string{
 				"until":   "",
 				"filter":  "",
@@ -60,11 +51,9 @@ func TestImagesPrune(t *testing.T) {
 			},
 		},
 		{
-			filters: filters.NewArgs(
-				filters.Arg("dangling", "true"),
-				filters.Arg("label", "label1=foo"),
-				filters.Arg("label", "label2!=bar"),
-			),
+			filters: make(Filters).
+				Add("dangling", "true").
+				Add("label", "label1=foo", "label2!=bar"),
 			expectedQueryParams: map[string]string{
 				"until":   "",
 				"filter":  "",
@@ -73,41 +62,29 @@ func TestImagesPrune(t *testing.T) {
 		},
 	}
 	for _, listCase := range listCases {
-		client := &Client{
-			client: newMockClient(func(req *http.Request) (*http.Response, error) {
-				if !strings.HasPrefix(req.URL.Path, expectedURL) {
-					return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-				}
-				query := req.URL.Query()
-				for key, expected := range listCase.expectedQueryParams {
-					actual := query.Get(key)
-					assert.Check(t, is.Equal(expected, actual))
-				}
-				content, err := json.Marshal(image.PruneReport{
-					ImagesDeleted: []image.DeleteResponse{
-						{
-							Deleted: "image_id1",
-						},
-						{
-							Deleted: "image_id2",
-						},
-					},
-					SpaceReclaimed: 9999,
-				})
-				if err != nil {
-					return nil, err
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(content)),
-				}, nil
-			}),
-			version: "1.25",
-		}
+		client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+			if err := assertRequest(req, http.MethodPost, expectedURL); err != nil {
+				return nil, err
+			}
+			query := req.URL.Query()
+			for key, expected := range listCase.expectedQueryParams {
+				actual := query.Get(key)
+				assert.Check(t, is.Equal(expected, actual))
+			}
 
-		report, err := client.ImagesPrune(context.Background(), listCase.filters)
+			return mockJSONResponse(http.StatusOK, nil, image.PruneReport{
+				ImagesDeleted: []image.DeleteResponse{
+					{Deleted: "image_id1"},
+					{Deleted: "image_id2"},
+				},
+				SpaceReclaimed: 9999,
+			})(req)
+		}))
 		assert.NilError(t, err)
-		assert.Check(t, is.Len(report.ImagesDeleted, 2))
-		assert.Check(t, is.Equal(uint64(9999), report.SpaceReclaimed))
+
+		res, err := client.ImagePrune(t.Context(), ImagePruneOptions{Filters: listCase.filters})
+		assert.NilError(t, err)
+		assert.Check(t, is.Len(res.Report.ImagesDeleted, 2))
+		assert.Check(t, is.Equal(uint64(9999), res.Report.SpaceReclaimed))
 	}
 }

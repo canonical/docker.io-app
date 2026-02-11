@@ -1,11 +1,12 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -33,7 +34,7 @@ func TestStopContainerWithRestartPolicyAlways(t *testing.T) {
 	}
 
 	for _, name := range names {
-		err := apiClient.ContainerStop(ctx, name, containertypes.StopOptions{})
+		_, err := apiClient.ContainerStop(ctx, name, client.ContainerStopOptions{})
 		assert.NilError(t, err)
 	}
 
@@ -99,14 +100,14 @@ func TestStopContainerWithTimeout(t *testing.T) {
 			// t.Parallel()
 			id := container.Run(ctx, t, apiClient, testCmd)
 
-			err := apiClient.ContainerStop(ctx, id, containertypes.StopOptions{Timeout: &tc.timeout})
+			_, err := apiClient.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &tc.timeout})
 			assert.NilError(t, err)
 
 			poll.WaitOn(t, container.IsStopped(ctx, apiClient, id), pollOpts...)
 
-			inspect, err := apiClient.ContainerInspect(ctx, id)
+			inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 			assert.NilError(t, err)
-			assert.Check(t, is.Equal(inspect.State.ExitCode, tc.expectedExitCode))
+			assert.Check(t, is.Equal(inspect.Container.State.ExitCode, tc.expectedExitCode))
 		})
 	}
 }

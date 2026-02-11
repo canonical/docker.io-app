@@ -15,15 +15,15 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/builder/dockerfile"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/pkg/pools"
 	"github.com/google/uuid"
-	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/go-archive/compression"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/builder/dockerfile"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/pkg/pools"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -91,7 +91,7 @@ func (i *ImageService) ImportImage(ctx context.Context, ref reference.Named, pla
 
 	dockerCfg := containerConfigToDockerOCIImageConfig(imageConfig)
 	createdAt := time.Now()
-	config := imagespec.DockerOCIImage{
+	config := dockerspec.DockerOCIImage{
 		Image: ocispec.Image{
 			Platform: *platform,
 			Created:  &createdAt,
@@ -343,7 +343,7 @@ func fillUncompressedLabel(ctx context.Context, cs content.Store, compressedDige
 }
 
 // storeJson marshals the provided object as json and stores it.
-func storeJson(ctx context.Context, cs content.Ingester, mt string, obj interface{}, labels map[string]string) (ocispec.Descriptor, error) {
+func storeJson(ctx context.Context, cs content.Ingester, mt string, obj any, labels map[string]string) (ocispec.Descriptor, error) {
 	configData, err := json.Marshal(obj)
 	if err != nil {
 		return ocispec.Descriptor{}, errdefs.InvalidParameter(err)

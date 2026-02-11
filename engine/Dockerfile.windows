@@ -161,12 +161,17 @@ FROM ${WINDOWS_BASE_IMAGE}:${WINDOWS_BASE_IMAGE_TAG}
 # Use PowerShell as the default shell
 SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
-ARG GO_VERSION=1.24.3
-ARG GOTESTSUM_VERSION=v1.12.0
+ARG GO_VERSION=1.25.5
+
+# GOTESTSUM_VERSION is the version of gotest.tools/gotestsum to install.
+ARG GOTESTSUM_VERSION=v1.13.0
 
 # GOWINRES_VERSION is the version of go-winres to install.
 ARG GOWINRES_VERSION=v0.3.3
-ARG CONTAINERD_VERSION=v1.7.27
+
+# TODO: Update containerd version to match Linux version once 
+# https://github.com/microsoft/hcsshim/issues/2488 is resolved.
+ARG CONTAINERD_VERSION=v2.0.7
 
 # Environment variable notes:
 #  - GO_VERSION must be consistent with 'Dockerfile' used by Linux.
@@ -176,7 +181,6 @@ ENV GO_VERSION=${GO_VERSION} `
     CONTAINERD_VERSION=${CONTAINERD_VERSION} `
     GIT_VERSION=2.11.1 `
     GOPATH=C:\gopath `
-    GO111MODULE=off `
     GOTOOLCHAIN=local `
     FROM_DOCKERFILE=1 `
     GOTESTSUM_VERSION=${GOTESTSUM_VERSION} `
@@ -257,14 +261,11 @@ RUN `
   Remove-Item C:\gitsetup.zip; `
   `
   Write-Host INFO: Downloading containerd; `
-  Install-Package -Force 7Zip4PowerShell; `
   $location='https://github.com/containerd/containerd/releases/download/'+$Env:CONTAINERD_VERSION+'/containerd-'+$Env:CONTAINERD_VERSION.TrimStart('v')+'-windows-amd64.tar.gz'; `
   Download-File $location C:\containerd.tar.gz; `
   New-Item -Path C:\containerd -ItemType Directory; `
-  Expand-7Zip C:\containerd.tar.gz C:\; `
-  Expand-7Zip C:\containerd.tar C:\containerd; `
+  tar -xzf C:\containerd.tar.gz -C C:\containerd; `
   Remove-Item C:\containerd.tar.gz; `
-  Remove-Item C:\containerd.tar; `
   `
   # Ensure all directories exist that we will require below....
   $srcDir = """$Env:GOPATH`\src\github.com\docker\docker\bundles"""; `
@@ -276,13 +277,11 @@ RUN `
 
 RUN `
   Function Install-GoTestSum() { `
-    $Env:GO111MODULE = 'on'; `
     $tmpGobin = "${Env:GOBIN_TMP}"; `
     $Env:GOBIN = """${Env:GOPATH}`\bin"""; `
     Write-Host "INFO: Installing gotestsum version $Env:GOTESTSUM_VERSION in $Env:GOBIN"; `
     &go install "gotest.tools/gotestsum@${Env:GOTESTSUM_VERSION}"; `
     $Env:GOBIN = "${tmpGobin}"; `
-    $Env:GO111MODULE = 'off'; `
     if ($LASTEXITCODE -ne 0) {  `
       Throw '"gotestsum install failed..."'; `
     } `
@@ -292,13 +291,11 @@ RUN `
 
 RUN `
   Function Install-GoWinres() { `
-    $Env:GO111MODULE = 'on'; `
     $tmpGobin = "${Env:GOBIN_TMP}"; `
     $Env:GOBIN = """${Env:GOPATH}`\bin"""; `
     Write-Host "INFO: Installing go-winres version $Env:GOWINRES_VERSION in $Env:GOBIN"; `
     &go install "github.com/tc-hib/go-winres@${Env:GOWINRES_VERSION}"; `
     $Env:GOBIN = "${tmpGobin}"; `
-    $Env:GO111MODULE = 'off'; `
     if ($LASTEXITCODE -ne 0) {  `
       Throw '"go-winres install failed..."'; `
     } `

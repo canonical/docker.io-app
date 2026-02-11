@@ -545,7 +545,7 @@ func (c *Cache) doWithRetries(ctx context.Context, r *request) (*http.Response, 
 }
 
 func (c *Cache) url(p string) string {
-	return c.URL + "_apis/artifactcache/" + p
+	return strings.TrimRight(c.URL, "/") + "/_apis/artifactcache/" + p
 }
 
 func (c *Cache) AllKeys(ctx context.Context, api *RestAPI, prefix string) (map[string]struct{}, error) {
@@ -593,6 +593,7 @@ type Entry struct {
 	IsAzureBlob bool   `json:"isAzureBlob"`
 
 	client *http.Client
+	reload func(context.Context) error
 }
 
 func (ce *Entry) WriteTo(ctx context.Context, w io.Writer) error {

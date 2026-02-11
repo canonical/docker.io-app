@@ -3,27 +3,34 @@ package context
 import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/internal/commands"
 	"github.com/spf13/cobra"
 )
 
-// NewContextCommand returns the context cli subcommand
-func NewContextCommand(dockerCli command.Cli) *cobra.Command {
+func init() {
+	commands.Register(newContextCommand)
+}
+
+// newContextCommand returns the context cli subcommand
+func newContextCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "context",
 		Short: "Manage contexts",
 		Args:  cli.NoArgs,
-		RunE:  command.ShowHelp(dockerCli.Err()),
+		RunE:  command.ShowHelp(dockerCLI.Err()),
+
+		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(
-		newCreateCommand(dockerCli),
-		newListCommand(dockerCli),
-		newUseCommand(dockerCli),
-		newExportCommand(dockerCli),
-		newImportCommand(dockerCli),
-		newRemoveCommand(dockerCli),
-		newUpdateCommand(dockerCli),
-		newInspectCommand(dockerCli),
-		newShowCommand(dockerCli),
+		newCreateCommand(dockerCLI),
+		newListCommand(dockerCLI),
+		newUseCommand(dockerCLI),
+		newExportCommand(dockerCLI),
+		newImportCommand(dockerCLI),
+		newRemoveCommand(dockerCLI),
+		newUpdateCommand(dockerCLI),
+		newInspectCommand(dockerCLI),
+		newShowCommand(dockerCLI),
 	)
 	return cmd
 }

@@ -3,15 +3,17 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -212,7 +214,7 @@ func TestUpdateDNSConfig(t *testing.T) {
 	flags.Set("dns-option-rm", "timeout:3")
 
 	config := &swarm.DNSConfig{
-		Nameservers: []string{"3.3.3.3", "5.5.5.5"},
+		Nameservers: []netip.Addr{netip.MustParseAddr("3.3.3.3"), netip.MustParseAddr("5.5.5.5")},
 		Search:      []string{"localdomain"},
 		Options:     []string{"timeout:3"},
 	}
@@ -220,9 +222,9 @@ func TestUpdateDNSConfig(t *testing.T) {
 	updateDNSConfig(flags, &config)
 
 	assert.Assert(t, is.Len(config.Nameservers, 3))
-	assert.Check(t, is.Equal("1.1.1.1", config.Nameservers[0]))
-	assert.Check(t, is.Equal("2001:db8:abc8::1", config.Nameservers[1]))
-	assert.Check(t, is.Equal("5.5.5.5", config.Nameservers[2]))
+	assert.Check(t, is.Equal(netip.MustParseAddr("1.1.1.1"), config.Nameservers[0]))
+	assert.Check(t, is.Equal(netip.MustParseAddr("5.5.5.5"), config.Nameservers[1]))
+	assert.Check(t, is.Equal(netip.MustParseAddr("2001:db8:abc8::1"), config.Nameservers[2]))
 
 	assert.Assert(t, is.Len(config.Search, 2))
 	assert.Check(t, is.Equal("example.com", config.Search[0]))
@@ -237,9 +239,9 @@ func TestUpdateMounts(t *testing.T) {
 	flags.Set("mount-add", "type=volume,source=vol2,target=/toadd")
 	flags.Set("mount-rm", "/toremove")
 
-	mounts := []mounttypes.Mount{
-		{Target: "/toremove", Source: "vol1", Type: mounttypes.TypeBind},
-		{Target: "/tokeep", Source: "vol3", Type: mounttypes.TypeBind},
+	mounts := []mount.Mount{
+		{Target: "/toremove", Source: "vol1", Type: mount.TypeBind},
+		{Target: "/tokeep", Source: "vol3", Type: mount.TypeBind},
 	}
 
 	updateMounts(flags, &mounts)
@@ -252,10 +254,10 @@ func TestUpdateMountsWithDuplicateMounts(t *testing.T) {
 	flags := newUpdateCommand(nil).Flags()
 	flags.Set("mount-add", "type=volume,source=vol4,target=/toadd")
 
-	mounts := []mounttypes.Mount{
-		{Target: "/tokeep1", Source: "vol1", Type: mounttypes.TypeBind},
-		{Target: "/toadd", Source: "vol2", Type: mounttypes.TypeBind},
-		{Target: "/tokeep2", Source: "vol3", Type: mounttypes.TypeBind},
+	mounts := []mount.Mount{
+		{Target: "/tokeep1", Source: "vol1", Type: mount.TypeBind},
+		{Target: "/toadd", Source: "vol2", Type: mount.TypeBind},
+		{Target: "/tokeep2", Source: "vol3", Type: mount.TypeBind},
 	}
 
 	updateMounts(flags, &mounts)
@@ -271,7 +273,7 @@ func TestUpdatePorts(t *testing.T) {
 	flags.Set("publish-rm", "333/udp")
 
 	portConfigs := []swarm.PortConfig{
-		{TargetPort: 333, Protocol: swarm.PortConfigProtocolUDP},
+		{TargetPort: 333, Protocol: network.UDP},
 		{TargetPort: 555},
 	}
 
@@ -294,7 +296,7 @@ func TestUpdatePortsDuplicate(t *testing.T) {
 		{
 			TargetPort:    80,
 			PublishedPort: 80,
-			Protocol:      swarm.PortConfigProtocolTCP,
+			Protocol:      network.TCP,
 			PublishMode:   swarm.PortConfigPublishModeIngress,
 		},
 	}
@@ -487,7 +489,7 @@ func TestUpdatePortsRmWithProtocol(t *testing.T) {
 		{
 			TargetPort:    80,
 			PublishedPort: 8080,
-			Protocol:      swarm.PortConfigProtocolTCP,
+			Protocol:      network.TCP,
 			PublishMode:   swarm.PortConfigPublishModeIngress,
 		},
 	}
@@ -500,27 +502,27 @@ func TestUpdatePortsRmWithProtocol(t *testing.T) {
 }
 
 type secretAPIClientMock struct {
-	listResult []swarm.Secret
+	listResult client.SecretListResult
 }
 
-func (s secretAPIClientMock) SecretList(context.Context, swarm.SecretListOptions) ([]swarm.Secret, error) {
+func (s secretAPIClientMock) SecretList(context.Context, client.SecretListOptions) (client.SecretListResult, error) {
 	return s.listResult, nil
 }
 
-func (secretAPIClientMock) SecretCreate(context.Context, swarm.SecretSpec) (swarm.SecretCreateResponse, error) {
-	return swarm.SecretCreateResponse{}, nil
+func (secretAPIClientMock) SecretCreate(context.Context, client.SecretCreateOptions) (client.SecretCreateResult, error) {
+	return client.SecretCreateResult{}, nil
 }
 
-func (secretAPIClientMock) SecretRemove(context.Context, string) error {
-	return nil
+func (secretAPIClientMock) SecretRemove(context.Context, string, client.SecretRemoveOptions) (client.SecretRemoveResult, error) {
+	return client.SecretRemoveResult{}, nil
 }
 
-func (secretAPIClientMock) SecretInspectWithRaw(context.Context, string) (swarm.Secret, []byte, error) {
-	return swarm.Secret{}, []byte{}, nil
+func (secretAPIClientMock) SecretInspect(context.Context, string, client.SecretInspectOptions) (client.SecretInspectResult, error) {
+	return client.SecretInspectResult{}, nil
 }
 
-func (secretAPIClientMock) SecretUpdate(context.Context, string, swarm.Version, swarm.SecretSpec) error {
-	return nil
+func (secretAPIClientMock) SecretUpdate(context.Context, string, client.SecretUpdateOptions) (client.SecretUpdateResult, error) {
+	return client.SecretUpdateResult{}, nil
 }
 
 // TestUpdateSecretUpdateInPlace tests the ability to update the "target" of a
@@ -528,11 +530,11 @@ func (secretAPIClientMock) SecretUpdate(context.Context, string, swarm.Version, 
 // "--secret-add" for the same secret.
 func TestUpdateSecretUpdateInPlace(t *testing.T) {
 	apiClient := secretAPIClientMock{
-		listResult: []swarm.Secret{
-			{
+		listResult: client.SecretListResult{
+			Items: []swarm.Secret{{
 				ID:   "tn9qiblgnuuut11eufquw5dev",
 				Spec: swarm.SecretSpec{Annotations: swarm.Annotations{Name: "foo"}},
-			},
+			}},
 		},
 	}
 
@@ -846,19 +848,36 @@ func TestRemoveGenericResources(t *testing.T) {
 func TestUpdateNetworks(t *testing.T) {
 	ctx := context.Background()
 	nws := []network.Summary{
-		{Name: "aaa-network", ID: "id555"},
-		{Name: "mmm-network", ID: "id999"},
-		{Name: "zzz-network", ID: "id111"},
+		{
+			Network: network.Network{
+				Name: "aaa-network",
+				ID:   "id555",
+			},
+		},
+		{
+			Network: network.Network{
+				Name: "mmm-network",
+				ID:   "id999",
+			},
+		},
+		{
+			Network: network.Network{
+				Name: "zzz-network",
+				ID:   "id111",
+			},
+		},
 	}
 
-	client := &fakeClient{
-		networkInspectFunc: func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	apiClient := &fakeClient{
+		networkInspectFunc: func(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
 			for _, nw := range nws {
 				if nw.ID == networkID || nw.Name == networkID {
-					return nw, nil
+					return client.NetworkInspectResult{
+						Network: network.Inspect{Network: nw.Network},
+					}, nil
 				}
 			}
-			return network.Inspect{}, fmt.Errorf("network not found: %s", networkID)
+			return client.NetworkInspectResult{}, fmt.Errorf("network not found: %s", networkID)
 		},
 	}
 
@@ -874,28 +893,28 @@ func TestUpdateNetworks(t *testing.T) {
 	flags := newUpdateCommand(nil).Flags()
 	err := flags.Set(flagNetworkAdd, "aaa-network")
 	assert.NilError(t, err)
-	err = updateService(ctx, client, flags, &svc)
+	err = updateService(ctx, apiClient, flags, &svc)
 	assert.NilError(t, err)
 	assert.Check(t, is.DeepEqual([]swarm.NetworkAttachmentConfig{{Target: "id555"}, {Target: "id999"}}, svc.TaskTemplate.Networks))
 
 	flags = newUpdateCommand(nil).Flags()
 	err = flags.Set(flagNetworkAdd, "aaa-network")
 	assert.NilError(t, err)
-	err = updateService(ctx, client, flags, &svc)
+	err = updateService(ctx, apiClient, flags, &svc)
 	assert.Error(t, err, "service is already attached to network aaa-network")
 	assert.Check(t, is.DeepEqual([]swarm.NetworkAttachmentConfig{{Target: "id555"}, {Target: "id999"}}, svc.TaskTemplate.Networks))
 
 	flags = newUpdateCommand(nil).Flags()
 	err = flags.Set(flagNetworkAdd, "id555")
 	assert.NilError(t, err)
-	err = updateService(ctx, client, flags, &svc)
+	err = updateService(ctx, apiClient, flags, &svc)
 	assert.Error(t, err, "service is already attached to network id555")
 	assert.Check(t, is.DeepEqual([]swarm.NetworkAttachmentConfig{{Target: "id555"}, {Target: "id999"}}, svc.TaskTemplate.Networks))
 
 	flags = newUpdateCommand(nil).Flags()
 	err = flags.Set(flagNetworkRemove, "id999")
 	assert.NilError(t, err)
-	err = updateService(ctx, client, flags, &svc)
+	err = updateService(ctx, apiClient, flags, &svc)
 	assert.NilError(t, err)
 	assert.Check(t, is.DeepEqual([]swarm.NetworkAttachmentConfig{{Target: "id555"}}, svc.TaskTemplate.Networks))
 
@@ -904,7 +923,7 @@ func TestUpdateNetworks(t *testing.T) {
 	assert.NilError(t, err)
 	err = flags.Set(flagNetworkRemove, "aaa-network")
 	assert.NilError(t, err)
-	err = updateService(ctx, client, flags, &svc)
+	err = updateService(ctx, apiClient, flags, &svc)
 	assert.NilError(t, err)
 	assert.Check(t, is.DeepEqual([]swarm.NetworkAttachmentConfig{{Target: "id999"}}, svc.TaskTemplate.Networks))
 }
@@ -1202,16 +1221,16 @@ func TestUpdateGetUpdatedConfigs(t *testing.T) {
 
 			// fakeConfigAPIClientList is actually defined in create_test.go,
 			// but we'll use it here as well
-			var fakeClient fakeConfigAPIClientList = func(_ context.Context, opts swarm.ConfigListOptions) ([]swarm.Config, error) {
-				names := opts.Filters.Get("name")
+			var fakeConfigClient fakeConfigAPIClientList = func(_ context.Context, opts client.ConfigListOptions) (client.ConfigListResult, error) {
+				names := opts.Filters["name"]
 				assert.Equal(t, len(names), len(tc.lookupConfigs))
 
-				configs := []swarm.Config{}
+				configs := client.ConfigListResult{}
 				for _, lookup := range tc.lookupConfigs {
-					assert.Assert(t, is.Contains(names, lookup))
+					assert.Assert(t, names[lookup])
 					cfg, ok := cannedConfigs[lookup]
 					assert.Assert(t, ok)
-					configs = append(configs, *cfg)
+					configs.Items = append(configs.Items, *cfg)
 				}
 				return configs, nil
 			}
@@ -1232,10 +1251,10 @@ func TestUpdateGetUpdatedConfigs(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			finalConfigs, err := getUpdatedConfigs(ctx, fakeClient, flags, containerSpec)
+			finalConfigs, err := getUpdatedConfigs(ctx, fakeConfigClient, flags, containerSpec)
 			assert.NilError(t, err)
 
-			// ensure that the finalConfigs consists of all of the expected
+			// ensure that the finalConfigs consists of all the expected
 			// configs
 			assert.Equal(t, len(finalConfigs), len(tc.expected),
 				"%v final configs, %v expected",

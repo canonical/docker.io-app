@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/integration-cli/checker"
-	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/v2/integration-cli/checker"
+	"github.com/moby/moby/v2/integration-cli/daemon"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -56,10 +56,10 @@ func (s *DockerSwarmSuite) TestServiceLogs(c *testing.T) {
 // countLogLines returns a closure that can be used with poll.WaitOn() to
 // verify that a minimum number of expected container log messages have been
 // output.
-func countLogLines(d *daemon.Daemon, name string) func(*testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
+func countLogLines(d *daemon.Daemon, name string) func(*testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		result := icmd.RunCmd(d.Command("service", "logs", "-t", "--raw", name))
-		result.Assert(c, icmd.Expected{})
+		result.Assert(t, icmd.Expected{})
 		// if this returns an emptystring, trying to split it later will return
 		// an array containing emptystring. a valid log line will NEVER be
 		// emptystring because we ask for the timestamp.

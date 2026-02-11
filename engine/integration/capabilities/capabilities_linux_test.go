@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/build"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/fakecontext"
-
+	"github.com/moby/moby/api/pkg/stdcopy"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/fakecontext"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
 )
@@ -32,14 +31,12 @@ func TestNoNewPrivileges(t *testing.T) {
 	source := fakecontext.New(t, "", fakecontext.WithDockerfile(withFileCapability))
 	defer source.Close()
 
-	client := testEnv.APIClient()
+	apiClient := testEnv.APIClient()
 
 	// Build image
-	resp, err := client.ImageBuild(ctx,
-		source.AsTarReader(t),
-		build.ImageBuildOptions{
-			Tags: []string{imageTag},
-		})
+	resp, err := apiClient.ImageBuild(ctx, source.AsTarReader(t), client.ImageBuildOptions{
+		Tags: []string{imageTag},
+	})
 	assert.NilError(t, err)
 	_, err = io.Copy(io.Discard, resp.Body)
 	assert.NilError(t, err)
@@ -78,11 +75,11 @@ func TestNoNewPrivileges(t *testing.T) {
 				container.WithCmd("/bin/cat", "/txt"),
 				container.WithSecurityOpt("no-new-privileges=true"),
 			)
-			cid := container.Run(ctx, t, client, opts...)
-			poll.WaitOn(t, container.IsInState(ctx, client, cid, containertypes.StateExited))
+			cid := container.Run(ctx, t, apiClient, opts...)
+			poll.WaitOn(t, container.IsInState(ctx, apiClient, cid, containertypes.StateExited))
 
 			// Assert on outputs
-			logReader, err := client.ContainerLogs(ctx, cid, containertypes.LogsOptions{
+			logReader, err := apiClient.ContainerLogs(ctx, cid, client.ContainerLogsOptions{
 				ShowStdout: true,
 				ShowStderr: true,
 			})

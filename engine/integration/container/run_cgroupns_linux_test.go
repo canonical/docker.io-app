@@ -1,14 +1,14 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/requirement"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/requirement"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/skip"
 )
@@ -138,8 +138,8 @@ func TestCgroupNamespacesRunOlderClient(t *testing.T) {
 
 	ctx := testutil.StartSpan(baseContext, t)
 
-	d := daemon.New(t, daemon.WithDefaultCgroupNamespaceMode("private"))
-	apiClient := d.NewClientT(t, client.WithVersion("1.39"))
+	d := daemon.New(t, daemon.WithEnvVars("DOCKER_MIN_API_VERSION=1.39"), daemon.WithDefaultCgroupNamespaceMode("private"))
+	apiClient := d.NewClientT(t, client.WithAPIVersion("1.39"))
 
 	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)

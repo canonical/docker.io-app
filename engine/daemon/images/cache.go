@@ -1,4 +1,4 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"fmt"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/builder"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/image/cache"
-	"github.com/docker/docker/layer"
+	"github.com/moby/moby/v2/daemon/builder"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/image/cache"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
 )
 
 type cacheAdaptor struct {
@@ -22,7 +22,7 @@ func (c cacheAdaptor) Get(id image.ID) (*image.Image, error) {
 }
 
 func (c cacheAdaptor) GetByRef(ctx context.Context, refOrId string) (*image.Image, error) {
-	return c.is.GetImage(ctx, refOrId, backend.GetImageOpts{})
+	return c.is.GetImage(ctx, refOrId, imagebackend.GetImageOpts{})
 }
 
 func (c cacheAdaptor) SetParent(target, parent image.ID) error {

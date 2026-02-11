@@ -8,10 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli-plugins/metadata"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/docker/api/types/build"
+	"github.com/moby/moby/api/types/build"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -36,7 +37,7 @@ const (
 )
 
 func newBuilderError(errorMsg string, pluginLoadErr error) error {
-	if pluginmanager.IsNotFound(pluginLoadErr) {
+	if errdefs.IsNotFound(pluginLoadErr) {
 		return errors.New(errorMsg)
 	}
 	if pluginLoadErr != nil {

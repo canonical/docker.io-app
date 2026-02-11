@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package system
 
@@ -9,19 +9,15 @@ import (
 	"fmt"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/inspect"
 	flagsHelper "github.com/docker/cli/cli/flags"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 type objectType = string
@@ -59,8 +55,8 @@ type inspectOptions struct {
 	ids        []string
 }
 
-// NewInspectCommand creates a new cobra.Command for `docker inspect`
-func NewInspectCommand(dockerCli command.Cli) *cobra.Command {
+// newInspectCommand creates a new cobra.Command for `docker inspect`
+func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts inspectOptions
 
 	cmd := &cobra.Command{
@@ -72,10 +68,11 @@ func NewInspectCommand(dockerCli command.Cli) *cobra.Command {
 			if cmd.Flags().Changed("type") && opts.objectType == "" {
 				return fmt.Errorf(`type is empty: must be one of "%s"`, strings.Join(allTypes, `", "`))
 			}
-			return runInspect(cmd.Context(), dockerCli, opts)
+			return runInspect(cmd.Context(), dockerCLI, opts)
 		},
 		// TODO(thaJeztah): should we consider adding completion for common object-types? (images, containers?)
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     completeObjectNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -84,12 +81,7 @@ func NewInspectCommand(dockerCli command.Cli) *cobra.Command {
 	flags.BoolVarP(&opts.size, "size", "s", false, "Display total file sizes if the type is container")
 
 	_ = cmd.RegisterFlagCompletionFunc("type", completion.FromList(allTypes...))
-	flags.VisitAll(func(flag *pflag.Flag) {
-		// Set a default completion function if none was set. We don't look
-		// up if it does already have one set, because Cobra does this for
-		// us, and returns an error (which we ignore for this reason).
-		_ = cmd.RegisterFlagCompletionFunc(flag.Name, completion.NoComplete)
-	})
+
 	return cmd
 }
 
@@ -100,14 +92,18 @@ func runInspect(ctx context.Context, dockerCli command.Cli, opts inspectOptions)
 		typePlugin, typeSecret, typeService, typeTask, typeVolume:
 		elementSearcher = inspectAll(ctx, dockerCli, opts.size, opts.objectType)
 	default:
-		return errors.Errorf(`unknown type: %q: must be one of "%s"`, opts.objectType, strings.Join(allTypes, `", "`))
+		return fmt.Errorf(`unknown type: %q: must be one of "%s"`, opts.objectType, strings.Join(allTypes, `", "`))
 	}
 	return inspect.Inspect(dockerCli.Out(), opts.ids, opts.format, elementSearcher)
 }
 
 func inspectContainers(ctx context.Context, dockerCli command.Cli, getSize bool) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().ContainerInspectWithRaw(ctx, ref, getSize)
+		res, err := dockerCli.Client().ContainerInspect(ctx, ref, client.ContainerInspectOptions{Size: getSize})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Container, res.Raw, err
 	}
 }
 
@@ -124,50 +120,58 @@ func inspectImages(ctx context.Context, dockerCli command.Cli) inspect.GetRefFun
 
 func inspectNetwork(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().NetworkInspectWithRaw(ctx, ref, network.InspectOptions{})
+		res, err := dockerCli.Client().NetworkInspect(ctx, ref, client.NetworkInspectOptions{})
+		return res.Network, res.Raw, err
 	}
 }
 
 func inspectNode(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().NodeInspectWithRaw(ctx, ref)
+		res, err := dockerCli.Client().NodeInspect(ctx, ref, client.NodeInspectOptions{})
+		return res.Node, res.Raw, err
 	}
 }
 
 func inspectService(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
 		// Service inspect shows defaults values in empty fields.
-		return dockerCli.Client().ServiceInspectWithRaw(ctx, ref, swarm.ServiceInspectOptions{InsertDefaults: true})
+		res, err := dockerCli.Client().ServiceInspect(ctx, ref, client.ServiceInspectOptions{InsertDefaults: true})
+		return res.Service, res.Raw, err
 	}
 }
 
 func inspectTasks(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().TaskInspectWithRaw(ctx, ref)
+		res, err := dockerCli.Client().TaskInspect(ctx, ref, client.TaskInspectOptions{})
+		return res.Task, res.Raw, err
 	}
 }
 
 func inspectVolume(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().VolumeInspectWithRaw(ctx, ref)
+		res, err := dockerCli.Client().VolumeInspect(ctx, ref, client.VolumeInspectOptions{})
+		return res.Volume, res.Raw, err
 	}
 }
 
 func inspectPlugin(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().PluginInspectWithRaw(ctx, ref)
+		res, err := dockerCli.Client().PluginInspect(ctx, ref, client.PluginInspectOptions{})
+		return res.Plugin, res.Raw, err
 	}
 }
 
 func inspectSecret(ctx context.Context, dockerCli command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCli.Client().SecretInspectWithRaw(ctx, ref)
+		res, err := dockerCli.Client().SecretInspect(ctx, ref, client.SecretInspectOptions{})
+		return res.Secret, res.Raw, err
 	}
 }
 
 func inspectConfig(ctx context.Context, dockerCLI command.Cli) inspect.GetRefFunc {
 	return func(ref string) (any, []byte, error) {
-		return dockerCLI.Client().ConfigInspectWithRaw(ctx, ref)
+		res, err := dockerCLI.Client().ConfigInspect(ctx, ref, client.ConfigInspectOptions{})
+		return res.Config, res.Raw, err
 	}
 }
 
@@ -229,12 +233,12 @@ func inspectAll(ctx context.Context, dockerCLI command.Cli, getSize bool, typeCo
 	// isSwarmManager does an Info API call to verify that the daemon is
 	// a swarm manager.
 	isSwarmManager := func() bool {
-		info, err := dockerCLI.Client().Info(ctx)
+		res, err := dockerCLI.Client().Info(ctx, client.InfoOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(dockerCLI.Err(), err)
 			return false
 		}
-		return info.Swarm.ControlAvailable
+		return res.Info.Swarm.ControlAvailable
 	}
 
 	return func(ref string) (any, []byte, error) {
@@ -274,12 +278,12 @@ func inspectAll(ctx context.Context, dockerCLI command.Cli, getSize bool, typeCo
 			}
 			return v, raw, err
 		}
-		return nil, nil, errors.Errorf("Error: No such object: %s", ref)
+		return nil, nil, fmt.Errorf("error: no such object: %s", ref)
 	}
 }
 
 func isErrSkippable(err error) bool {
-	return cerrdefs.IsNotFound(err) ||
+	return errdefs.IsNotFound(err) ||
 		strings.Contains(err.Error(), "not supported") ||
 		strings.Contains(err.Error(), "invalid reference format")
 }

@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -13,10 +13,16 @@ const (
 
 	enabledHeader  = "ENABLED"
 	pluginIDHeader = "ID"
+
+	rawFormat = `plugin_id: {{.ID}}
+name: {{.Name}}
+description: {{.Description}}
+enabled: {{.Enabled}}
+`
 )
 
-// NewFormat returns a Format for rendering using a plugin Context
-func NewFormat(source string, quiet bool) formatter.Format {
+// newFormat returns a Format for rendering using a pluginContext.
+func newFormat(source string, quiet bool) formatter.Format {
 	switch source {
 	case formatter.TableFormatKey:
 		if quiet {
@@ -27,37 +33,41 @@ func NewFormat(source string, quiet bool) formatter.Format {
 		if quiet {
 			return `plugin_id: {{.ID}}`
 		}
-		return `plugin_id: {{.ID}}\nname: {{.Name}}\ndescription: {{.Description}}\nenabled: {{.Enabled}}\n`
+		return rawFormat
 	}
 	return formatter.Format(source)
 }
 
-// FormatWrite writes the context
-func FormatWrite(ctx formatter.Context, plugins []*types.Plugin) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, plugin := range plugins {
-			pluginCtx := &pluginContext{trunc: ctx.Trunc, p: *plugin}
-			if err := format(pluginCtx); err != nil {
+// formatWrite writes the context
+func formatWrite(fmtCtx formatter.Context, plugins client.PluginListResult) error {
+	pluginCtx := &pluginContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"ID":              pluginIDHeader,
+				"Name":            formatter.NameHeader,
+				"Description":     formatter.DescriptionHeader,
+				"Enabled":         enabledHeader,
+				"PluginReference": formatter.ImageHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(pluginCtx, func(format func(subContext formatter.SubContext) error) error {
+		for _, p := range plugins.Items {
+			if err := format(&pluginContext{
+				trunc: fmtCtx.Trunc,
+				p:     p,
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	pluginCtx := pluginContext{}
-	pluginCtx.Header = formatter.SubHeaderContext{
-		"ID":              pluginIDHeader,
-		"Name":            formatter.NameHeader,
-		"Description":     formatter.DescriptionHeader,
-		"Enabled":         enabledHeader,
-		"PluginReference": formatter.ImageHeader,
-	}
-	return ctx.Write(&pluginCtx, render)
+	})
 }
 
 type pluginContext struct {
 	formatter.HeaderContext
 	trunc bool
-	p     types.Plugin
+	p     plugin.Plugin
 }
 
 func (c *pluginContext) MarshalJSON() ([]byte, error) {
@@ -66,7 +76,7 @@ func (c *pluginContext) MarshalJSON() ([]byte, error) {
 
 func (c *pluginContext) ID() string {
 	if c.trunc {
-		return stringid.TruncateID(c.p.ID)
+		return formatter.TruncateID(c.p.ID)
 	}
 	return c.p.ID
 }

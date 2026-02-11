@@ -2,7 +2,8 @@ package container
 
 import (
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -12,25 +13,24 @@ const (
 	pathHeader       = "PATH"
 )
 
-// NewDiffFormat returns a format for use with a diff Context
-func NewDiffFormat(source string) formatter.Format {
+// newDiffFormat returns a format for use with a diff [formatter.Context].
+func newDiffFormat(source string) formatter.Format {
 	if source == formatter.TableFormatKey {
 		return defaultDiffTableFormat
 	}
 	return formatter.Format(source)
 }
 
-// DiffFormatWrite writes formatted diff using the Context
-func DiffFormatWrite(ctx formatter.Context, changes []container.FilesystemChange) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, change := range changes {
+// diffFormatWrite writes formatted diff using the [formatter.Context].
+func diffFormatWrite(fmtCtx formatter.Context, changes client.ContainerDiffResult) error {
+	return fmtCtx.Write(newDiffContext(), func(format func(subContext formatter.SubContext) error) error {
+		for _, change := range changes.Changes {
 			if err := format(&diffContext{c: change}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	return ctx.Write(newDiffContext(), render)
+	})
 }
 
 type diffContext struct {
@@ -39,12 +39,14 @@ type diffContext struct {
 }
 
 func newDiffContext() *diffContext {
-	diffCtx := diffContext{}
-	diffCtx.Header = formatter.SubHeaderContext{
-		"Type": changeTypeHeader,
-		"Path": pathHeader,
+	return &diffContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"Type": changeTypeHeader,
+				"Path": pathHeader,
+			},
+		},
 	}
-	return &diffCtx
 }
 
 func (d *diffContext) MarshalJSON() ([]byte, error) {

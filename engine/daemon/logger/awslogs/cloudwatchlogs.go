@@ -1,5 +1,5 @@
 // Package awslogs provides the logdriver for forwarding container logs to Amazon CloudWatch Logs
-package awslogs // import "github.com/docker/docker/daemon/logger/awslogs"
+package awslogs
 
 import (
 	"context"
@@ -23,10 +23,10 @@ import (
 	smithymiddleware "github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/internal/lazyregexp"
+	"github.com/moby/moby/v2/daemon/internal/lazyregexp"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
+	"github.com/moby/moby/v2/dockerversion"
 	"github.com/pkg/errors"
 )
 
@@ -431,7 +431,7 @@ func (l *logStream) Log(msg *logger.Message) error {
 	// (i.e. returns false) in this case.
 	ctx := context.TODO()
 	if err := l.messages.Enqueue(ctx, msg); err != nil {
-		if err == loggerutils.ErrQueueClosed {
+		if errors.Is(err, loggerutils.ErrQueueClosed) {
 			return errClosed
 		}
 		return err
@@ -734,7 +734,7 @@ func (l *logStream) putLogEvents(events []types.InputLogEvent, sequenceToken *st
 }
 
 // ValidateLogOpt looks for awslogs-specific log options awslogs-region, awslogs-endpoint
-// awslogs-group, awslogs-stream, awslogs-create-group, awslogs-datetime-format,
+// awslogs-group, awslogs-stream, awslogs-create-group, awslogs-create-stream, awslogs-datetime-format,
 // awslogs-multiline-pattern
 func ValidateLogOpt(cfg map[string]string) error {
 	for key := range cfg {
@@ -742,6 +742,7 @@ func ValidateLogOpt(cfg map[string]string) error {
 		case logGroupKey:
 		case logStreamKey:
 		case logCreateGroupKey:
+		case logCreateStreamKey:
 		case regionKey:
 		case endpointKey:
 		case tagKey:
@@ -761,6 +762,11 @@ func ValidateLogOpt(cfg map[string]string) error {
 	if cfg[logCreateGroupKey] != "" {
 		if _, err := strconv.ParseBool(cfg[logCreateGroupKey]); err != nil {
 			return fmt.Errorf("must specify valid value for log opt '%s': %v", logCreateGroupKey, err)
+		}
+	}
+	if cfg[logCreateStreamKey] != "" {
+		if _, err := strconv.ParseBool(cfg[logCreateStreamKey]); err != nil {
+			return fmt.Errorf("must specify valid value for log opt '%s': %v", logCreateStreamKey, err)
 		}
 	}
 	if cfg[forceFlushIntervalKey] != "" {
@@ -857,7 +863,7 @@ func (b *eventBatch) add(event wrappedEvent, size int) bool {
 
 	// verify we are still within service limits
 	switch {
-	case len(b.batch)+1 > maximumLogEventsPerPut:
+	case len(b.batch) >= maximumLogEventsPerPut:
 		return false
 	case b.bytes+addBytes > maximumBytesPerPut:
 		return false

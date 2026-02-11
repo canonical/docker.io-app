@@ -1,8 +1,8 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
 	"bytes"
-	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,11 +15,10 @@ import (
 )
 
 func TestImageLoadError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.ImageLoad(context.Background(), nil, ImageLoadWithQuiet(true))
+	_, err = client.ImageLoad(t.Context(), nil, ImageLoadWithQuiet(true))
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
@@ -28,52 +27,41 @@ func TestImageLoad(t *testing.T) {
 		expectedURL         = "/images/load"
 		expectedContentType = "application/x-tar"
 		expectedInput       = "inputBody"
-		expectedOutput      = "outputBody"
+		expectedOutput      = `{"stream":"Loaded image: busybox:latest\n"}`
 	)
 	tests := []struct {
-		doc                  string
-		quiet                bool
-		platforms            []ocispec.Platform
-		responseContentType  string
-		expectedResponseJSON bool
-		expectedQueryParams  url.Values
+		doc                 string
+		quiet               bool
+		platforms           []ocispec.Platform
+		expectedQueryParams url.Values
 	}{
 		{
-			doc:                  "plain-text",
-			quiet:                false,
-			responseContentType:  "text/plain",
-			expectedResponseJSON: false,
+			doc: "no options",
 			expectedQueryParams: url.Values{
 				"quiet": {"0"},
 			},
 		},
 		{
-			doc:                  "json quiet",
-			quiet:                true,
-			responseContentType:  "application/json",
-			expectedResponseJSON: true,
+			doc:   "quiet",
+			quiet: true,
 			expectedQueryParams: url.Values{
 				"quiet": {"1"},
 			},
 		},
 		{
-			doc:                  "json with platform",
-			platforms:            []ocispec.Platform{{Architecture: "arm64", OS: "linux", Variant: "v8"}},
-			responseContentType:  "application/json",
-			expectedResponseJSON: true,
+			doc:       "with platform",
+			platforms: []ocispec.Platform{{Architecture: "arm64", OS: "linux", Variant: "v8"}},
 			expectedQueryParams: url.Values{
 				"platform": {`{"architecture":"arm64","os":"linux","variant":"v8"}`},
 				"quiet":    {"0"},
 			},
 		},
 		{
-			doc: "json with multiple platforms",
+			doc: "multiple platforms",
 			platforms: []ocispec.Platform{
 				{Architecture: "arm64", OS: "linux", Variant: "v8"},
 				{Architecture: "amd64", OS: "linux"},
 			},
-			responseContentType:  "application/json",
-			expectedResponseJSON: true,
 			expectedQueryParams: url.Values{
 				"platform": {`{"architecture":"arm64","os":"linux","variant":"v8"}`, `{"architecture":"amd64","os":"linux"}`},
 				"quiet":    {"0"},
@@ -82,28 +70,23 @@ func TestImageLoad(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
-			client := &Client{
-				client: newMockClient(func(req *http.Request) (*http.Response, error) {
-					assert.Check(t, is.Equal(req.URL.Path, expectedURL))
-					assert.Check(t, is.Equal(req.Header.Get("Content-Type"), expectedContentType))
-					assert.Check(t, is.DeepEqual(req.URL.Query(), tc.expectedQueryParams))
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader([]byte(expectedOutput))),
-						Header:     http.Header{"Content-Type": []string{tc.responseContentType}},
-					}, nil
-				}),
-			}
+			client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+				assert.Check(t, assertRequest(req, http.MethodPost, expectedURL))
+				assert.Check(t, is.Equal(req.Header.Get("Content-Type"), expectedContentType))
+				assert.Check(t, is.DeepEqual(req.URL.Query(), tc.expectedQueryParams))
+
+				return mockJSONResponse(http.StatusOK, nil, json.RawMessage(expectedOutput))(req)
+			}))
+			assert.NilError(t, err)
 
 			input := bytes.NewReader([]byte(expectedInput))
-			imageLoadResponse, err := client.ImageLoad(context.Background(), input,
+			imageLoadResponse, err := client.ImageLoad(t.Context(), input,
 				ImageLoadWithQuiet(tc.quiet),
 				ImageLoadWithPlatforms(tc.platforms...),
 			)
 			assert.NilError(t, err)
-			assert.Check(t, is.Equal(imageLoadResponse.JSON, tc.expectedResponseJSON))
 
-			body, err := io.ReadAll(imageLoadResponse.Body)
+			body, err := io.ReadAll(imageLoadResponse)
 			assert.NilError(t, err)
 			assert.Check(t, is.Equal(string(body), expectedOutput))
 		})

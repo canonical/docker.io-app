@@ -2,14 +2,13 @@ package swarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +17,7 @@ type unlockKeyOptions struct {
 	quiet  bool
 }
 
-func newUnlockKeyCommand(dockerCli command.Cli) *cobra.Command {
+func newUnlockKeyCommand(dockerCLI command.Cli) *cobra.Command {
 	opts := unlockKeyOptions{}
 
 	cmd := &cobra.Command{
@@ -26,13 +25,14 @@ func newUnlockKeyCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Manage the unlock key",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUnlockKey(cmd.Context(), dockerCli, opts)
+			return runUnlockKey(cmd.Context(), dockerCLI, opts)
 		},
 		Annotations: map[string]string{
 			"version": "1.24",
 			"swarm":   "manager",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -46,18 +46,22 @@ func runUnlockKey(ctx context.Context, dockerCLI command.Cli, opts unlockKeyOpti
 	apiClient := dockerCLI.Client()
 
 	if opts.rotate {
-		flags := swarm.UpdateFlags{RotateManagerUnlockKey: true}
-
-		sw, err := apiClient.SwarmInspect(ctx)
+		res, err := apiClient.SwarmInspect(ctx, client.SwarmInspectOptions{})
 		if err != nil {
 			return err
 		}
 
-		if !sw.Spec.EncryptionConfig.AutoLockManagers {
+		if !res.Swarm.Spec.EncryptionConfig.AutoLockManagers {
 			return errors.New("cannot rotate because autolock is not turned on")
 		}
 
-		if err := apiClient.SwarmUpdate(ctx, sw.Version, sw.Spec, flags); err != nil {
+		_, err = apiClient.SwarmUpdate(ctx, client.SwarmUpdateOptions{
+			Version: res.Swarm.Version,
+			Spec:    res.Swarm.Spec,
+
+			RotateManagerUnlockKey: true,
+		})
+		if err != nil {
 			return err
 		}
 
@@ -66,21 +70,21 @@ func runUnlockKey(ctx context.Context, dockerCLI command.Cli, opts unlockKeyOpti
 		}
 	}
 
-	unlockKeyResp, err := apiClient.SwarmGetUnlockKey(ctx)
+	resp, err := apiClient.SwarmGetUnlockKey(ctx)
 	if err != nil {
-		return errors.Wrap(err, "could not fetch unlock key")
+		return fmt.Errorf("could not fetch unlock key: %w", err)
 	}
 
-	if unlockKeyResp.UnlockKey == "" {
+	if resp.Key == "" {
 		return errors.New("no unlock key is set")
 	}
 
 	if opts.quiet {
-		_, _ = fmt.Fprintln(dockerCLI.Out(), unlockKeyResp.UnlockKey)
+		_, _ = fmt.Fprintln(dockerCLI.Out(), resp.Key)
 		return nil
 	}
 
-	printUnlockCommand(dockerCLI.Out(), unlockKeyResp.UnlockKey)
+	printUnlockCommand(dockerCLI.Out(), resp.Key)
 	return nil
 }
 

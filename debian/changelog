@@ -1,14 +1,32 @@
-docker.io-app (28.2.2-0ubuntu1~22.04.1) jammy; urgency=medium
+docker.io-app (29.1.3-0ubuntu1) resolute; urgency=medium
 
-  * Backport from questing to jammy (LP: #2112523)
-  * d/control: b-d on golang-1.23-go instead of golang-1.24-go
-  * d/rules: add Go 1.23 to $PATH
-  * d/t/basic-smoke:
-    - Target bullseye for debootstrap image generation (LP: #2124109)
-    - Change the MIRROR URL to use archive.d.o since oldoldstable is not
-      available for ppc64el and s390x through ftp.d.o
+  * New upstream version 29.1.3
+  * d/manpages/*: update manpages for version 29.1.3
+  * d/docker.io.docs: update NOTICE files
 
- -- Athos Ribeiro <athos.ribeiro@canonical.com>  Wed, 10 Sep 2025 11:50:16 -0300
+ -- Athos Ribeiro <athos@ubuntu.com>  Tue, 06 Jan 2026 14:14:59 -0300
+
+docker.io-app (29.1.2-0ubuntu1) resolute; urgency=medium
+
+  * New upstream version 29.1.2
+  * d/watch: accept new upstream tarball format
+  * d/h/tini-upstream-version.sh: accept new upstream URL format
+  * d/get-orig-source.sh: accept new upstream paths
+  * d/manpages/*: update manpages for version 29.1.2
+  * d/extra/vendor: vendorize docker-trust dependencies
+  * d/copyright: update copyright data
+  * d/control: B-D on libnftables-dev
+  * d/s/include-binaries: allow vendorized code binary files
+  * d/docker.io.docs: update NOTICE files
+  * d/docker.io.install: install new docker-trust plugin
+  * d/docker.io.lintian-overrides: remove obsolete lintian overrides
+  * d/s/lintian-overrides: suppress non-relevant lintian warnings
+  * d/rules:
+    - Use moby/moby namespace
+    - Build docker-trust plugin
+  * d/t/docker-in-lxd: workaround cloud-init bug (LP: #2131809)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Fri, 12 Dec 2025 10:35:58 -0300
 
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 

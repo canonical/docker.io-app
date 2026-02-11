@@ -1,14 +1,14 @@
 package images
 
 import (
-	"github.com/docker/docker/api/types/container"
-	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.DockerOCIImageConfig {
+func containerConfigToDockerOCIImageConfig(cfg *container.Config) dockerspec.DockerOCIImageConfig {
 	var ociCfg ocispec.ImageConfig
-	var ext imagespec.DockerOCIImageConfigExt
+	var ext dockerspec.DockerOCIImageConfigExt
 
 	if cfg != nil {
 		ociCfg = ocispec.ImageConfig{
@@ -26,7 +26,7 @@ func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.Dock
 		if len(cfg.ExposedPorts) > 0 {
 			ociCfg.ExposedPorts = map[string]struct{}{}
 			for k, v := range cfg.ExposedPorts {
-				ociCfg.ExposedPorts[string(k)] = v
+				ociCfg.ExposedPorts[k.String()] = v
 			}
 		}
 		ext.Healthcheck = cfg.Healthcheck
@@ -34,7 +34,7 @@ func containerConfigToDockerOCIImageConfig(cfg *container.Config) imagespec.Dock
 		ext.Shell = cfg.Shell
 	}
 
-	return imagespec.DockerOCIImageConfig{
+	return dockerspec.DockerOCIImageConfig{
 		ImageConfig:             ociCfg,
 		DockerOCIImageConfigExt: ext,
 	}

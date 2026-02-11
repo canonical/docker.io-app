@@ -13,9 +13,9 @@ import (
 
 	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/build"
 	"github.com/google/go-cmp/cmp"
 	"github.com/moby/go-archive/compression"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/fs"
 	"gotest.tools/v3/skip"
@@ -25,7 +25,7 @@ func TestRunBuildDockerfileFromStdinWithCompress(t *testing.T) {
 	t.Setenv("DOCKER_BUILDKIT", "0")
 	buffer := new(bytes.Buffer)
 	fakeBuild := newFakeBuild()
-	fakeImageBuild := func(ctx context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error) {
+	fakeImageBuild := func(ctx context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 		tee := io.TeeReader(buildContext, buffer)
 		gzipReader, err := gzip.NewReader(tee)
 		assert.NilError(t, err)
@@ -47,7 +47,6 @@ func TestRunBuildDockerfileFromStdinWithCompress(t *testing.T) {
 	options.compress = true
 	options.dockerfileName = "-"
 	options.context = dir.Path()
-	options.untrusted = true
 	assert.NilError(t, runBuild(context.TODO(), cli, options))
 
 	expected := []string{fakeBuild.options.Dockerfile, ".dockerignore", "foo"}
@@ -74,7 +73,6 @@ func TestRunBuildResetsUidAndGidInContext(t *testing.T) {
 
 	options := newBuildOptions()
 	options.context = dir.Path()
-	options.untrusted = true
 	assert.NilError(t, runBuild(context.TODO(), cli, options))
 
 	headers := fakeBuild.headers(t)
@@ -109,7 +107,6 @@ COPY data /data
 	options := newBuildOptions()
 	options.context = dir.Path()
 	options.dockerfileName = df.Path()
-	options.untrusted = true
 	assert.NilError(t, runBuild(context.TODO(), cli, options))
 
 	expected := []string{fakeBuild.options.Dockerfile, ".dockerignore", "data"}
@@ -123,7 +120,7 @@ COPY data /data
 // to support testing (ex: docker/cli#294)
 func TestRunBuildFromGitHubSpecialCase(t *testing.T) {
 	t.Setenv("DOCKER_BUILDKIT", "0")
-	cmd := NewBuildCommand(test.NewFakeCli(&fakeClient{}))
+	cmd := newBuildCommand(test.NewFakeCli(&fakeClient{}))
 	// Clone a small repo that exists so git doesn't prompt for credentials
 	cmd.SetArgs([]string{"github.com/docker/for-win"})
 	cmd.SetOut(io.Discard)
@@ -145,8 +142,8 @@ func TestRunBuildFromLocalGitHubDir(t *testing.T) {
 	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte("FROM busybox\n"), 0o644)
 	assert.NilError(t, err)
 
-	client := test.NewFakeCli(&fakeClient{})
-	cmd := NewBuildCommand(client)
+	fakeCLI := test.NewFakeCli(&fakeClient{})
+	cmd := newBuildCommand(fakeCLI)
 	cmd.SetArgs([]string{buildDir})
 	cmd.SetOut(io.Discard)
 	err = cmd.Execute()
@@ -170,7 +167,6 @@ RUN echo hello world
 	cli := test.NewFakeCli(&fakeClient{imageBuildFunc: fakeBuild.build})
 	options := newBuildOptions()
 	options.context = tmpDir.Join("context-link")
-	options.untrusted = true
 	assert.NilError(t, runBuild(context.TODO(), cli, options))
 
 	assert.DeepEqual(t, fakeBuild.filenames(t), []string{"Dockerfile"})
@@ -178,18 +174,18 @@ RUN echo hello world
 
 type fakeBuild struct {
 	context *tar.Reader
-	options build.ImageBuildOptions
+	options client.ImageBuildOptions
 }
 
 func newFakeBuild() *fakeBuild {
 	return &fakeBuild{}
 }
 
-func (f *fakeBuild) build(_ context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error) {
+func (f *fakeBuild) build(_ context.Context, buildContext io.Reader, options client.ImageBuildOptions) (client.ImageBuildResult, error) {
 	f.context = tar.NewReader(buildContext)
 	f.options = options
 	body := new(bytes.Buffer)
-	return build.ImageBuildResponse{Body: io.NopCloser(body)}, nil
+	return client.ImageBuildResult{Body: io.NopCloser(body)}, nil
 }
 
 func (f *fakeBuild) headers(t *testing.T) []*tar.Header {

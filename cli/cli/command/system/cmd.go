@@ -3,23 +3,34 @@ package system
 import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/internal/commands"
 	"github.com/spf13/cobra"
 )
 
-// NewSystemCommand returns a cobra command for `system` subcommands
-func NewSystemCommand(dockerCli command.Cli) *cobra.Command {
+func init() {
+	commands.Register(newVersionCommand)
+	commands.Register(newInfoCommand)
+	commands.Register(newSystemCommand)
+	commands.RegisterLegacy(newEventsCommand)
+	commands.RegisterLegacy(newInspectCommand)
+}
+
+// newSystemCommand returns a cobra command for `system` subcommands
+func newSystemCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "system",
 		Short: "Manage Docker",
 		Args:  cli.NoArgs,
-		RunE:  command.ShowHelp(dockerCli.Err()),
+		RunE:  command.ShowHelp(dockerCLI.Err()),
+
+		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(
-		NewEventsCommand(dockerCli),
-		NewInfoCommand(dockerCli),
-		newDiskUsageCommand(dockerCli),
-		newPruneCommand(dockerCli),
-		newDialStdioCommand(dockerCli),
+		newEventsCommand(dockerCLI),
+		newInfoCommand(dockerCLI),
+		newDiskUsageCommand(dockerCLI),
+		newPruneCommand(dockerCLI),
+		newDialStdioCommand(dockerCLI),
 	)
 
 	return cmd

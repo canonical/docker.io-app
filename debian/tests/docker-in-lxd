@@ -113,6 +113,9 @@ lxc storage volume attach docker-storage docker-vol docker /var/lib/docker
 
 defer 'lxc delete --force docker'
 
+# Workaround for LP: #2131809. Although the bug is fixed, we need to wait for
+# the fix to propagate before we can remove this.
+lxc exec docker rm /etc/cloud/cloud.cfg.d/90_dpkg_local_cloud_config.cfg
 # autopkgtest will have done some complicated things to ensure that "apt
 # install docker.io" installs the version that should be tested in the
 # host. But we want to test that version of docker in the container, so

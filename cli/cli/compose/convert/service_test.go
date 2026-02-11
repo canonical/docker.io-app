@@ -3,15 +3,17 @@ package convert
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	composetypes "github.com/docker/cli/cli/compose/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -307,17 +309,17 @@ var (
 func TestConvertDNSConfigAll(t *testing.T) {
 	dnsConfig := convertDNSConfig(nameservers, search)
 	assert.Check(t, is.DeepEqual(&swarm.DNSConfig{
-		Nameservers: nameservers,
+		Nameservers: toNetipAddrSlice(nameservers),
 		Search:      search,
-	}, dnsConfig))
+	}, dnsConfig, cmpopts.EquateComparable(netip.Addr{})))
 }
 
 func TestConvertDNSConfigNameservers(t *testing.T) {
 	dnsConfig := convertDNSConfig(nameservers, nil)
 	assert.Check(t, is.DeepEqual(&swarm.DNSConfig{
-		Nameservers: nameservers,
+		Nameservers: toNetipAddrSlice(nameservers),
 		Search:      nil,
-	}, dnsConfig))
+	}, dnsConfig, cmpopts.EquateComparable(netip.Addr{})))
 }
 
 func TestConvertDNSConfigSearch(t *testing.T) {
@@ -325,7 +327,7 @@ func TestConvertDNSConfigSearch(t *testing.T) {
 	assert.Check(t, is.DeepEqual(&swarm.DNSConfig{
 		Nameservers: nil,
 		Search:      search,
-	}, dnsConfig))
+	}, dnsConfig, cmpopts.EquateComparable(netip.Addr{})))
 }
 
 func TestConvertCredentialSpec(t *testing.T) {
@@ -425,19 +427,19 @@ func TestConvertCredentialSpec(t *testing.T) {
 func TestConvertUpdateConfigOrder(t *testing.T) {
 	// test default behavior
 	updateConfig := convertUpdateConfig(&composetypes.UpdateConfig{})
-	assert.Check(t, is.Equal("", updateConfig.Order))
+	assert.Check(t, is.Equal("", string(updateConfig.Order)))
 
 	// test start-first
 	updateConfig = convertUpdateConfig(&composetypes.UpdateConfig{
 		Order: "start-first",
 	})
-	assert.Check(t, is.Equal(updateConfig.Order, "start-first"))
+	assert.Check(t, is.Equal(string(updateConfig.Order), "start-first"))
 
 	// test stop-first
 	updateConfig = convertUpdateConfig(&composetypes.UpdateConfig{
 		Order: "stop-first",
 	})
-	assert.Check(t, is.Equal(updateConfig.Order, "stop-first"))
+	assert.Check(t, is.Equal(string(updateConfig.Order), "stop-first"))
 }
 
 func TestConvertFileObject(t *testing.T) {
@@ -493,7 +495,7 @@ func TestServiceConvertsIsolation(t *testing.T) {
 	src := composetypes.ServiceConfig{
 		Isolation: "hyperv",
 	}
-	result, err := Service("1.35", Namespace{name: "foo"}, src, nil, nil, nil, nil)
+	result, err := Service(Namespace{name: "foo"}, src, nil, nil, nil, nil)
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(container.IsolationHyperV, result.TaskTemplate.ContainerSpec.Isolation))
 }
@@ -513,12 +515,14 @@ func TestConvertServiceSecrets(t *testing.T) {
 		},
 	}
 	apiClient := &fakeClient{
-		secretListFunc: func(opts swarm.SecretListOptions) ([]swarm.Secret, error) {
-			assert.Check(t, is.Contains(opts.Filters.Get("name"), "foo_secret"))
-			assert.Check(t, is.Contains(opts.Filters.Get("name"), "bar_secret"))
-			return []swarm.Secret{
-				{Spec: swarm.SecretSpec{Annotations: swarm.Annotations{Name: "foo_secret"}}},
-				{Spec: swarm.SecretSpec{Annotations: swarm.Annotations{Name: "bar_secret"}}},
+		secretListFunc: func(opts client.SecretListOptions) (client.SecretListResult, error) {
+			assert.Check(t, opts.Filters["name"]["foo_secret"])
+			assert.Check(t, opts.Filters["name"]["bar_secret"])
+			return client.SecretListResult{
+				Items: []swarm.Secret{
+					{Spec: swarm.SecretSpec{Annotations: swarm.Annotations{Name: "foo_secret"}}},
+					{Spec: swarm.SecretSpec{Annotations: swarm.Annotations{Name: "bar_secret"}}},
+				},
 			}, nil
 		},
 	}
@@ -571,14 +575,16 @@ func TestConvertServiceConfigs(t *testing.T) {
 		},
 	}
 	apiClient := &fakeClient{
-		configListFunc: func(opts swarm.ConfigListOptions) ([]swarm.Config, error) {
-			assert.Check(t, is.Contains(opts.Filters.Get("name"), "foo_config"))
-			assert.Check(t, is.Contains(opts.Filters.Get("name"), "bar_config"))
-			assert.Check(t, is.Contains(opts.Filters.Get("name"), "baz_config"))
-			return []swarm.Config{
-				{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "foo_config"}}},
-				{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "bar_config"}}},
-				{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "baz_config"}}},
+		configListFunc: func(opts client.ConfigListOptions) (client.ConfigListResult, error) {
+			assert.Check(t, opts.Filters["name"]["foo_config"])
+			assert.Check(t, opts.Filters["name"]["bar_config"])
+			assert.Check(t, opts.Filters["name"]["baz_config"])
+			return client.ConfigListResult{
+				Items: []swarm.Config{
+					{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "foo_config"}}},
+					{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "bar_config"}}},
+					{Spec: swarm.ConfigSpec{Annotations: swarm.Annotations{Name: "baz_config"}}},
+				},
 			}, nil
 		},
 	}
@@ -614,22 +620,22 @@ func TestConvertServiceConfigs(t *testing.T) {
 
 type fakeClient struct {
 	client.Client
-	secretListFunc func(swarm.SecretListOptions) ([]swarm.Secret, error)
-	configListFunc func(swarm.ConfigListOptions) ([]swarm.Config, error)
+	secretListFunc func(client.SecretListOptions) (client.SecretListResult, error)
+	configListFunc func(client.ConfigListOptions) (client.ConfigListResult, error)
 }
 
-func (c *fakeClient) SecretList(_ context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error) {
+func (c *fakeClient) SecretList(_ context.Context, options client.SecretListOptions) (client.SecretListResult, error) {
 	if c.secretListFunc != nil {
 		return c.secretListFunc(options)
 	}
-	return []swarm.Secret{}, nil
+	return client.SecretListResult{}, nil
 }
 
-func (c *fakeClient) ConfigList(_ context.Context, options swarm.ConfigListOptions) ([]swarm.Config, error) {
+func (c *fakeClient) ConfigList(_ context.Context, options client.ConfigListOptions) (client.ConfigListResult, error) {
 	if c.configListFunc != nil {
 		return c.configListFunc(options)
 	}
-	return []swarm.Config{}, nil
+	return client.ConfigListResult{}, nil
 }
 
 func TestConvertUpdateConfigParallelism(t *testing.T) {
@@ -690,7 +696,7 @@ func TestConvertServiceCapAddAndCapDrop(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.title, func(t *testing.T) {
-			result, err := Service("1.41", Namespace{name: "foo"}, tc.in, nil, nil, nil, nil)
+			result, err := Service(Namespace{name: "foo"}, tc.in, nil, nil, nil, nil)
 			assert.NilError(t, err)
 			assert.Check(t, is.DeepEqual(result.TaskTemplate.ContainerSpec.CapabilityAdd, tc.out.CapAdd))
 			assert.Check(t, is.DeepEqual(result.TaskTemplate.ContainerSpec.CapabilityDrop, tc.out.CapDrop))

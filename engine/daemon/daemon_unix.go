@@ -1,7 +1,6 @@
-// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23 && (linux || freebsd)
+//go:build linux || freebsd
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"bufio"
@@ -23,27 +22,24 @@ import (
 	"github.com/containerd/cgroups/v3"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/blkiodev"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/daemon/initlayer"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/nlwrap"
-	"github.com/docker/docker/internal/otelutil"
-	"github.com/docker/docker/internal/usergroup"
-	"github.com/docker/docker/libcontainerd/remote"
-	"github.com/docker/docker/libnetwork"
-	nwconfig "github.com/docker/docker/libnetwork/config"
-	"github.com/docker/docker/libnetwork/drivers/bridge"
-	"github.com/docker/docker/libnetwork/netlabel"
-	"github.com/docker/docker/libnetwork/options"
-	lntypes "github.com/docker/docker/libnetwork/types"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/sysinfo"
-	"github.com/docker/docker/runconfig"
-	volumemounts "github.com/docker/docker/volume/mounts"
+	"github.com/moby/moby/api/types/blkiodev"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/initlayer"
+	"github.com/moby/moby/v2/daemon/internal/otelutil"
+	"github.com/moby/moby/v2/daemon/internal/usergroup"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	nwconfig "github.com/moby/moby/v2/daemon/libnetwork/config"
+	"github.com/moby/moby/v2/daemon/libnetwork/drivers/bridge"
+	"github.com/moby/moby/v2/daemon/libnetwork/netlabel"
+	"github.com/moby/moby/v2/daemon/libnetwork/nlwrap"
+	lntypes "github.com/moby/moby/v2/daemon/libnetwork/types"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	volumemounts "github.com/moby/moby/v2/daemon/volume/mounts"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/pkg/sysinfo"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/user"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -106,14 +102,6 @@ func getMemoryResources(config containertypes.Resources) *specs.LinuxMemory {
 
 	if config.OomKillDisable != nil {
 		memory.DisableOOMKiller = config.OomKillDisable
-	}
-
-	if config.KernelMemory != 0 { //nolint:staticcheck // ignore SA1019: memory.Kernel is deprecated: kernel-memory limits are not supported in cgroups v2, and were obsoleted in [kernel v5.4]. This field should no longer be used, as it may be ignored by runtimes.
-		memory.Kernel = &config.KernelMemory //nolint:staticcheck // ignore SA1019: memory.Kernel is deprecated: kernel-memory limits are not supported in cgroups v2, and were obsoleted in [kernel v5.4]. This field should no longer be used, as it may be ignored by runtimes.
-	}
-
-	if config.KernelMemoryTCP != 0 {
-		memory.KernelTCP = &config.KernelMemoryTCP
 	}
 
 	if memory != (specs.LinuxMemory{}) {
@@ -418,7 +406,7 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 
 	// memory subsystem checks and adjustments
 	if resources.Memory != 0 && resources.Memory < linuxMinMemory {
-		return warnings, fmt.Errorf("Minimum memory limit allowed is 6MB")
+		return warnings, errors.New("Minimum memory limit allowed is 6MB")
 	}
 	if resources.Memory > 0 && !sysInfo.MemoryLimit {
 		warnings = append(warnings, "Your kernel does not support memory limit capabilities or the cgroup is not mounted. Limitation discarded.")
@@ -430,10 +418,10 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		resources.MemorySwap = -1
 	}
 	if resources.Memory > 0 && resources.MemorySwap > 0 && resources.MemorySwap < resources.Memory {
-		return warnings, fmt.Errorf("Minimum memoryswap limit should be larger than memory limit, see usage")
+		return warnings, errors.New("Minimum memoryswap limit should be larger than memory limit, see usage")
 	}
 	if resources.Memory == 0 && resources.MemorySwap > 0 && !update {
-		return warnings, fmt.Errorf("You should always set the Memory limit when using Memoryswap limit, see usage")
+		return warnings, errors.New("You should always set the Memory limit when using Memoryswap limit, see usage")
 	}
 	if resources.MemorySwappiness != nil && !sysInfo.MemorySwappiness {
 		warnings = append(warnings, "Your kernel does not support memory swappiness capabilities or the cgroup is not mounted. Memory swappiness discarded.")
@@ -450,22 +438,10 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		resources.MemoryReservation = 0
 	}
 	if resources.MemoryReservation > 0 && resources.MemoryReservation < linuxMinMemory {
-		return warnings, fmt.Errorf("Minimum memory reservation allowed is 6MB")
+		return warnings, errors.New("Minimum memory reservation allowed is 6MB")
 	}
 	if resources.Memory > 0 && resources.MemoryReservation > 0 && resources.Memory < resources.MemoryReservation {
-		return warnings, fmt.Errorf("Minimum memory limit can not be less than memory reservation limit, see usage")
-	}
-	if resources.KernelMemory > 0 {
-		// Kernel memory limit is not supported on cgroup v2.
-		// Even on cgroup v1, kernel memory limit (`kmem.limit_in_bytes`) has been deprecated since kernel 5.4.
-		// https://github.com/torvalds/linux/commit/0158115f702b0ba208ab0b5adf44cae99b3ebcc7
-		if !sysInfo.KernelMemory {
-			warnings = append(warnings, "Your kernel does not support kernel memory limit capabilities or the cgroup is not mounted. Limitation discarded.")
-			resources.KernelMemory = 0
-		}
-		if resources.KernelMemory > 0 && resources.KernelMemory < linuxMinMemory {
-			return warnings, fmt.Errorf("Minimum kernel memory limit allowed is 6MB")
-		}
+		return warnings, errors.New("Minimum memory limit can not be less than memory reservation limit, see usage")
 	}
 	if resources.OomKillDisable != nil && !sysInfo.OomKillDisable {
 		// only produce warnings if the setting wasn't to *disable* the OOM Kill; no point
@@ -487,13 +463,13 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 
 	// cpu subsystem checks and adjustments
 	if resources.NanoCPUs > 0 && resources.CPUPeriod > 0 {
-		return warnings, fmt.Errorf("Conflicting options: Nano CPUs and CPU Period cannot both be set")
+		return warnings, errors.New("Conflicting options: Nano CPUs and CPU Period cannot both be set")
 	}
 	if resources.NanoCPUs > 0 && resources.CPUQuota > 0 {
-		return warnings, fmt.Errorf("Conflicting options: Nano CPUs and CPU Quota cannot both be set")
+		return warnings, errors.New("Conflicting options: Nano CPUs and CPU Quota cannot both be set")
 	}
 	if resources.NanoCPUs > 0 && !sysInfo.CPUCfs {
-		return warnings, fmt.Errorf("NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted")
+		return warnings, errors.New("NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted")
 	}
 	// The highest precision we could get on Linux is 0.001, by setting
 	//   cpu.cfs_period_us=1000ms
@@ -519,10 +495,10 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		resources.CPUQuota = 0
 	}
 	if resources.CPUPeriod != 0 && (resources.CPUPeriod < 1000 || resources.CPUPeriod > 1000000) {
-		return warnings, fmt.Errorf("CPU cfs period can not be less than 1ms (i.e. 1000) or larger than 1s (i.e. 1000000)")
+		return warnings, errors.New("CPU cfs period can not be less than 1ms (i.e. 1000) or larger than 1s (i.e. 1000000)")
 	}
 	if resources.CPUQuota > 0 && resources.CPUQuota < 1000 {
-		return warnings, fmt.Errorf("CPU cfs quota can not be less than 1ms (i.e. 1000)")
+		return warnings, errors.New("CPU cfs quota can not be less than 1ms (i.e. 1000)")
 	}
 	if resources.CPUPercent > 0 {
 		warnings = append(warnings, fmt.Sprintf("%s does not support CPU percent. Percent discarded.", runtime.GOOS))
@@ -556,7 +532,7 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		resources.BlkioWeight = 0
 	}
 	if resources.BlkioWeight > 0 && (resources.BlkioWeight < 10 || resources.BlkioWeight > 1000) {
-		return warnings, fmt.Errorf("Range of blkio weight is from 10 to 1000")
+		return warnings, errors.New("Range of blkio weight is from 10 to 1000")
 	}
 	if resources.IOMaximumBandwidth != 0 || resources.IOMaximumIOps != 0 {
 		return warnings, fmt.Errorf("Invalid QoS settings: %s does not support Maximum IO Bandwidth or Maximum IO IOps", runtime.GOOS)
@@ -672,7 +648,7 @@ func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hos
 		return warnings, errors.Errorf("invalid PID mode: %v", hostConfig.PidMode)
 	}
 	if hostConfig.ShmSize < 0 {
-		return warnings, fmt.Errorf("SHM size can not be less than 0")
+		return warnings, errors.New("SHM size can not be less than 0")
 	}
 	if !hostConfig.UTSMode.Valid() {
 		return warnings, errors.Errorf("invalid UTS mode: %v", hostConfig.UTSMode)
@@ -693,19 +669,19 @@ func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hos
 	// check for various conflicting options with user namespaces
 	if daemonCfg.RemappedRoot != "" && hostConfig.UsernsMode.IsPrivate() {
 		if hostConfig.Privileged {
-			return warnings, fmt.Errorf("privileged mode is incompatible with user namespaces.  You must run the container in the host namespace when running privileged mode")
+			return warnings, errors.New("privileged mode is incompatible with user namespaces.  You must run the container in the host namespace when running privileged mode")
 		}
 		if hostConfig.NetworkMode.IsHost() && !hostConfig.UsernsMode.IsHost() {
-			return warnings, fmt.Errorf("cannot share the host's network namespace when user namespaces are enabled")
+			return warnings, errors.New("cannot share the host's network namespace when user namespaces are enabled")
 		}
 		if hostConfig.PidMode.IsHost() && !hostConfig.UsernsMode.IsHost() {
-			return warnings, fmt.Errorf("cannot share the host PID namespace when user namespaces are enabled")
+			return warnings, errors.New("cannot share the host PID namespace when user namespaces are enabled")
 		}
 	}
 	if hostConfig.CgroupParent != "" && UsingSystemd(&daemonCfg.Config) {
 		// CgroupParent for systemd cgroup should be named as "xxx.slice"
 		if len(hostConfig.CgroupParent) <= 6 || !strings.HasSuffix(hostConfig.CgroupParent, ".slice") {
-			return warnings, fmt.Errorf(`cgroup-parent for systemd cgroup should be a valid slice named as "xxx.slice"`)
+			return warnings, errors.New(`cgroup-parent for systemd cgroup should be a valid slice named as "xxx.slice"`)
 		}
 	}
 	if hostConfig.Runtime == "" {
@@ -742,17 +718,17 @@ func verifyDaemonSettings(conf *config.Config) error {
 	}
 	// Check for mutually incompatible config options
 	if conf.BridgeConfig.Iface != "" && conf.BridgeConfig.IP != "" {
-		return fmt.Errorf("You specified -b & --bip, mutually exclusive options. Please specify only one")
+		return errors.New("You specified -b & --bip, mutually exclusive options. Please specify only one")
 	}
 	if conf.BridgeConfig.Iface != "" && conf.BridgeConfig.IP6 != "" {
-		return fmt.Errorf("You specified -b & --bip6, mutually exclusive options. Please specify only one")
+		return errors.New("You specified -b & --bip6, mutually exclusive options. Please specify only one")
 	}
 	if !conf.BridgeConfig.InterContainerCommunication {
 		if !conf.BridgeConfig.EnableIPTables {
-			return fmt.Errorf("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true")
+			return errors.New("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true")
 		}
 		if conf.BridgeConfig.EnableIPv6 && !conf.BridgeConfig.EnableIP6Tables {
-			return fmt.Errorf("You specified --ip6tables=false with --icc=false. ICC=false uses ip6tables to function. Please set --icc or --ip6tables to true")
+			return errors.New("You specified --ip6tables=false with --icc=false. ICC=false uses ip6tables to function. Please set --icc or --ip6tables to true")
 		}
 	}
 	if !conf.BridgeConfig.EnableIPTables && conf.BridgeConfig.EnableIPMasq {
@@ -763,12 +739,12 @@ func verifyDaemonSettings(conf *config.Config) error {
 	}
 	if conf.CgroupParent != "" && UsingSystemd(conf) {
 		if len(conf.CgroupParent) <= 6 || !strings.HasSuffix(conf.CgroupParent, ".slice") {
-			return fmt.Errorf(`cgroup-parent for systemd cgroup should be a valid slice named as "xxx.slice"`)
+			return errors.New(`cgroup-parent for systemd cgroup should be a valid slice named as "xxx.slice"`)
 		}
 	}
 
 	if conf.Rootless && UsingSystemd(conf) && cgroups.Mode() != cgroups.Unified {
-		return fmt.Errorf("exec-opt native.cgroupdriver=systemd requires cgroup v2 for rootless mode")
+		return errors.New("exec-opt native.cgroupdriver=systemd requires cgroup v2 for rootless mode")
 	}
 	return nil
 }
@@ -915,7 +891,7 @@ func setHostGatewayIP(controller *libnetwork.Controller, config *config.Config) 
 		v4Info, v6Info := n.IpamInfo()
 		if len(v4Info) > 0 {
 			addr, _ := netip.AddrFromSlice(v4Info[0].Gateway.IP)
-			config.HostGatewayIPs = append(config.HostGatewayIPs, addr)
+			config.HostGatewayIPs = append(config.HostGatewayIPs, addr.Unmap())
 		}
 		if len(v6Info) > 0 {
 			addr, _ := netip.AddrFromSlice(v6Info[0].Gateway.IP)
@@ -924,19 +900,23 @@ func setHostGatewayIP(controller *libnetwork.Controller, config *config.Config) 
 	}
 }
 
-func driverOptions(config *config.Config) nwconfig.Option {
-	return nwconfig.OptionDriverConfig("bridge", options.Generic{
-		netlabel.GenericData: options.Generic{
-			"EnableIPForwarding":       config.BridgeConfig.EnableIPForward,
-			"DisableFilterForwardDrop": config.BridgeConfig.DisableFilterForwardDrop,
-			"EnableIPTables":           config.BridgeConfig.EnableIPTables,
-			"EnableIP6Tables":          config.BridgeConfig.EnableIP6Tables,
-			"EnableUserlandProxy":      config.BridgeConfig.EnableUserlandProxy,
-			"UserlandProxyPath":        config.BridgeConfig.UserlandProxyPath,
-			"AllowDirectRouting":       config.BridgeConfig.AllowDirectRouting,
-			"Rootless":                 config.Rootless,
-		},
-	})
+// networkPlatformOptions returns a slice of platform-specific libnetwork
+// options.
+func networkPlatformOptions(conf *config.Config) []nwconfig.Option {
+	return []nwconfig.Option{
+		nwconfig.OptionRootless(conf.Rootless),
+		nwconfig.OptionUserlandProxy(conf.EnableUserlandProxy, conf.UserlandProxyPath),
+		nwconfig.OptionBridgeConfig(bridge.Configuration{
+			EnableIPForwarding:       conf.BridgeConfig.EnableIPForward,
+			DisableFilterForwardDrop: conf.BridgeConfig.DisableFilterForwardDrop,
+			EnableIPTables:           conf.BridgeConfig.EnableIPTables,
+			EnableIP6Tables:          conf.BridgeConfig.EnableIP6Tables,
+			EnableProxy:              conf.EnableUserlandProxy && conf.UserlandProxyPath != "",
+			ProxyPath:                conf.UserlandProxyPath,
+			AllowDirectRouting:       conf.BridgeConfig.AllowDirectRouting,
+			AcceptFwMark:             conf.BridgeConfig.BridgeAcceptFwMark,
+		}),
+	}
 }
 
 type defBrOptsV4 struct {
@@ -1357,7 +1337,7 @@ func parseRemappedRoot(usergrp string) (string, string, error) {
 
 func setupRemappedRoot(config *config.Config) (user.IdentityMapping, error) {
 	if runtime.GOOS != "linux" && config.RemappedRoot != "" {
-		return user.IdentityMapping{}, fmt.Errorf("User namespaces are only supported on Linux")
+		return user.IdentityMapping{}, errors.New("User namespaces are only supported on Linux")
 	}
 
 	// if the daemon was started with remapped root option, parse
@@ -1524,12 +1504,12 @@ func getUnmountOnShutdownPath(config *config.Config) string {
 
 // registerLinks registers network links between container and other containers
 // with the daemon using the specification in hostConfig.
-func (daemon *Daemon) registerLinks(container *container.Container, hostConfig *containertypes.HostConfig) error {
-	if hostConfig == nil || hostConfig.NetworkMode.IsUserDefined() {
+func (daemon *Daemon) registerLinks(ctr *container.Container) error {
+	if ctr.HostConfig == nil || ctr.HostConfig.NetworkMode.IsUserDefined() {
 		return nil
 	}
 
-	for _, l := range hostConfig.Links {
+	for _, l := range ctr.HostConfig.Links {
 		name, alias, err := opts.ParseLink(l)
 		if err != nil {
 			return err
@@ -1560,9 +1540,9 @@ func (daemon *Daemon) registerLinks(container *container.Container, hostConfig *
 			}
 		}
 		if child.HostConfig.NetworkMode.IsHost() {
-			return runconfig.ErrConflictHostNetworkAndLinks
+			return cerrdefs.ErrInvalidArgument.WithMessage("conflicting options: host type networking can't be used with links. This would result in undefined behavior")
 		}
-		if err := daemon.registerLink(container, child, alias); err != nil {
+		if err := daemon.registerLink(ctr, child, alias); err != nil {
 			return err
 		}
 	}
@@ -1641,18 +1621,6 @@ func getSysInfo(cfg *config.Config) *sysinfo.SysInfo {
 		}
 	}
 	return sysinfo.New(siOpts...)
-}
-
-func (daemon *Daemon) initLibcontainerd(ctx context.Context, cfg *config.Config) error {
-	var err error
-	daemon.containerd, err = remote.NewClient(
-		ctx,
-		daemon.containerdClient,
-		filepath.Join(cfg.ExecRoot, "containerd"),
-		cfg.ContainerdNamespace,
-		daemon,
-	)
-	return err
 }
 
 func recursiveUnmount(target string) error {

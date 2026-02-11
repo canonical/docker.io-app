@@ -6,7 +6,8 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/moby/sys/signal"
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
@@ -26,7 +27,7 @@ func TestCompleteLinuxCapabilityNames(t *testing.T) {
 
 func TestCompletePid(t *testing.T) {
 	tests := []struct {
-		containerListFunc   func(container.ListOptions) ([]container.Summary, error)
+		containerListFunc   func(client.ContainerListOptions) (client.ContainerListResult, error)
 		toComplete          string
 		expectedCompletions []string
 		expectedDirective   cobra.ShellCompDirective
@@ -42,10 +43,12 @@ func TestCompletePid(t *testing.T) {
 			expectedDirective:   cobra.ShellCompDirectiveNoSpace,
 		},
 		{
-			containerListFunc: func(container.ListOptions) ([]container.Summary, error) {
-				return []container.Summary{
-					*builders.Container("c1"),
-					*builders.Container("c2"),
+			containerListFunc: func(client.ContainerListOptions) (client.ContainerListResult, error) {
+				return client.ContainerListResult{
+					Items: []container.Summary{
+						*builders.Container("c1"),
+						*builders.Container("c2"),
+					},
 				}, nil
 			},
 			toComplete:          "container:",
@@ -59,7 +62,7 @@ func TestCompletePid(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
 				containerListFunc: tc.containerListFunc,
 			})
-			completions, directive := completePid(cli)(NewRunCommand(cli), nil, tc.toComplete)
+			completions, directive := completePid(cli)(newRunCommand(cli), nil, tc.toComplete)
 			assert.Check(t, is.DeepEqual(completions, tc.expectedCompletions))
 			assert.Check(t, is.Equal(directive, tc.expectedDirective))
 		})

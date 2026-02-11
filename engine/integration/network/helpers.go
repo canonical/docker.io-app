@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/internal/testutil"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
 )
@@ -54,12 +53,12 @@ func LinkDoesntExist(ctx context.Context, t *testing.T, master string) {
 // IsNetworkAvailable provides a comparison to check if a docker network is available
 func IsNetworkAvailable(ctx context.Context, c client.NetworkAPIClient, name string) is.Comparison {
 	return func() is.Result {
-		networks, err := c.NetworkList(ctx, network.ListOptions{})
+		res, err := c.NetworkList(ctx, client.NetworkListOptions{})
 		if err != nil {
 			return is.ResultFromError(err)
 		}
-		for _, network := range networks {
-			if network.Name == name {
+		for _, nw := range res.Items {
+			if nw.Name == name {
 				return is.ResultSuccess
 			}
 		}
@@ -70,12 +69,12 @@ func IsNetworkAvailable(ctx context.Context, c client.NetworkAPIClient, name str
 // IsNetworkNotAvailable provides a comparison to check if a docker network is not available
 func IsNetworkNotAvailable(ctx context.Context, c client.NetworkAPIClient, name string) is.Comparison {
 	return func() is.Result {
-		networks, err := c.NetworkList(ctx, network.ListOptions{})
+		res, err := c.NetworkList(ctx, client.NetworkListOptions{})
 		if err != nil {
 			return is.ResultFromError(err)
 		}
-		for _, network := range networks {
-			if network.Name == name {
+		for _, nw := range res.Items {
+			if nw.Name == name {
 				return is.ResultFailure(fmt.Sprintf("network %s is still present", name))
 			}
 		}

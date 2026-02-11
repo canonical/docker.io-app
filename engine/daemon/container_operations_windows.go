@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"os"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/daemon/network"
-	"github.com/docker/docker/libnetwork"
-	"github.com/docker/docker/pkg/system"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/system"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	"github.com/moby/moby/v2/daemon/network"
 	"github.com/pkg/errors"
 )
 
@@ -37,7 +37,7 @@ func (daemon *Daemon) setupConfigDir(ctr *container.Container) (setupErr error) 
 	log.G(context.TODO()).Debugf("configs: setting up config dir: %s", localPath)
 
 	// create local config root
-	if err := system.MkdirAllWithACL(localPath, 0, system.SddlAdministratorsLocalSystem); err != nil {
+	if err := system.MkdirAllWithACL(localPath, system.SddlAdministratorsLocalSystem); err != nil {
 		return errors.Wrap(err, "error creating config dir")
 	}
 
@@ -112,7 +112,7 @@ func (daemon *Daemon) setupSecretDir(ctr *container.Container) (setupErr error) 
 	log.G(context.TODO()).Debugf("secrets: setting up secret dir: %s", localMountPath)
 
 	// create local secret root
-	if err := system.MkdirAllWithACL(localMountPath, 0, system.SddlAdministratorsLocalSystem); err != nil {
+	if err := system.MkdirAllWithACL(localMountPath, system.SddlAdministratorsLocalSystem); err != nil {
 		return errors.Wrap(err, "error creating secret local directory")
 	}
 
@@ -170,8 +170,8 @@ func serviceDiscoveryOnDefaultNetwork() bool {
 	return true
 }
 
-func buildSandboxPlatformOptions(ctr *container.Container, cfg *config.Config, sboxOptions *[]libnetwork.SandboxOption) error {
-	return nil
+func buildSandboxPlatformOptions(ctr *container.Container, cfg *config.Config) ([]libnetwork.SandboxOption, error) {
+	return nil, nil
 }
 
 func (daemon *Daemon) initializeNetworkingPaths(ctr *container.Container, nc *container.Container) error {
@@ -199,7 +199,7 @@ func (daemon *Daemon) initializeNetworkingPaths(ctr *container.Container, nc *co
 			}
 
 			if data["GW_INFO"] != nil {
-				gwInfo := data["GW_INFO"].(map[string]interface{})
+				gwInfo := data["GW_INFO"].(map[string]any)
 				if gwInfo["hnsid"] != nil {
 					ctr.SharedEndpointList = append(ctr.SharedEndpointList, gwInfo["hnsid"].(string))
 				}

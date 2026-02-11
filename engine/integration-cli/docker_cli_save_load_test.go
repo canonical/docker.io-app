@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/internal/testutils/specialimage"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
+	"github.com/moby/moby/v2/internal/testutil/specialimage"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -24,12 +24,12 @@ type DockerCLISaveLoadSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLISaveLoadSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLISaveLoadSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLISaveLoadSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLISaveLoadSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 // save a repo using gz compression and try to load it using stdout
@@ -128,15 +128,15 @@ func (s *DockerCLISaveLoadSuite) TestSaveImageId(c *testing.T) {
 	assert.Assert(c, cleanedLongImageID != "", "Id should not be empty.")
 	assert.Assert(c, cleanedShortImageID != "", "Id should not be empty.")
 
+	// TODO(thaJeztah): this fails with full image ID
 	saveCmd := exec.Command(dockerBinary, "save", cleanedShortImageID)
 	tarCmd := exec.Command("tar", "t")
 
 	var err error
 	tarCmd.Stdin, err = saveCmd.StdoutPipe()
-	assert.Assert(c, err == nil, "cannot set stdout pipe for tar: %v", err)
-	grepCmd := exec.Command("grep", cleanedLongImageID)
-	grepCmd.Stdin, err = tarCmd.StdoutPipe()
-	assert.Assert(c, err == nil, "cannot set stdout pipe for grep: %v", err)
+	assert.NilError(c, err, "cannot set stdin pipe for tar: %v", err)
+	tarStream, err := tarCmd.StdoutPipe()
+	assert.NilError(c, err, "get tar output pipe: %v", err)
 
 	assert.Assert(c, tarCmd.Start() == nil, "tar failed with error: %v", err)
 	assert.Assert(c, saveCmd.Start() == nil, "docker save failed with error: %v", err)
@@ -146,9 +146,9 @@ func (s *DockerCLISaveLoadSuite) TestSaveImageId(c *testing.T) {
 		cli.DockerCmd(c, "rmi", imgRepoName)
 	}()
 
-	out, _, err = runCommandWithOutput(grepCmd)
-
-	assert.Assert(c, err == nil, "failed to save repo with image ID: %s, %v", out, err)
+	res := icmd.RunCmd(icmd.Command("grep", "blobs/sha256/"+cleanedLongImageID), icmd.WithStdin(tarStream))
+	out, err = res.Combined(), res.Error
+	assert.NilError(c, err, "failed to save repo with image ID: %s, %v", out, err)
 }
 
 // save a repo and try to load it using flags
@@ -230,8 +230,24 @@ func (s *DockerCLISaveLoadSuite) TestSaveMultipleNames(c *testing.T) {
 
 // Test loading a weird image where one of the layers is of zero size.
 // The layer.tar file is actually zero bytes, no padding or anything else.
-// See issue: 18170
+// See issue: https://github.com/moby/moby/issues/18170
 func (s *DockerCLISaveLoadSuite) TestLoadZeroSizeLayer(c *testing.T) {
+	// The "testdata/emptyLayer.tar" archive uses the legacy format, which fails
+	// to import because there's no "manifest.json" included.
+	//
+	// This test was written for a situation where the user created an archive
+	// that did contain *entries* for (layer) files, but those files were
+	// deliberately empty as an optimization step (to use content already
+	// present);
+	//
+	// - https://github.com/moby/moby/issues/18170
+	// - https://github.com/moby/moby/pull/50324#issuecomment-3033482915
+	//
+	// Keeping the test for now as a reminder that  we may want to verify "empty
+	// files in archive" cases, but we can decide to consider this an invalid
+	// situation (either files must be included and non-empty, or omitted).
+	c.Skip("test is using an archive using the legacy format")
+
 	// TODO(vvoland): Create an OCI image with 0 bytes layer.
 	skip.If(c, testEnv.UsingSnapshotter(), "input archive is not OCI compatible")
 
@@ -284,7 +300,7 @@ func (s *DockerCLISaveLoadSuite) TestSaveLoadNoTag(c *testing.T) {
 
 	name := "saveloadnotag"
 
-	buildImageSuccessfully(c, name, build.WithDockerfile("FROM busybox\nENV foo=bar"))
+	cli.BuildCmd(c, name, build.WithDockerfile("FROM busybox\nENV foo=bar"))
 	id := inspectField(c, name, "Id")
 
 	// Test to make sure that save w/o name just shows imageID during load

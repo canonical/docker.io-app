@@ -3,7 +3,6 @@ package containerd
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -17,13 +16,14 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/auxprogress"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/metrics"
-	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/pkg/streamformatter"
+	"github.com/moby/moby/api/types/auxprogress"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
+	"github.com/moby/moby/v2/daemon/internal/progress"
+	"github.com/moby/moby/v2/daemon/internal/streamformatter"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -40,14 +40,23 @@ import (
 // pointing to the new target repository. This will allow subsequent pushes
 // to perform cross-repo mounts of the shared content when pushing to a different
 // repository on the same registry.
-func (i *ImageService) PushImage(ctx context.Context, sourceRef reference.Named, platform *ocispec.Platform, metaHeaders map[string][]string, authConfig *registry.AuthConfig, outStream io.Writer) (retErr error) {
+func (i *ImageService) PushImage(ctx context.Context, sourceRef reference.Named, options imagebackend.PushOptions) (retErr error) {
+	if len(options.Platforms) > 1 {
+		// TODO(thaJeztah): add support for pushing multiple platforms
+		return cerrdefs.ErrInvalidArgument.WithMessage("multiple platforms is not supported")
+	}
 	start := time.Now()
 	defer func() {
 		if retErr == nil {
 			metrics.ImageActions.WithValues("push").UpdateSince(start)
 		}
 	}()
-	out := streamformatter.NewJSONProgressOutput(outStream, false)
+	var platform *ocispec.Platform
+	if len(options.Platforms) > 0 {
+		p := options.Platforms[0]
+		platform = &p
+	}
+	out := streamformatter.NewJSONProgressOutput(options.OutStream, false)
 	progress.Messagef(out, "", "The push refers to repository [%s]", sourceRef.Name())
 
 	if _, tagged := sourceRef.(reference.Tagged); !tagged {
@@ -75,7 +84,7 @@ func (i *ImageService) PushImage(ctx context.Context, sourceRef reference.Named,
 					continue
 				}
 
-				if err := i.pushRef(ctx, named, platform, metaHeaders, authConfig, out); err != nil {
+				if err := i.pushRef(ctx, named, platform, options.MetaHeaders, options.AuthConfig, out); err != nil {
 					return err
 				}
 			}
@@ -84,7 +93,7 @@ func (i *ImageService) PushImage(ctx context.Context, sourceRef reference.Named,
 		}
 	}
 
-	return i.pushRef(ctx, sourceRef, platform, metaHeaders, authConfig, out)
+	return i.pushRef(ctx, sourceRef, platform, options.MetaHeaders, options.AuthConfig, out)
 }
 
 func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, platform *ocispec.Platform, metaHeaders map[string][]string, authConfig *registry.AuthConfig, out progress.Output) (retErr error) {
@@ -115,7 +124,7 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 	}
 
 	store := i.content
-	resolver, tracker := i.newResolverFromAuthConfig(ctx, authConfig, targetRef)
+	resolver, tracker := i.newResolverFromAuthConfig(ctx, authConfig, targetRef, metaHeaders)
 	pp := pushProgress{Tracker: tracker}
 	jobsQueue := newJobs()
 	finishProgress := jobsQueue.showProgress(ctx, out, combinedProgress([]progressUpdater{
@@ -131,7 +140,7 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 		}
 	}()
 
-	var limiter *semaphore.Weighted = nil // TODO: Respect max concurrent downloads/uploads
+	var limiter *semaphore.Weighted // TODO: Respect max concurrent downloads/uploads
 
 	mountableBlobs, err := findMissingMountable(ctx, store, jobsQueue, target, targetRef, limiter)
 	if err != nil {
@@ -143,21 +152,6 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 	realStore := store
 	wrapped := wrapWithFakeMountableBlobs(store, mountableBlobs)
 	store = wrapped
-
-	// Annotate ref with digest to push only push tag for single digest
-	ref := targetRef
-	if _, digested := ref.(reference.Digested); !digested {
-		ref, err = reference.WithDigest(ref, target.Digest)
-		if err != nil {
-			return err
-		}
-	}
-
-	pusher, err := resolver.Pusher(ctx, ref.String())
-	if err != nil {
-		return err
-	}
-
 	addLayerJobs := c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 		if showBlobProgress(desc) {
 			jobsQueue.Add(desc)
@@ -170,7 +164,25 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 		return c8dimages.Handlers(addLayerJobs, h)
 	}
 
-	err = remotes.PushContent(ctx, pusher, target, store, limiter, platforms.All, handlerWrapper)
+	push := func(ctx context.Context, desc ocispec.Descriptor) error {
+		ref := targetRef
+
+		if _, digested := ref.(reference.Digested); !digested {
+			// Annotate ref with digest to push only push tag for single digest
+			ref, err = reference.WithDigest(ref, target.Digest)
+			if err != nil {
+				return err
+			}
+		}
+		pusher, err := resolver.Pusher(ctx, ref.String())
+		if err != nil {
+			return err
+		}
+
+		return remotes.PushContent(ctx, pusher, desc, store, limiter, platforms.All, handlerWrapper)
+	}
+
+	err = push(ctx, target)
 	if err != nil {
 		// If push failed because of a missing content, no specific platform was requested
 		// and the target is an index, select a platform-specific manifest to push instead.
@@ -186,7 +198,7 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 				orgTarget := target
 				target = newTarget
 				pp.TurnNotStartedIntoUnavailable()
-				err = remotes.PushContent(ctx, pusher, target, store, limiter, platforms.All, handlerWrapper)
+				err = push(ctx, target)
 
 				if err == nil {
 					progress.Aux(out, auxprogress.ManifestPushedInsteadOfIndex{

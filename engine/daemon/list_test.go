@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/image"
 	"github.com/google/uuid"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/filters"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/server/backend"
 	"github.com/opencontainers/go-digest"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -50,7 +51,7 @@ func setupContainerWithName(t *testing.T, name string, daemon *Daemon) *containe
 		name = "/" + name
 	}
 	c.Name = name
-	c.Running = true
+	c.State.Running = true
 	c.HostConfig = &containertypes.HostConfig{}
 	c.Created = time.Now()
 
@@ -69,7 +70,7 @@ func setupContainerWithName(t *testing.T, name string, daemon *Daemon) *containe
 	return c
 }
 
-func containerListContainsName(containers []*containertypes.Summary, name string) bool {
+func containerListContainsName(containers []containertypes.Summary, name string) bool {
 	for _, ctr := range containers {
 		for _, containerName := range ctr.Names {
 			if containerName == name {
@@ -110,7 +111,7 @@ func TestContainerList(t *testing.T) {
 			}
 
 			// list them and verify correctness
-			containerList, err := d.Containers(context.Background(), &containertypes.ListOptions{All: true})
+			containerList, err := d.Containers(context.Background(), &backend.ContainerListOptions{All: true})
 			assert.NilError(t, err)
 			assert.Assert(t, is.Len(containerList, num))
 
@@ -129,7 +130,7 @@ func TestContainerList_InvalidFilter(t *testing.T) {
 		containersReplica: db,
 	}
 
-	_, err = d.Containers(context.Background(), &containertypes.ListOptions{
+	_, err = d.Containers(context.Background(), &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("invalid", "foo")),
 	})
 	assert.Assert(t, is.Error(err, "invalid filter 'invalid'"))
@@ -150,7 +151,7 @@ func TestContainerList_NameFilter(t *testing.T) {
 
 	// moby/moby #37453 - ^ regex not working due to prefix slash
 	// not being stripped
-	containerList, err := d.Containers(context.Background(), &containertypes.ListOptions{
+	containerList, err := d.Containers(context.Background(), &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("name", "^a")),
 	})
 	assert.NilError(t, err)
@@ -159,7 +160,7 @@ func TestContainerList_NameFilter(t *testing.T) {
 	assert.Assert(t, containerListContainsName(containerList, two.Name))
 
 	// Same as above but with slash prefix should produce the same result
-	containerListWithPrefix, err := d.Containers(context.Background(), &containertypes.ListOptions{
+	containerListWithPrefix, err := d.Containers(context.Background(), &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("name", "^/a")),
 	})
 	assert.NilError(t, err)
@@ -168,7 +169,7 @@ func TestContainerList_NameFilter(t *testing.T) {
 	assert.Assert(t, containerListContainsName(containerListWithPrefix, two.Name))
 
 	// Same as above but make sure it works for exact names
-	containerList, err = d.Containers(context.Background(), &containertypes.ListOptions{
+	containerList, err = d.Containers(context.Background(), &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("name", "b1")),
 	})
 	assert.NilError(t, err)
@@ -176,7 +177,7 @@ func TestContainerList_NameFilter(t *testing.T) {
 	assert.Assert(t, containerListContainsName(containerList, three.Name))
 
 	// Same as above but with slash prefix should produce the same result
-	containerListWithPrefix, err = d.Containers(context.Background(), &containertypes.ListOptions{
+	containerListWithPrefix, err = d.Containers(context.Background(), &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("name", "/b1")),
 	})
 	assert.NilError(t, err)
@@ -216,7 +217,7 @@ func TestContainerList_LimitFilter(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.doc, func(t *testing.T) {
-			containerList, err := d.Containers(context.Background(), &containertypes.ListOptions{Limit: tc.limit})
+			containerList, err := d.Containers(context.Background(), &backend.ContainerListOptions{Limit: tc.limit})
 			assert.NilError(t, err)
 			expectedListLen := num
 			if tc.limit > 0 {

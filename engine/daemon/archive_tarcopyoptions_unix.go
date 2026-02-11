@@ -1,6 +1,6 @@
 //go:build !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"fmt"
@@ -8,15 +8,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
 	"github.com/moby/go-archive"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/user"
 )
 
-func (daemon *Daemon) tarCopyOptions(ctr *container.Container, noOverwriteDirNonDir bool) (*archive.TarOptions, error) {
+func (daemon *Daemon) tarCopyOptions(ctr *container.Container, allowOverwriteDirWithFile bool) (*archive.TarOptions, error) {
 	if ctr.Config.User == "" {
-		return daemon.defaultTarCopyOptions(noOverwriteDirNonDir), nil
+		return daemon.defaultTarCopyOptions(allowOverwriteDirWithFile), nil
 	}
 
 	uid, gid, err := getUIDGID(ctr.Config.User)
@@ -25,7 +25,7 @@ func (daemon *Daemon) tarCopyOptions(ctr *container.Container, noOverwriteDirNon
 	}
 
 	return &archive.TarOptions{
-		NoOverwriteDirNonDir: noOverwriteDirNonDir,
+		NoOverwriteDirNonDir: !allowOverwriteDirWithFile,
 		ChownOpts:            &archive.ChownOpts{UID: uid, GID: gid},
 	}, nil
 }

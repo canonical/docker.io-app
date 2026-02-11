@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"runtime/trace"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/plugins/services/content/contentserver"
 	"github.com/distribution/reference"
-	"github.com/hashicorp/go-multierror"
 	"github.com/mitchellh/hashstructure/v2"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	apitypes "github.com/moby/buildkit/api/types"
@@ -35,6 +35,7 @@ import (
 	"github.com/moby/buildkit/solver/llbsolver"
 	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
 	"github.com/moby/buildkit/solver/llbsolver/proc"
+	provenancetypes "github.com/moby/buildkit/solver/llbsolver/provenance/types"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/db"
@@ -73,6 +74,7 @@ type Opt struct {
 	HistoryConfig             *config.HistoryConfig
 	GarbageCollect            func(context.Context) error
 	GracefulStop              <-chan struct{}
+	ProvenanceEnv             map[string]any
 }
 
 type Controller struct { // TODO: ControlService
@@ -113,6 +115,7 @@ func NewController(opt Opt) (*Controller, error) {
 		SessionManager:   opt.SessionManager,
 		Entitlements:     opt.Entitlements,
 		HistoryQueue:     hq,
+		ProvenanceEnv:    opt.ProvenanceEnv,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create solver")
@@ -137,17 +140,20 @@ func NewController(opt Opt) (*Controller, error) {
 }
 
 func (c *Controller) Close() error {
-	rerr := c.opt.HistoryDB.Close()
+	var errs []error
+	if err := c.opt.HistoryDB.Close(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := c.opt.WorkerController.Close(); err != nil {
-		rerr = multierror.Append(rerr, err)
+		errs = append(errs, err)
 	}
 	if err := c.opt.CacheStore.Close(); err != nil {
-		rerr = multierror.Append(rerr, err)
+		errs = append(errs, err)
 	}
 	if err := c.solver.Close(); err != nil {
-		rerr = multierror.Append(rerr, err)
+		errs = append(errs, err)
 	}
-	return rerr
+	return stderrors.Join(errs...)
 }
 
 func (c *Controller) Register(server *grpc.Server) {
@@ -419,15 +425,17 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 		expis = append(expis, expi)
 	}
 
-	if c, err := findDuplicateCacheOptions(req.Cache.Exports); err != nil {
+	rest, dupes, err := findDuplicateCacheOptions(req.Cache.Exports)
+	if err != nil {
 		return nil, err
-	} else if c != nil {
+	} else if len(dupes) > 0 {
 		types := []string{}
-		for _, c := range c {
+		for _, c := range dupes {
 			types = append(types, c.Type)
 		}
 		return nil, errors.Errorf("duplicate cache exports %s", types)
 	}
+	req.Cache.Exports = rest
 	var cacheExporters []llbsolver.RemoteCacheExporter
 	for _, e := range req.Cache.Exports {
 		cacheExporterFunc, ok := c.opt.ResolveCacheExporterFuncs[e.Type]
@@ -508,7 +516,19 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 	}
 
 	if attrs, ok := attests["provenance"]; ok {
-		procs = append(procs, proc.ProvenanceProcessor(attrs))
+		var slsaVersion provenancetypes.ProvenanceSLSA
+		params := make(map[string]string)
+		for k, v := range attrs {
+			if k == "version" {
+				slsaVersion = provenancetypes.ProvenanceSLSA(v)
+				if err := slsaVersion.Validate(); err != nil {
+					return nil, err
+				}
+			} else {
+				params[k] = v
+			}
+		}
+		procs = append(procs, proc.ProvenanceProcessor(slsaVersion, params, c.opt.ProvenanceEnv))
 	}
 
 	resp, err := c.solver.Solve(ctx, req.Ref, req.Session, frontend.SolveRequest{
@@ -521,7 +541,7 @@ func (c *Controller) Solve(ctx context.Context, req *controlapi.SolveRequest) (*
 		Exporters:             expis,
 		CacheExporters:        cacheExporters,
 		EnableSessionExporter: req.EnableSessionExporter,
-	}, entitlementsFromPB(req.Entitlements), procs, req.Internal, req.SourcePolicy)
+	}, entitlementsFromPB(req.Entitlements), procs, req.Internal, req.SourcePolicy, req.SourcePolicySession)
 	if err != nil {
 		return nil, err
 	}
@@ -709,25 +729,34 @@ func toPBCDIDevices(manager *cdidevices.Manager) []*apitypes.CDIDevice {
 	return out
 }
 
-func findDuplicateCacheOptions(cacheOpts []*controlapi.CacheOptionsEntry) ([]*controlapi.CacheOptionsEntry, error) {
+func findDuplicateCacheOptions(cacheOpts []*controlapi.CacheOptionsEntry) ([]*controlapi.CacheOptionsEntry, []*controlapi.CacheOptionsEntry, error) {
 	seen := map[string]*controlapi.CacheOptionsEntry{}
 	duplicate := map[string]struct{}{}
+	hasInline := false
+	rest := make([]*controlapi.CacheOptionsEntry, 0, len(cacheOpts))
 	for _, opt := range cacheOpts {
+		if opt.Type == "inline" && hasInline {
+			continue
+		}
 		k, err := cacheOptKey(opt)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if _, ok := seen[k]; ok {
 			duplicate[k] = struct{}{}
 		}
 		seen[k] = opt
+		if opt.Type == "inline" {
+			hasInline = true
+		}
+		rest = append(rest, opt)
 	}
 
 	var duplicates []*controlapi.CacheOptionsEntry
 	for k := range duplicate {
 		duplicates = append(duplicates, seen[k])
 	}
-	return duplicates, nil
+	return rest, duplicates, nil
 }
 
 func cacheOptKey(opt *controlapi.CacheOptionsEntry) (string, error) {

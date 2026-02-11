@@ -1,4 +1,4 @@
-package awslogs // import "github.com/docker/docker/daemon/logger/awslogs"
+package awslogs
 
 import (
 	"context"
@@ -19,9 +19,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/dockerversion"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
+	"github.com/moby/moby/v2/dockerversion"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -142,7 +142,7 @@ func TestNewAWSLogsClientUserAgentHandler(t *testing.T) {
 	)
 	assert.NilError(t, err)
 
-	_, err = client.CreateLogGroup(context.TODO(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
+	_, err = client.CreateLogGroup(t.Context(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
 	assert.NilError(t, err)
 }
 
@@ -185,7 +185,7 @@ func TestNewAWSLogsClientLogFormatHeaderHandler(t *testing.T) {
 			)
 			assert.NilError(t, err)
 
-			_, err = client.CreateLogGroup(context.TODO(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
+			_, err = client.CreateLogGroup(t.Context(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
 			assert.NilError(t, err)
 		})
 	}
@@ -216,7 +216,7 @@ func TestNewAWSLogsClientAWSLogsEndpoint(t *testing.T) {
 	)
 	assert.NilError(t, err)
 
-	_, err = client.CreateLogGroup(context.TODO(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
+	_, err = client.CreateLogGroup(t.Context(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
 	assert.NilError(t, err)
 
 	// make sure the endpoint was actually hit
@@ -1600,6 +1600,31 @@ func TestValidateLogOptionsFormat(t *testing.T) {
 	}
 }
 
+func TestValidateLogOptionsCreateLogStream(t *testing.T) {
+	for _, tc := range []struct {
+		createLogStream string
+		shouldErr       bool
+	}{
+		{"true", false},
+		{"false", false},
+		{"", false},
+		{"invalid", true},
+	} {
+		t.Run(tc.createLogStream, func(t *testing.T) {
+			cfg := map[string]string{
+				logGroupKey:        groupName,
+				logCreateStreamKey: tc.createLogStream,
+			}
+
+			if err := ValidateLogOpt(cfg); tc.shouldErr {
+				assert.ErrorContains(t, err, "must specify valid value for log opt 'awslogs-create-stream'")
+			} else {
+				assert.NilError(t, err)
+			}
+		})
+	}
+}
+
 func TestCreateTagSuccess(t *testing.T) {
 	mockClient := &mockClient{}
 	info := logger.Info{
@@ -1688,7 +1713,7 @@ func TestNewAWSLogsClientCredentialEndpointDetect(t *testing.T) {
 	client, err := newAWSLogsClient(info)
 	assert.Check(t, err)
 
-	_, err = client.CreateLogGroup(context.TODO(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
+	_, err = client.CreateLogGroup(t.Context(), &cloudwatchlogs.CreateLogGroupInput{LogGroupName: aws.String("foo")})
 	assert.NilError(t, err)
 
 	assert.Check(t, credsRetrieved)

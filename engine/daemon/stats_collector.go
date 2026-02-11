@@ -1,11 +1,11 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"runtime"
 	"time"
 
-	"github.com/docker/docker/daemon/stats"
-	"github.com/docker/docker/pkg/meminfo"
+	"github.com/moby/moby/v2/daemon/stats"
+	"github.com/moby/moby/v2/pkg/meminfo"
 )
 
 // newStatsCollector returns a new statsCollector that collections

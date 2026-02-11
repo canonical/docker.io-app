@@ -8,8 +8,9 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -20,9 +21,9 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 		args             []string
 		flags            map[string]string
 		infoFunc         func() (system.Info, error)
-		swarmInspectFunc func() (swarm.Swarm, error)
-		swarmUpdateFunc  func(swarm swarm.Spec, flags swarm.UpdateFlags) error
-		nodeInspectFunc  func() (swarm.Node, []byte, error)
+		swarmInspectFunc func() (client.SwarmInspectResult, error)
+		swarmUpdateFunc  func(client.SwarmUpdateOptions) (client.SwarmUpdateResult, error)
+		nodeInspectFunc  func() (client.NodeInspectResult, error)
 		expectedError    string
 	}{
 		{
@@ -43,8 +44,8 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 		{
 			name: "swarm-inspect-failed",
 			args: []string{"worker"},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return swarm.Swarm{}, errors.New("error inspecting the swarm")
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{}, errors.New("error inspecting the swarm")
 			},
 			expectedError: "error inspecting the swarm",
 		},
@@ -54,8 +55,8 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 			flags: map[string]string{
 				flagRotate: "true",
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return swarm.Swarm{}, errors.New("error inspecting the swarm")
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{}, errors.New("error inspecting the swarm")
 			},
 			expectedError: "error inspecting the swarm",
 		},
@@ -65,16 +66,16 @@ func TestSwarmJoinTokenErrors(t *testing.T) {
 			flags: map[string]string{
 				flagRotate: "true",
 			},
-			swarmUpdateFunc: func(swarm swarm.Spec, flags swarm.UpdateFlags) error {
-				return errors.New("error updating the swarm")
+			swarmUpdateFunc: func(client.SwarmUpdateOptions) (client.SwarmUpdateResult, error) {
+				return client.SwarmUpdateResult{}, errors.New("error updating the swarm")
 			},
 			expectedError: "error updating the swarm",
 		},
 		{
 			name: "node-inspect-failed",
 			args: []string{"worker"},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return swarm.Node{}, []byte{}, errors.New("error inspecting node")
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{}, errors.New("error inspecting node")
 			},
 			expectedError: "error inspecting node",
 		},
@@ -113,8 +114,8 @@ func TestSwarmJoinToken(t *testing.T) {
 		args             []string
 		flags            map[string]string
 		infoFunc         func() (system.Info, error)
-		swarmInspectFunc func() (swarm.Swarm, error)
-		nodeInspectFunc  func() (swarm.Node, []byte, error)
+		swarmInspectFunc func() (client.SwarmInspectResult, error)
+		nodeInspectFunc  func() (client.NodeInspectResult, error)
 	}{
 		{
 			name: "worker",
@@ -126,11 +127,15 @@ func TestSwarmJoinToken(t *testing.T) {
 					},
 				}, nil
 			},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return *builders.Swarm(), nil
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{
+					Swarm: *builders.Swarm(),
+				}, nil
 			},
 		},
 		{
@@ -143,11 +148,15 @@ func TestSwarmJoinToken(t *testing.T) {
 					},
 				}, nil
 			},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return *builders.Swarm(), nil
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{
+					Swarm: *builders.Swarm(),
+				}, nil
 			},
 		},
 		{
@@ -163,11 +172,15 @@ func TestSwarmJoinToken(t *testing.T) {
 					},
 				}, nil
 			},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return *builders.Swarm(), nil
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{
+					Swarm: *builders.Swarm(),
+				}, nil
 			},
 		},
 		{
@@ -176,11 +189,15 @@ func TestSwarmJoinToken(t *testing.T) {
 			flags: map[string]string{
 				flagQuiet: "true",
 			},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return *builders.Swarm(), nil
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{
+					Swarm: *builders.Swarm(),
+				}, nil
 			},
 		},
 		{
@@ -189,11 +206,15 @@ func TestSwarmJoinToken(t *testing.T) {
 			flags: map[string]string{
 				flagQuiet: "true",
 			},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
-			swarmInspectFunc: func() (swarm.Swarm, error) {
-				return *builders.Swarm(), nil
+			swarmInspectFunc: func() (client.SwarmInspectResult, error) {
+				return client.SwarmInspectResult{
+					Swarm: *builders.Swarm(),
+				}, nil
 			},
 		},
 	}

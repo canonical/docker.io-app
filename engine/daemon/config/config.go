@@ -1,4 +1,4 @@
-package config // import "github.com/docker/docker/daemon/config"
+package config
 
 import (
 	"bytes"
@@ -13,11 +13,10 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api"
-	"github.com/docker/docker/api/types/versions"
-	dopts "github.com/docker/docker/internal/opts"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/registry"
+	dopts "github.com/moby/moby/v2/daemon/internal/opts"
+	"github.com/moby/moby/v2/daemon/internal/versions"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	"github.com/moby/moby/v2/daemon/pkg/registry"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"golang.org/x/text/encoding"
@@ -56,11 +55,17 @@ const (
 	DefaultContainersNamespace = "moby"
 	// DefaultPluginNamespace is the name of the default containerd namespace used for plugins.
 	DefaultPluginNamespace = "plugins.moby"
+	// MaxAPIVersion is the highest REST API version supported by the daemon.
+	//
+	// This version may be lower than the version of the api library module used.
+	MaxAPIVersion = "1.52"
 	// defaultMinAPIVersion is the minimum API version supported by the API.
 	// This version can be overridden through the "DOCKER_MIN_API_VERSION"
-	// environment variable. It currently defaults to the minimum API version
-	// supported by the API server.
-	defaultMinAPIVersion = api.MinSupportedAPIVersion
+	// environment variable. The minimum allowed version is determined
+	// by [MinAPIVersion].
+	defaultMinAPIVersion = "1.44"
+	// MinAPIVersion is the minimum API version supported by the daemon.
+	MinAPIVersion = "1.24"
 	// SeccompProfileDefault is the built-in default seccomp profile.
 	SeccompProfileDefault = "builtin"
 	// SeccompProfileUnconfined is a special profile name for seccomp to use an
@@ -91,6 +96,9 @@ var flatOptions = map[string]bool{
 var skipValidateOptions = map[string]bool{
 	"features": true,
 	"builder":  true,
+
+	// Only available in daemon.json, no flags
+	"min-api-version": true,
 
 	// Deprecated options that are safe to ignore if present.
 	"deprecated-key-path":              true,
@@ -148,6 +156,10 @@ type NetworkConfig struct {
 	NetworkControlPlaneMTU int `json:"network-control-plane-mtu,omitempty"`
 	// Default options for newly created networks
 	DefaultNetworkOpts map[string]map[string]string `json:"default-network-opts,omitempty"`
+	// FirewallBackend overrides the daemon's default selection of firewall
+	// implementation. Currently only used on Linux, it is an error to
+	// supply a value for other platforms.
+	FirewallBackend string `json:"firewall-backend,omitempty"`
 }
 
 // TLSOptions defines TLS configuration for the daemon server.
@@ -159,9 +171,9 @@ type TLSOptions struct {
 	KeyFile  string `json:"tlskey,omitempty"`
 }
 
-// DNSConfig defines the DNS configurations.
+// DNSConfig defines default DNS options for containers.
 type DNSConfig struct {
-	DNS            []net.IP     `json:"dns,omitempty"`
+	DNS            []netip.Addr `json:"dns,omitempty"`
 	DNSOptions     []string     `json:"dns-opts,omitempty"`
 	DNSSearch      []string     `json:"dns-search,omitempty"`
 	HostGatewayIP  net.IP       `json:"host-gateway-ip,omitempty"` // Deprecated: this single-IP is migrated to HostGatewayIPs
@@ -173,20 +185,19 @@ type DNSConfig struct {
 // It includes json tags to deserialize configuration from a file
 // using the same names that the flags in the command line use.
 type CommonConfig struct {
-	AuthorizationPlugins  []string `json:"authorization-plugins,omitempty"` // AuthorizationPlugins holds list of authorization plugins
-	AutoRestart           bool     `json:"-"`
-	DisableBridge         bool     `json:"-"`
-	ExecOptions           []string `json:"exec-opts,omitempty"`
+	AuthorizationPlugins []string `json:"authorization-plugins,omitempty"` // AuthorizationPlugins holds list of authorization plugins
+	AutoRestart          bool     `json:"-"`
+	DisableBridge        bool     `json:"-"`
+	ExecOptions          []string `json:"exec-opts,omitempty"`
+	// TODO: Should be renamed to StorageDriver
 	GraphDriver           string   `json:"storage-driver,omitempty"`
 	GraphOptions          []string `json:"storage-opts,omitempty"`
 	Labels                []string `json:"labels,omitempty"`
 	NetworkDiagnosticPort int      `json:"network-diagnostic-port,omitempty"`
 	Pidfile               string   `json:"pidfile,omitempty"`
-	RawLogs               bool     `json:"raw-logs,omitempty"`
 	Root                  string   `json:"data-root,omitempty"`
 	ExecRoot              string   `json:"exec-root,omitempty"`
 	SocketGroup           string   `json:"group,omitempty"`
-	CorsHeaders           string   `json:"api-cors-header,omitempty"` // Deprecated: CORS headers should not be set on the API. This feature will be removed in the next release. // TODO(thaJeztah): option is used to produce error when used; remove in next release
 
 	// Proxies holds the proxies that are configured for the daemon.
 	Proxies `json:"proxies"`
@@ -211,16 +222,10 @@ type CommonConfig struct {
 	// to stop when daemon is being shutdown
 	ShutdownTimeout int `json:"shutdown-timeout,omitempty"`
 
-	Debug     bool             `json:"debug,omitempty"`
-	Hosts     []string         `json:"hosts,omitempty"`
-	LogLevel  string           `json:"log-level,omitempty"`
-	LogFormat log.OutputFormat `json:"log-format,omitempty"`
-	TLS       *bool            `json:"tls,omitempty"`
-	TLSVerify *bool            `json:"tlsverify,omitempty"`
-
-	// Embedded structs that allow config
-	// deserialization without the full struct.
-	TLSOptions
+	Debug     bool     `json:"debug,omitempty"`
+	Hosts     []string `json:"hosts,omitempty"`
+	TLS       *bool    `json:"tls,omitempty"`
+	TLSVerify *bool    `json:"tlsverify,omitempty"`
 
 	// SwarmDefaultAdvertiseAddr is the default host/IP or network interface
 	// to use if a wildcard address is specified in the ListenAddr value
@@ -240,15 +245,15 @@ type CommonConfig struct {
 
 	MetricsAddress string `json:"metrics-addr"`
 
-	DNSConfig
-	LogConfig
-	BridgeConfig // BridgeConfig holds bridge network specific configuration.
-	NetworkConfig
-	registry.ServiceOptions
+	// Embedded structs that allow config deserialization without the full struct.
 
-	// FIXME(vdemeester) This part is not that clear and is mainly dependent on cli flags
-	// It should probably be handled outside this package.
-	ValuesSet map[string]interface{} `json:"-"`
+	DaemonLogConfig         // DaemonLogConfig holds options for configuring the daemon's logging.
+	TLSOptions              // TLSOptions defines TLS configuration for the API server.
+	DNSConfig               // DNSConfig defines default DNS options for containers.
+	LogConfig               // LogConfig defines default log configuration for containers.
+	BridgeConfig            // BridgeConfig holds bridge network specific configuration.
+	NetworkConfig           // NetworkConfig stores the daemon-wide networking configurations.
+	registry.ServiceOptions // TODO(thaJeztah): define this type in daemon/config and either import into pkg/registry, or convert when using.
 
 	Experimental bool `json:"experimental"` // Experimental indicates whether experimental features should be exposed or not
 
@@ -286,9 +291,20 @@ type CommonConfig struct {
 	//
 	// API versions older than [defaultMinAPIVersion] are deprecated and
 	// to be removed in a future release. The "DOCKER_MIN_API_VERSION" env
-	// var should only be used for exceptional cases, and the MinAPIVersion
-	// field is therefore not included in the JSON representation.
-	MinAPIVersion string `json:"-"`
+	// var and this configuration option should only be used for exceptional
+	// cases.
+	MinAPIVersion string `json:"min-api-version,omitempty"`
+
+	// FIXME(vdemeester) This part is not that clear and is mainly dependent on cli flags
+	// It should probably be handled outside this package.
+	ValuesSet map[string]any `json:"-"`
+}
+
+// DaemonLogConfig holds options for configuring the daemon's logging.
+type DaemonLogConfig struct {
+	LogLevel  string           `json:"log-level,omitempty"`
+	LogFormat log.OutputFormat `json:"log-format,omitempty"`
+	RawLogs   bool             `json:"raw-logs,omitempty"`
 }
 
 // Proxies holds the proxies that are configured for the daemon.
@@ -316,6 +332,10 @@ func New() (*Config, error) {
 			ShutdownTimeout: DefaultShutdownTimeout,
 			LogConfig: LogConfig{
 				Config: make(map[string]string),
+			},
+			DaemonLogConfig: DaemonLogConfig{
+				LogLevel:  "info",
+				LogFormat: log.TextFormat,
 			},
 			MaxConcurrentDownloads: DefaultMaxConcurrentDownloads,
 			MaxConcurrentUploads:   DefaultMaxConcurrentUploads,
@@ -503,7 +523,7 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 	}
 
 	if flags != nil {
-		var jsonConfig map[string]interface{}
+		var jsonConfig map[string]any
 		if err := json.Unmarshal(b, &jsonConfig); err != nil {
 			return nil, err
 		}
@@ -516,10 +536,10 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 
 		// Override flag values to make sure the values set in the config file with nullable values, like `false`,
 		// are not overridden by default truthy values from the flags that were not explicitly set.
-		// See https://github.com/docker/docker/issues/20289 for an example.
+		// See https://github.com/moby/moby/issues/20289 for an example.
 		//
 		// TODO: Rewrite configuration logic to avoid same issue with other nullable values, like numbers.
-		namedOptions := make(map[string]interface{})
+		namedOptions := make(map[string]any)
 		for key, value := range configSet {
 			f := flags.Lookup(key)
 			if f == nil { // ignore named flags that don't match
@@ -559,10 +579,10 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 }
 
 // configValuesSet returns the configuration values explicitly set in the file.
-func configValuesSet(config map[string]interface{}) map[string]interface{} {
-	flatten := make(map[string]interface{})
+func configValuesSet(config map[string]any) map[string]any {
+	flatten := make(map[string]any)
 	for k, v := range config {
-		if m, isMap := v.(map[string]interface{}); isMap && !flatOptions[k] {
+		if m, isMap := v.(map[string]any); isMap && !flatOptions[k] {
 			for km, vm := range m {
 				flatten[km] = vm
 			}
@@ -577,9 +597,9 @@ func configValuesSet(config map[string]interface{}) map[string]interface{} {
 // findConfigurationConflicts iterates over the provided flags searching for
 // duplicated configurations and unknown keys. It returns an error with all the conflicts if
 // it finds any.
-func findConfigurationConflicts(config map[string]interface{}, flags *pflag.FlagSet) error {
+func findConfigurationConflicts(config map[string]any, flags *pflag.FlagSet) error {
 	// 1. Search keys from the file that we don't recognize as flags.
-	unknownKeys := make(map[string]interface{})
+	unknownKeys := make(map[string]any)
 	for key, value := range config {
 		if flag := flags.Lookup(key); flag == nil && !skipValidateOptions[key] {
 			unknownKeys[key] = value
@@ -606,7 +626,7 @@ func findConfigurationConflicts(config map[string]interface{}, flags *pflag.Flag
 	}
 
 	// 3. Search keys that are present as a flag and as a file option.
-	printConflict := func(name string, flagValue, fileValue interface{}) string {
+	printConflict := func(name string, flagValue, fileValue any) string {
 		switch name {
 		case "http-proxy", "https-proxy":
 			flagValue = MaskCredentials(flagValue.(string))
@@ -667,11 +687,11 @@ func ValidateMinAPIVersion(ver string) error {
 	if strings.EqualFold(ver[0:1], "v") {
 		return errors.New(`API version must be provided without "v" prefix`)
 	}
-	if versions.LessThan(ver, defaultMinAPIVersion) {
-		return errors.Errorf(`minimum supported API version is %s: %s`, defaultMinAPIVersion, ver)
+	if versions.LessThan(ver, MinAPIVersion) {
+		return errors.Errorf(`minimum supported API version is %s: %s`, MinAPIVersion, ver)
 	}
-	if versions.GreaterThan(ver, api.DefaultVersion) {
-		return errors.Errorf(`maximum supported API version is %s: %s`, api.DefaultVersion, ver)
+	if versions.GreaterThan(ver, MaxAPIVersion) {
+		return errors.Errorf(`maximum supported API version is %s: %s`, MaxAPIVersion, ver)
 	}
 	return nil
 }
@@ -680,26 +700,8 @@ func ValidateMinAPIVersion(ver string) error {
 // such as config.DNS, config.Labels, config.DNSSearch,
 // as well as config.MaxConcurrentDownloads, config.MaxConcurrentUploads and config.MaxDownloadAttempts.
 func Validate(config *Config) error {
-	// validate log-level
-	if config.LogLevel != "" {
-		// FIXME(thaJeztah): find a better way for this; this depends on knowledge of containerd's log package internals.
-		// Alternatively: try  log.SetLevel(config.LogLevel), and restore the original level, but this also requires internal knowledge.
-		switch strings.ToLower(config.LogLevel) {
-		case "panic", "fatal", "error", "warn", "info", "debug", "trace":
-			// These are valid. See [log.SetLevel] for a list of accepted levels.
-		default:
-			return errors.Errorf("invalid logging level: %s", config.LogLevel)
-		}
-	}
-
-	// validate log-format
-	if logFormat := config.LogFormat; logFormat != "" {
-		switch logFormat {
-		case log.TextFormat, log.JSONFormat:
-			// These are valid
-		default:
-			return errors.Errorf("invalid log format: %s", logFormat)
-		}
+	if err := validateDaemonLogConfig(config.DaemonLogConfig); err != nil {
+		return err
 	}
 
 	// validate DNSSearch
@@ -748,9 +750,10 @@ func Validate(config *Config) error {
 		}
 	}
 
-	if config.CorsHeaders != "" {
-		// TODO(thaJeztah): option is used to produce error when used; remove in next release
-		return errors.New(`DEPRECATED: The "api-cors-header" config parameter and the dockerd "--api-cors-header" option have been removed; use a reverse proxy if you need CORS headers`)
+	for _, mirror := range config.ServiceOptions.Mirrors {
+		if _, err := registry.ValidateMirror(mirror); err != nil {
+			return err
+		}
 	}
 
 	if _, err := parseExecOptions(config.ExecOptions); err != nil {
@@ -759,6 +762,31 @@ func Validate(config *Config) error {
 
 	// validate platform-specific settings
 	return validatePlatformConfig(config)
+}
+
+func validateDaemonLogConfig(cfg DaemonLogConfig) error {
+	// validate log-level
+	if cfg.LogLevel != "" {
+		// FIXME(thaJeztah): find a better way for this; this depends on knowledge of containerd's log package internals.
+		// Alternatively: try  log.SetLevel(config.LogLevel), and restore the original level, but this also requires internal knowledge.
+		switch strings.ToLower(cfg.LogLevel) {
+		case "panic", "fatal", "error", "warn", "info", "debug", "trace":
+			// These are valid. See [log.SetLevel] for a list of accepted levels.
+		default:
+			return fmt.Errorf("invalid logging level: %s", cfg.LogLevel)
+		}
+	}
+
+	// validate log-format
+	if logFormat := cfg.LogFormat; logFormat != "" {
+		switch logFormat {
+		case log.TextFormat, log.JSONFormat:
+			// These are valid
+		default:
+			return fmt.Errorf("invalid log format: %s", logFormat)
+		}
+	}
+	return nil
 }
 
 // parseExecOptions parses the given exec-options into a map. It returns an
@@ -797,7 +825,7 @@ func migrateHostGatewayIP(config *Config) {
 	hgip := config.HostGatewayIP //nolint:staticcheck // ignore SA1019: migrating to HostGatewayIPs.
 	if hgip != nil {
 		addr, _ := netip.AddrFromSlice(hgip)
-		config.HostGatewayIPs = []netip.Addr{addr}
+		config.HostGatewayIPs = []netip.Addr{addr.Unmap()}
 		config.HostGatewayIP = nil //nolint:staticcheck // ignore SA1019: clearing old value.
 	}
 }

@@ -39,7 +39,6 @@ Create and run a new container from an image
 | `--device-read-iops`                                  | `list`        |           | Limit read rate (IO per second) from a device                                                                                                                                                                                                                                                                    |
 | `--device-write-bps`                                  | `list`        |           | Limit write rate (bytes per second) to a device                                                                                                                                                                                                                                                                  |
 | `--device-write-iops`                                 | `list`        |           | Limit write rate (IO per second) to a device                                                                                                                                                                                                                                                                     |
-| `--disable-content-trust`                             | `bool`        | `true`    | Skip image verification                                                                                                                                                                                                                                                                                          |
 | `--dns`                                               | `list`        |           | Set custom DNS servers                                                                                                                                                                                                                                                                                           |
 | `--dns-option`                                        | `list`        |           | Set DNS options                                                                                                                                                                                                                                                                                                  |
 | `--dns-search`                                        | `list`        |           | Set custom DNS search domains                                                                                                                                                                                                                                                                                    |
@@ -62,11 +61,10 @@ Create and run a new container from an image
 | [`-i`](#interactive), [`--interactive`](#interactive) | `bool`        |           | Keep STDIN open even if not attached                                                                                                                                                                                                                                                                             |
 | `--io-maxbandwidth`                                   | `bytes`       | `0`       | Maximum IO bandwidth limit for the system drive (Windows only)                                                                                                                                                                                                                                                   |
 | `--io-maxiops`                                        | `uint64`      | `0`       | Maximum IOps limit for the system drive (Windows only)                                                                                                                                                                                                                                                           |
-| `--ip`                                                | `string`      |           | IPv4 address (e.g., 172.30.100.104)                                                                                                                                                                                                                                                                              |
-| `--ip6`                                               | `string`      |           | IPv6 address (e.g., 2001:db8::33)                                                                                                                                                                                                                                                                                |
+| `--ip`                                                | `ip`          | `<nil>`   | IPv4 address (e.g., 172.30.100.104)                                                                                                                                                                                                                                                                              |
+| `--ip6`                                               | `ip`          | `<nil>`   | IPv6 address (e.g., 2001:db8::33)                                                                                                                                                                                                                                                                                |
 | [`--ipc`](#ipc)                                       | `string`      |           | IPC mode to use                                                                                                                                                                                                                                                                                                  |
 | [`--isolation`](#isolation)                           | `string`      |           | Container isolation technology                                                                                                                                                                                                                                                                                   |
-| `--kernel-memory`                                     | `bytes`       | `0`       | Kernel memory limit                                                                                                                                                                                                                                                                                              |
 | [`-l`](#label), [`--label`](#label)                   | `list`        |           | Set meta data on a container                                                                                                                                                                                                                                                                                     |
 | `--label-file`                                        | `list`        |           | Read in a line delimited file of labels                                                                                                                                                                                                                                                                          |
 | `--link`                                              | `list`        |           | Add link to another container                                                                                                                                                                                                                                                                                    |
@@ -937,14 +935,13 @@ PS C:\> docker run --device=class/86E0D1E0-8089-11D0-9CE4-08003E301F73 mcr.micro
 
 #### CDI devices
 
-> [!NOTE]
-> The CDI feature is experimental, and potentially subject to change.
-> CDI is currently only supported for Linux containers.
-
 [Container Device Interface
 (CDI)](https://github.com/cncf-tags/container-device-interface/blob/main/SPEC.md)
 is a standardized mechanism for container runtimes to create containers which
 are able to interact with third party devices.
+
+CDI is currently only supported for Linux containers and is enabled by default
+since Docker Engine 28.3.0.
 
 With CDI, device configurations are declaratively defined using a JSON or YAML
 file. In addition to enabling the container to interact with the device node,
@@ -966,7 +963,7 @@ This starts an `ubuntu` container with access to the specified CDI device,
   available on the system running the daemon, in one of the configured CDI
   specification directories.
 - The CDI feature has been enabled in the daemon; see [Enable CDI
-  devices](https://docs.docker.com/reference/cli/dockerd/#enable-cdi-devices).
+  devices](https://docs.docker.com/reference/cli/dockerd/#configure-cdi-devices).
 
 ### <a name="attach"></a> Attach to STDIN/STDOUT/STDERR (-a, --attach)
 
@@ -1285,7 +1282,7 @@ connect to services running on the host machine.
 
 It's conventional to use `host.docker.internal` as the hostname referring to
 `host-gateway`. Docker Desktop automatically resolves this hostname, see
-[Explore networking features](https://docs.docker.com/desktop/features/networking/#i-want-to-connect-from-a-container-to-a-service-on-the-host).
+[Explore networking features](https://docs.docker.com/desktop/features/networking/networking-how-tos/#i-want-to-connect-from-a-container-to-a-service-on-the-host).
 
 The following example shows how the special `host-gateway` value works. The
 example runs an HTTP server that serves a file from host to container over the

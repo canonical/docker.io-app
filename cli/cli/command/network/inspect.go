@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package network
 
@@ -12,8 +12,7 @@ import (
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/inspect"
 	flagsHelper "github.com/docker/cli/cli/flags"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +33,8 @@ func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 			opts.names = args
 			return runInspect(cmd.Context(), dockerCLI.Client(), dockerCLI.Out(), opts)
 		},
-		ValidArgsFunction: completion.NetworkNames(dockerCLI),
+		ValidArgsFunction:     completion.NetworkNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	cmd.Flags().StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
@@ -45,6 +45,10 @@ func newInspectCommand(dockerCLI command.Cli) *cobra.Command {
 
 func runInspect(ctx context.Context, apiClient client.NetworkAPIClient, output io.Writer, opts inspectOptions) error {
 	return inspect.Inspect(output, opts.names, opts.format, func(name string) (any, []byte, error) {
-		return apiClient.NetworkInspectWithRaw(ctx, name, network.InspectOptions{Verbose: opts.verbose})
+		res, err := apiClient.NetworkInspect(ctx, name, client.NetworkInspectOptions{Verbose: opts.verbose})
+		if err != nil {
+			return nil, nil, err
+		}
+		return res.Network, res.Raw, nil
 	})
 }

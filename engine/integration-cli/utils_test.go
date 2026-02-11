@@ -8,10 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/internal/testutil"
 	"github.com/pkg/errors"
-	"gotest.tools/v3/icmd"
 )
 
 func getPrefixAndSlashFromDaemonPlatform() (prefix, slash string) {
@@ -19,19 +18,6 @@ func getPrefixAndSlashFromDaemonPlatform() (prefix, slash string) {
 		return "c:", `\`
 	}
 	return "", "/"
-}
-
-// TODO: update code to call cmd.RunCmd directly, and remove this function
-// Deprecated: use gotest.tools/icmd
-func runCommandWithOutput(execCmd *exec.Cmd) (string, int, error) {
-	result := icmd.RunCmd(icmd.Cmd{
-		Command: execCmd.Args,
-		Env:     execCmd.Env,
-		Dir:     execCmd.Dir,
-		Stdin:   execCmd.Stdin,
-		Stdout:  execCmd.Stdout,
-	})
-	return result.Combined(), result.ExitCode, result.Error
 }
 
 // ParseCgroupPaths parses 'procCgroupData', which is output of '/proc/<pid>/cgroup', and returns
@@ -115,7 +101,7 @@ type elementListOptions struct {
 	element, format string
 }
 
-func existingElements(c *testing.T, opts elementListOptions) []string {
+func existingElements(t *testing.T, opts elementListOptions) []string {
 	var args []string
 	switch opts.element {
 	case "container":
@@ -132,7 +118,7 @@ func existingElements(c *testing.T, opts elementListOptions) []string {
 	if opts.format != "" {
 		args = append(args, "--format", opts.format)
 	}
-	out := cli.DockerCmd(c, args...).Combined()
+	out := cli.DockerCmd(t, args...).Combined()
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
 		if l != "" {
@@ -143,13 +129,13 @@ func existingElements(c *testing.T, opts elementListOptions) []string {
 }
 
 // ExistingContainerIDs returns a list of currently existing container IDs.
-func ExistingContainerIDs(c *testing.T) []string {
-	return existingElements(c, elementListOptions{element: "container", format: "{{.ID}}"})
+func ExistingContainerIDs(t *testing.T) []string {
+	return existingElements(t, elementListOptions{element: "container", format: "{{.ID}}"})
 }
 
 // ExistingContainerNames returns a list of existing container names.
-func ExistingContainerNames(c *testing.T) []string {
-	return existingElements(c, elementListOptions{element: "container", format: "{{.Names}}"})
+func ExistingContainerNames(t *testing.T) []string {
+	return existingElements(t, elementListOptions{element: "container", format: "{{.Names}}"})
 }
 
 // RemoveLinesForExistingElements removes existing elements from the output of a

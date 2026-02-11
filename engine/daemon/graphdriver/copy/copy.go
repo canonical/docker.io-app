@@ -1,6 +1,6 @@
 //go:build linux
 
-package copy // import "github.com/docker/docker/daemon/graphdriver/copy"
+package copy
 
 import (
 	"container/list"
@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/docker/pkg/pools"
-	"github.com/docker/docker/pkg/system"
+	"github.com/moby/moby/v2/daemon/internal/system"
+	"github.com/moby/moby/v2/pkg/pools"
 	"github.com/moby/sys/userns"
 	"golang.org/x/sys/unix"
 )
@@ -49,7 +49,7 @@ func copyRegular(srcPath, dstPath string, fileinfo os.FileInfo, copyWithFileRang
 		}
 
 		*copyWithFileClone = false
-		if err == unix.EXDEV {
+		if errors.Is(err, unix.EXDEV) {
 			*copyWithFileRange = false
 		}
 	}
@@ -57,7 +57,7 @@ func copyRegular(srcPath, dstPath string, fileinfo os.FileInfo, copyWithFileRang
 		err = doCopyWithFileRange(srcFile, dstFile, fileinfo)
 		// Trying the file_clone may not have caught the exdev case
 		// as the ioctl may not have been available (therefore EINVAL)
-		if err == unix.EXDEV || err == unix.ENOSYS {
+		if errors.Is(err, unix.EXDEV) || errors.Is(err, unix.ENOSYS) {
 			*copyWithFileRange = false
 		} else {
 			return err

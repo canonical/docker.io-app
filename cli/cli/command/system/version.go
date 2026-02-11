@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"runtime"
 	"sort"
 	"strconv"
@@ -10,15 +12,13 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/command/formatter/tabwriter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/cli/version"
 	"github.com/docker/cli/templates"
-	"github.com/docker/docker/api"
-	"github.com/docker/docker/api/types"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"github.com/tonistiigi/go-rosetta"
 )
@@ -64,7 +64,7 @@ type versionOptions struct {
 // versionInfo contains version information of both the Client, and Server
 type versionInfo struct {
 	Client clientVersion
-	Server *types.Version
+	Server *serverVersion
 }
 
 type platformInfo struct {
@@ -84,6 +84,26 @@ type clientVersion struct {
 	Context           string        `json:"Context"`
 }
 
+// serverVersion contains information about the Docker server host.
+// it's the client-side presentation of [client.ServerVersionResult].
+type serverVersion struct {
+	Platform      client.PlatformInfo       `json:",omitempty"`              // Platform is the platform (product name) the server is running on.
+	Version       string                    `json:"Version"`                 // Version is the version of the daemon.
+	APIVersion    string                    `json:"ApiVersion"`              // APIVersion is the highest API version supported by the server.
+	MinAPIVersion string                    `json:"MinAPIVersion,omitempty"` // MinAPIVersion is the minimum API version the server supports.
+	Os            string                    `json:"Os"`                      // Os is the operating system the server runs on.
+	Arch          string                    `json:"Arch"`                    // Arch is the hardware architecture the server runs on.
+	Components    []system.ComponentVersion `json:"Components,omitempty"`    // Components contains version information for the components making up the server.
+
+	// The following fields are deprecated, they relate to the Engine component and are kept for backwards compatibility
+
+	GitCommit     string `json:"GitCommit,omitempty"`
+	GoVersion     string `json:"GoVersion,omitempty"`
+	KernelVersion string `json:"KernelVersion,omitempty"`
+	Experimental  bool   `json:"Experimental,omitempty"`
+	BuildTime     string `json:"BuildTime,omitempty"`
+}
+
 // newClientVersion constructs a new clientVersion. If a dockerCLI is
 // passed as argument, additional information is included (API version),
 // which may invoke an API connection. Pass nil to omit the additional
@@ -91,7 +111,7 @@ type clientVersion struct {
 func newClientVersion(contextName string, dockerCli command.Cli) clientVersion {
 	v := clientVersion{
 		Version:           version.Version,
-		DefaultAPIVersion: api.DefaultVersion,
+		DefaultAPIVersion: client.MaxAPIVersion,
 		GoVersion:         runtime.Version(),
 		GitCommit:         version.GitCommit,
 		BuildTime:         reformatDate(version.BuildTime),
@@ -108,8 +128,51 @@ func newClientVersion(contextName string, dockerCli command.Cli) clientVersion {
 	return v
 }
 
-// NewVersionCommand creates a new cobra.Command for `docker version`
-func NewVersionCommand(dockerCli command.Cli) *cobra.Command {
+func newServerVersion(sv client.ServerVersionResult) *serverVersion {
+	out := &serverVersion{
+		Platform:      sv.Platform,
+		Version:       sv.Version,
+		APIVersion:    sv.APIVersion,
+		MinAPIVersion: sv.MinAPIVersion,
+		Os:            sv.Os,
+		Arch:          sv.Arch,
+		Experimental:  sv.Experimental, //nolint:staticcheck // ignore deprecated field.
+		Components:    make([]system.ComponentVersion, 0, len(sv.Components)),
+	}
+	foundEngine := false
+	for _, component := range sv.Components {
+		if component.Name == "Engine" {
+			foundEngine = true
+			buildTime, ok := component.Details["BuildTime"]
+			if ok {
+				component.Details["BuildTime"] = reformatDate(buildTime)
+			}
+			out.GitCommit = component.Details["GitCommit"]
+			out.GoVersion = component.Details["GoVersion"]
+			out.KernelVersion = component.Details["KernelVersion"]
+			out.Experimental = func() bool { b, _ := strconv.ParseBool(component.Details["Experimental"]); return b }()
+			out.BuildTime = buildTime
+		}
+		out.Components = append(out.Components, component)
+	}
+
+	if !foundEngine {
+		out.Components = append(out.Components, system.ComponentVersion{
+			Name:    "Engine",
+			Version: sv.Version,
+			Details: map[string]string{
+				"ApiVersion":    sv.APIVersion,
+				"MinAPIVersion": sv.MinAPIVersion,
+				"Os":            sv.Os,
+				"Arch":          sv.Arch,
+			},
+		})
+	}
+	return out
+}
+
+// newVersionCommand creates a new cobra.Command for `docker version`
+func newVersionCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts versionOptions
 
 	cmd := &cobra.Command{
@@ -117,12 +180,13 @@ func NewVersionCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Show the Docker version information",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVersion(cmd.Context(), dockerCli, &opts)
+			return runVersion(cmd.Context(), dockerCLI, &opts)
 		},
 		Annotations: map[string]string{
 			"category-top": "10",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	cmd.Flags().StringVarP(&opts.format, "format", "f", "", flagsHelper.InspectFormatHelp)
@@ -138,64 +202,35 @@ func reformatDate(buildTime string) string {
 }
 
 func arch() string {
-	arch := runtime.GOARCH
+	out := runtime.GOARCH
 	if rosetta.Enabled() {
-		arch += " (rosetta)"
+		out += " (rosetta)"
 	}
-	return arch
+	return out
 }
 
-func runVersion(ctx context.Context, dockerCli command.Cli, opts *versionOptions) error {
+func runVersion(ctx context.Context, dockerCLI command.Cli, opts *versionOptions) error {
 	var err error
 	tmpl, err := newVersionTemplate(opts.format)
 	if err != nil {
 		return cli.StatusError{StatusCode: 64, Status: err.Error()}
 	}
 
-	// TODO print error if kubernetes is used?
-
 	vd := versionInfo{
-		Client: newClientVersion(dockerCli.CurrentContext(), dockerCli),
+		Client: newClientVersion(dockerCLI.CurrentContext(), dockerCLI),
 	}
-	sv, err := dockerCli.Client().ServerVersion(ctx)
+	sv, err := dockerCLI.Client().ServerVersion(ctx, client.ServerVersionOptions{})
 	if err == nil {
-		vd.Server = &sv
-		foundEngine := false
-		for _, component := range sv.Components {
-			if component.Name == "Engine" {
-				foundEngine = true
-				buildTime, ok := component.Details["BuildTime"]
-				if ok {
-					component.Details["BuildTime"] = reformatDate(buildTime)
-				}
-			}
-		}
-
-		if !foundEngine {
-			vd.Server.Components = append(vd.Server.Components, types.ComponentVersion{
-				Name:    "Engine",
-				Version: sv.Version,
-				Details: map[string]string{
-					"ApiVersion":    sv.APIVersion,
-					"MinAPIVersion": sv.MinAPIVersion,
-					"GitCommit":     sv.GitCommit,
-					"GoVersion":     sv.GoVersion,
-					"Os":            sv.Os,
-					"Arch":          sv.Arch,
-					"BuildTime":     reformatDate(vd.Server.BuildTime),
-					"Experimental":  strconv.FormatBool(sv.Experimental),
-				},
-			})
-		}
+		vd.Server = newServerVersion(sv)
 	}
-	if err2 := prettyPrintVersion(dockerCli, vd, tmpl); err2 != nil && err == nil {
+	if err2 := prettyPrintVersion(dockerCLI.Out(), vd, tmpl); err2 != nil && err == nil {
 		err = err2
 	}
 	return err
 }
 
-func prettyPrintVersion(dockerCli command.Cli, vd versionInfo, tmpl *template.Template) error {
-	t := tabwriter.NewWriter(dockerCli.Out(), 20, 1, 1, ' ', 0)
+func prettyPrintVersion(out io.Writer, vd versionInfo, tmpl *template.Template) error {
+	t := tabwriter.NewWriter(out, 20, 1, 1, ' ', 0)
 	err := tmpl.Execute(t, vd)
 	_, _ = t.Write([]byte("\n"))
 	_ = t.Flush()
@@ -209,15 +244,14 @@ func newVersionTemplate(templateFormat string) (*template.Template, error) {
 	case formatter.JSONFormatKey:
 		templateFormat = formatter.JSONFormat
 	}
-	tmpl := templates.New("version").Funcs(template.FuncMap{"getDetailsOrder": getDetailsOrder})
-	tmpl, err := tmpl.Parse(templateFormat)
+	tmpl, err := templates.New("version").Funcs(template.FuncMap{"getDetailsOrder": getDetailsOrder}).Parse(templateFormat)
 	if err != nil {
-		return nil, errors.Wrap(err, "template parsing error")
+		return nil, fmt.Errorf("template parsing error: %w", err)
 	}
 	return tmpl, nil
 }
 
-func getDetailsOrder(v types.ComponentVersion) []string {
+func getDetailsOrder(v system.ComponentVersion) []string {
 	out := make([]string, 0, len(v.Details))
 	for k := range v.Details {
 		out = append(out, k)

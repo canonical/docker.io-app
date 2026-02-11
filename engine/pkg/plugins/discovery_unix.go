@@ -1,11 +1,12 @@
 //go:build !windows
 
-package plugins // import "github.com/docker/docker/pkg/plugins"
+package plugins
+
 import (
+	"os"
 	"path/filepath"
 
-	"github.com/docker/docker/pkg/homedir"
-	"github.com/docker/docker/pkg/rootless"
+	"github.com/moby/moby/v2/pkg/homedir"
 )
 
 func rootlessConfigPluginsPath() string {
@@ -24,7 +25,8 @@ func rootlessLibPluginsPath() string {
 
 // specsPaths is the non-Windows implementation of [SpecsPaths].
 func specsPaths() []string {
-	if rootless.RunningWithRootlessKit() {
+	// TODO(thaJeztah): switch back to daemon/internal/rootless.RunningWithRootlessKit if this package moves internal to the daemon.
+	if os.Getenv("ROOTLESSKIT_STATE_DIR") != "" {
 		return []string{rootlessConfigPluginsPath(), rootlessLibPluginsPath()}
 	}
 	return []string{"/etc/docker/plugins", "/usr/lib/docker/plugins"}

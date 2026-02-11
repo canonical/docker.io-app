@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -19,7 +19,7 @@ func TestStop(t *testing.T) {
 		name         string
 		args         []string
 		stopped      []string
-		expectedOpts container.StopOptions
+		expectedOpts client.ContainerStopOptions
 		expectedErr  string
 	}{
 		{
@@ -36,19 +36,19 @@ func TestStop(t *testing.T) {
 		{
 			name:         "with -t",
 			args:         []string{"-t", "2", "container-1"},
-			expectedOpts: container.StopOptions{Timeout: func(to int) *int { return &to }(2)},
+			expectedOpts: client.ContainerStopOptions{Timeout: func(to int) *int { return &to }(2)},
 			stopped:      []string{"container-1"},
 		},
 		{
 			name:         "with --timeout",
 			args:         []string{"--timeout", "2", "container-1"},
-			expectedOpts: container.StopOptions{Timeout: func(to int) *int { return &to }(2)},
+			expectedOpts: client.ContainerStopOptions{Timeout: func(to int) *int { return &to }(2)},
 			stopped:      []string{"container-1"},
 		},
 		{
 			name:         "with --time",
 			args:         []string{"--time", "2", "container-1"},
-			expectedOpts: container.StopOptions{Timeout: func(to int) *int { return &to }(2)},
+			expectedOpts: client.ContainerStopOptions{Timeout: func(to int) *int { return &to }(2)},
 			stopped:      []string{"container-1"},
 		},
 		{
@@ -62,10 +62,10 @@ func TestStop(t *testing.T) {
 			mutex := new(sync.Mutex)
 
 			cli := test.NewFakeCli(&fakeClient{
-				containerStopFunc: func(ctx context.Context, containerID string, options container.StopOptions) error {
+				containerStopFunc: func(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
 					assert.Check(t, is.DeepEqual(options, tc.expectedOpts))
 					if containerID == "nosuchcontainer" {
-						return notFound(errors.New("Error: no such container: " + containerID))
+						return client.ContainerStopResult{}, notFound(errors.New("Error: no such container: " + containerID))
 					}
 
 					// containerStopFunc is called in parallel for each container
@@ -73,11 +73,11 @@ func TestStop(t *testing.T) {
 					mutex.Lock()
 					stopped = append(stopped, containerID)
 					mutex.Unlock()
-					return nil
+					return client.ContainerStopResult{}, nil
 				},
 				Version: "1.36",
 			})
-			cmd := NewStopCommand(cli)
+			cmd := newStopCommand(cli)
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)

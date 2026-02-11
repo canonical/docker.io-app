@@ -2,12 +2,13 @@ package contenthash
 
 import (
 	"archive/tar"
-	"crypto/sha256"
+	"encoding/hex"
 	"hash"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/moby/buildkit/util/cachedigest"
 	"github.com/pkg/errors"
 	fstypes "github.com/tonistiigi/fsutil/types"
 )
@@ -41,17 +42,8 @@ func NewFileHash(path string, fi os.FileInfo) (hash.Hash, error) {
 }
 
 func NewFromStat(stat *fstypes.Stat) (hash.Hash, error) {
-	// Clear the irregular file bit if this is some kind of special
-	// file. Pre-Go 1.23 behavior would only add the irregular file
-	// bit to regular files with non-handled reparse points.
-	// Current versions of Go now apply them to directories too.
-	// archive/tar.FileInfoHeader does not handle the irregular bit.
-	if stat.Mode&uint32(os.ModeType&^os.ModeIrregular) != 0 {
-		stat.Mode &^= uint32(os.ModeIrregular)
-	}
-
-	// Clear the socket bit since archive/tar.FileInfoHeader does not handle it
-	stat.Mode &^= uint32(os.ModeSocket)
+	// Clear the socket and irregular bits since archive/tar.FileInfoHeader does not handle them
+	stat.Mode &^= uint32(os.ModeSocket | os.ModeIrregular)
 
 	fi := &statInfo{stat}
 	hdr, err := tar.FileInfoHeader(fi, stat.Linkname)
@@ -71,13 +63,14 @@ func NewFromStat(stat *fstypes.Stat) (hash.Hash, error) {
 		}
 	}
 	// fmt.Printf("hdr: %#v\n", hdr)
-	tsh := &tarsumHash{hdr: hdr, Hash: sha256.New()}
+	h := cachedigest.NewHash(cachedigest.TypeFile)
+	tsh := &tarsumHash{hdr: hdr, Hash: h}
 	tsh.Reset() // initialize header
 	return tsh, nil
 }
 
 type tarsumHash struct {
-	hash.Hash
+	*cachedigest.Hash
 	hdr *tar.Header
 }
 
@@ -86,6 +79,19 @@ func (tsh *tarsumHash) Reset() {
 	// comply with hash.Hash and reset to the state hash had before any writes
 	tsh.Hash.Reset()
 	WriteV1TarsumHeaders(tsh.hdr, tsh.Hash)
+}
+
+func (tsh *tarsumHash) Write(p []byte) (n int, err error) {
+	n, err = tsh.WriteNoDebug(p)
+	if n > 0 {
+		tsh.hdr.Size += int64(n)
+	}
+	return n, err
+}
+
+func (tsh *tarsumHash) Sum(_ []byte) []byte {
+	b, _ := hex.DecodeString(tsh.Hash.Sum().Hex())
+	return b
 }
 
 type statInfo struct {

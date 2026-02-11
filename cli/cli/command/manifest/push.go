@@ -10,12 +10,11 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/manifest/types"
-	registryclient "github.com/docker/cli/cli/registry/client"
+	"github.com/docker/cli/internal/registryclient"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/ocischema"
 	"github.com/docker/distribution/manifest/schema2"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +42,7 @@ type pushRequest struct {
 	insecure      bool
 }
 
-func newPushListCommand(dockerCli command.Cli) *cobra.Command {
+func newPushListCommand(dockerCLI command.Cli) *cobra.Command {
 	opts := pushOpts{}
 
 	cmd := &cobra.Command{
@@ -52,8 +51,9 @@ func newPushListCommand(dockerCli command.Cli) *cobra.Command {
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.target = args[0]
-			return runPush(cmd.Context(), dockerCli, opts)
+			return runPush(cmd.Context(), dockerCLI, opts)
 		},
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -73,7 +73,7 @@ func runPush(ctx context.Context, dockerCli command.Cli, opts pushOpts) error {
 		return err
 	}
 	if len(manifests) == 0 {
-		return errors.Errorf("%s not found", targetRef)
+		return fmt.Errorf("%s not found", targetRef)
 	}
 
 	req, err := buildPushRequest(manifests, targetRef, opts.insecure)
@@ -123,13 +123,12 @@ func buildPushRequest(manifests []types.ImageManifest, targetRef reference.Named
 
 func buildManifestList(manifests []types.ImageManifest, targetRef reference.Named) (*manifestlist.DeserializedManifestList, error) {
 	targetRepo := reference.TrimNamed(targetRef)
-	descriptors := []manifestlist.ManifestDescriptor{}
+	descriptors := make([]manifestlist.ManifestDescriptor, 0, len(manifests))
 	for _, imageManifest := range manifests {
 		if imageManifest.Descriptor.Platform == nil ||
 			imageManifest.Descriptor.Platform.Architecture == "" ||
 			imageManifest.Descriptor.Platform.OS == "" {
-			return nil, errors.Errorf(
-				"manifest %s must have an OS and Architecture to be pushed to a registry", imageManifest.Ref)
+			return nil, fmt.Errorf("manifest %s must have an OS and Architecture to be pushed to a registry", imageManifest.Ref)
 		}
 		descriptor, err := buildManifestDescriptor(targetRepo, imageManifest)
 		if err != nil {
@@ -145,7 +144,7 @@ func buildManifestDescriptor(targetRepo reference.Named, imageManifest types.Ima
 	manifestRepoHostname := reference.Domain(reference.TrimNamed(imageManifest.Ref))
 	targetRepoHostname := reference.Domain(reference.TrimNamed(targetRepo))
 	if manifestRepoHostname != targetRepoHostname {
-		return manifestlist.ManifestDescriptor{}, errors.Errorf("cannot use source images from a different registry than the target image: %s != %s", manifestRepoHostname, targetRepoHostname)
+		return manifestlist.ManifestDescriptor{}, fmt.Errorf("cannot use source images from a different registry than the target image: %s != %s", manifestRepoHostname, targetRepoHostname)
 	}
 
 	manifest := manifestlist.ManifestDescriptor{
@@ -162,8 +161,7 @@ func buildManifestDescriptor(targetRepo reference.Named, imageManifest types.Ima
 	}
 
 	if err := manifest.Descriptor.Digest.Validate(); err != nil {
-		return manifestlist.ManifestDescriptor{}, errors.Wrapf(err,
-			"digest parse of image %q failed", imageManifest.Ref)
+		return manifestlist.ManifestDescriptor{}, fmt.Errorf("digest parse of image %q failed: %w", imageManifest.Ref, err)
 	}
 
 	return manifest, nil
@@ -215,7 +213,7 @@ func buildPutManifestRequest(imageManifest types.ImageManifest, targetRef refere
 
 		dig := imageManifest.Descriptor.Digest
 		if dig2 := dig.Algorithm().FromBytes(dt); dig != dig2 {
-			return mountRequest{}, errors.Errorf("internal digest mismatch for %s: expected %s, got %s", imageManifest.Ref, dig, dig2)
+			return mountRequest{}, fmt.Errorf("internal digest mismatch for %s: expected %s, got %s", imageManifest.Ref, dig, dig2)
 		}
 
 		var manifest schema2.DeserializedManifest
@@ -234,7 +232,7 @@ func buildPutManifestRequest(imageManifest types.ImageManifest, targetRef refere
 
 		dig := imageManifest.Descriptor.Digest
 		if dig2 := dig.Algorithm().FromBytes(dt); dig != dig2 {
-			return mountRequest{}, errors.Errorf("internal digest mismatch for %s: expected %s, got %s", imageManifest.Ref, dig, dig2)
+			return mountRequest{}, fmt.Errorf("internal digest mismatch for %s: expected %s, got %s", imageManifest.Ref, dig, dig2)
 		}
 
 		var manifest ocischema.DeserializedManifest
@@ -248,15 +246,15 @@ func buildPutManifestRequest(imageManifest types.ImageManifest, targetRef refere
 }
 
 func pushList(ctx context.Context, dockerCLI command.Cli, req pushRequest) error {
-	rclient := newRegistryClient(dockerCLI, req.insecure)
+	registryClient := newRegistryClient(dockerCLI, req.insecure)
 
-	if err := mountBlobs(ctx, rclient, req.targetRef, req.manifestBlobs); err != nil {
+	if err := mountBlobs(ctx, registryClient, req.targetRef, req.manifestBlobs); err != nil {
 		return err
 	}
-	if err := pushReferences(ctx, dockerCLI.Out(), rclient, req.mountRequests); err != nil {
+	if err := pushReferences(ctx, dockerCLI.Out(), registryClient, req.mountRequests); err != nil {
 		return err
 	}
-	dgst, err := rclient.PutManifest(ctx, req.targetRef, req.list)
+	dgst, err := registryClient.PutManifest(ctx, req.targetRef, req.list)
 	if err != nil {
 		return err
 	}

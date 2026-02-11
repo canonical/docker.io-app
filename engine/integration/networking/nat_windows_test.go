@@ -3,14 +3,15 @@ package networking
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/go-connections/nat"
+	networktypes "github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -52,19 +53,19 @@ func TestNatNetworkICC(t *testing.T) {
 				container.WithName(ctr1Name),
 				container.WithNetworkMode(tc.netName),
 			)
-			defer c.ContainerRemove(ctx, id1, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, id1, client.ContainerRemoveOptions{Force: true})
 
 			pingCmd := []string{"ping", "-n", "1", "-w", "3000", ctr1Name}
 
 			const ctr2Name = "ctr2"
-			attachCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			res := container.RunAttach(attachCtx, t, c,
 				container.WithName(ctr2Name),
 				container.WithCmd(pingCmd...),
 				container.WithNetworkMode(tc.netName),
 			)
-			defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, res.ContainerID, client.ContainerRemoveOptions{Force: true})
 
 			assert.Check(t, is.Equal(res.ExitCode, 0))
 			assert.Check(t, is.Equal(res.Stderr.Len(), 0))
@@ -97,20 +98,20 @@ func TestFlakyPortMappedHairpinWindows(t *testing.T) {
 	serverId := container.Run(ctx, t, c,
 		container.WithNetworkMode(serverNetName),
 		container.WithExposedPorts("80"),
-		container.WithPortMap(nat.PortMap{"80": {{HostIP: "0.0.0.0"}}}),
+		container.WithPortMap(networktypes.PortMap{networktypes.MustParsePort("80"): {{HostIP: netip.IPv4Unspecified()}}}),
 		container.WithCmd("httpd", "-f"),
 	)
-	defer c.ContainerRemove(ctx, serverId, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, serverId, client.ContainerRemoveOptions{Force: true})
 
 	inspect := container.Inspect(ctx, t, c, serverId)
-	hostPort := inspect.NetworkSettings.Ports["80/tcp"][0].HostPort
+	hostPort := inspect.NetworkSettings.Ports[networktypes.MustParsePort("80/tcp")][0].HostPort
 
-	clientCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	attachCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	res := container.RunAttach(clientCtx, t, c,
+	res := container.RunAttach(attachCtx, t, c,
 		container.WithNetworkMode(clientNetName),
 		container.WithCmd("wget", "http://"+hostAddr+":"+hostPort),
 	)
-	defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, res.ContainerID, client.ContainerRemoveOptions{Force: true})
 	assert.Check(t, is.Contains(res.Stderr.String(), "404 Not Found"))
 }

@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -10,16 +10,14 @@ import (
 	"strings"
 
 	"github.com/containerd/log"
-	"github.com/hashicorp/go-multierror"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/symlink"
 	"golang.org/x/sys/unix"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/internal/mounttree"
-	"github.com/docker/docker/internal/unshare"
-	"github.com/docker/docker/pkg/fileutils"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/mounttree"
+	"github.com/moby/moby/v2/daemon/internal/unshare"
 )
 
 type future struct {
@@ -104,7 +102,7 @@ func (daemon *Daemon) openContainerFS(ctr *container.Container) (_ *containerFSV
 				if err != nil {
 					return err
 				}
-				if err := fileutils.CreateIfNotExists(dest, stat.IsDir()); err != nil {
+				if err := createIfNotExists(dest, stat.IsDir()); err != nil {
 					return err
 				}
 
@@ -216,10 +214,13 @@ func (vw *containerFSView) GoInFS(ctx context.Context, fn func()) error {
 func (vw *containerFSView) Close() error {
 	runtime.SetFinalizer(vw, nil)
 	close(vw.todo)
-	err := multierror.Append(nil, <-vw.done)
-	err = multierror.Append(err, vw.ctr.UnmountVolumes(context.TODO(), vw.d.LogVolumeEvent))
-	err = multierror.Append(err, vw.d.Unmount(vw.ctr))
-	return err.ErrorOrNil()
+	var errs []error
+	errs = append(errs,
+		<-vw.done,
+		vw.ctr.UnmountVolumes(context.TODO(), vw.d.LogVolumeEvent),
+		vw.d.Unmount(vw.ctr),
+	)
+	return errors.Join(errs...)
 }
 
 // Stat returns the metadata for path, relative to the current working directory
@@ -250,6 +251,27 @@ func (vw *containerFSView) Stat(ctx context.Context, path string) (*containertyp
 		return nil
 	})
 	return stat, err
+}
+
+// createIfNotExists creates a file or a directory only if it does not already exist.
+func createIfNotExists(dest string, isDir bool) error {
+	if _, err := os.Stat(dest); err != nil {
+		// FIXME(thaJeztah): this ignores any other error (which may include "dest" is of the wrong type, or permission errors).
+		if os.IsNotExist(err) {
+			if isDir {
+				return os.MkdirAll(dest, 0o755)
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(dest, os.O_CREATE, 0o755)
+			if err != nil {
+				return err
+			}
+			_ = f.Close()
+		}
+	}
+	return nil
 }
 
 // makeMountRRO makes the mount recursively read-only.

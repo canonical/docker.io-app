@@ -2,17 +2,18 @@ package networking
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"path"
 	"strings"
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -45,7 +46,7 @@ func TestResolvConfLocalhostIPv6(t *testing.T) {
 		container.WithNetworkMode(netName),
 		container.WithCmd("cat", "/etc/resolv.conf"),
 	)
-	defer c.ContainerRemove(ctx, result.ContainerID, containertypes.RemoveOptions{
+	defer c.ContainerRemove(ctx, result.ContainerID, client.ContainerRemoveOptions{
 		Force: true,
 	})
 
@@ -100,7 +101,7 @@ func TestInternalNetworkDNS(t *testing.T) {
 	// Create a container, initially with external connectivity.
 	// Expect the external DNS server to respond to a request from the container.
 	ctrId := container.Run(ctx, t, c, container.WithNetworkMode(extNetName))
-	defer c.ContainerRemove(ctx, ctrId, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, ctrId, client.ContainerRemoveOptions{Force: true})
 	res, err := container.Exec(ctx, c, ctrId, []string{"nslookup", "test.example"})
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(res.ExitCode, 0))
@@ -108,7 +109,9 @@ func TestInternalNetworkDNS(t *testing.T) {
 
 	// Connect the container to the internal network as well.
 	// External DNS should still be used.
-	err = c.NetworkConnect(ctx, intNetName, ctrId, nil)
+	_, err = c.NetworkConnect(ctx, intNetName, client.NetworkConnectOptions{
+		Container: ctrId,
+	})
 	assert.NilError(t, err)
 	res, err = container.Exec(ctx, c, ctrId, []string{"nslookup", "test.example"})
 	assert.NilError(t, err)
@@ -117,7 +120,7 @@ func TestInternalNetworkDNS(t *testing.T) {
 
 	// Disconnect from the external network.
 	// Expect no access to the external DNS.
-	err = c.NetworkDisconnect(ctx, extNetName, ctrId, true)
+	_, err = c.NetworkDisconnect(ctx, extNetName, client.NetworkDisconnectOptions{Container: ctrId, Force: true})
 	assert.NilError(t, err)
 	res, err = container.Exec(ctx, c, ctrId, []string{"nslookup", "test.example"})
 	assert.NilError(t, err)
@@ -126,7 +129,9 @@ func TestInternalNetworkDNS(t *testing.T) {
 
 	// Reconnect the external network.
 	// Check that the external DNS server is used again.
-	err = c.NetworkConnect(ctx, extNetName, ctrId, nil)
+	_, err = c.NetworkConnect(ctx, extNetName, client.NetworkConnectOptions{
+		Container: ctrId,
+	})
 	assert.NilError(t, err)
 	res, err = container.Exec(ctx, c, ctrId, []string{"nslookup", "test.example"})
 	assert.NilError(t, err)
@@ -171,7 +176,7 @@ func TestInternalNetworkLocalDNS(t *testing.T) {
 		}),
 		container.WithCmd("dnsd"),
 	)
-	defer c.ContainerRemove(ctx, serverId, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, serverId, client.ContainerRemoveOptions{Force: true})
 
 	// Get the DNS server's address.
 	inspect := container.Inspect(ctx, t, c, serverId)
@@ -180,10 +185,10 @@ func TestInternalNetworkLocalDNS(t *testing.T) {
 	// Query the internal network's DNS server (via the daemon's internal DNS server).
 	res := container.RunAttach(ctx, t, c,
 		container.WithNetworkMode(intNetName),
-		container.WithDNS([]string{serverIP}),
+		container.WithDNS([]netip.Addr{serverIP}),
 		container.WithCmd("nslookup", "-type=A", "foo.example"),
 	)
-	defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, res.ContainerID, client.ContainerRemoveOptions{Force: true})
 	assert.Check(t, is.Contains(res.Stdout.String(), "192.0.2.42"))
 }
 
@@ -200,7 +205,7 @@ func TestNslookupWindows(t *testing.T) {
 	res := container.RunAttach(attachCtx, t, c,
 		container.WithCmd("nslookup", "docker.com"),
 	)
-	defer c.ContainerRemove(ctx, res.ContainerID, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, res.ContainerID, client.ContainerRemoveOptions{Force: true})
 
 	assert.Check(t, is.Equal(res.ExitCode, 0))
 	// Current default is to forward requests to external servers, which

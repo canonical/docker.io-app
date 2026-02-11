@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"errors"
@@ -6,13 +6,13 @@ import (
 	"os"
 	"path/filepath"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/ioutils"
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/pkg/ioutils"
 )
 
 // containerStatPath stats the filesystem resource at the specified path in this
@@ -148,7 +148,7 @@ func (daemon *Daemon) containerArchivePath(container *container.Container, path 
 // directory and vice versa.
 //
 // FIXME(thaJeztah): copyUIDGID is not supported on Windows, but currently ignored silently
-func (daemon *Daemon) containerExtractToDir(container *container.Container, path string, copyUIDGID, noOverwriteDirNonDir bool, content io.Reader) error {
+func (daemon *Daemon) containerExtractToDir(container *container.Container, path string, copyUIDGID, allowOverwriteDirWithFile bool, content io.Reader) error {
 	container.Lock()
 	defer container.Unlock()
 
@@ -213,7 +213,7 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 	// 	return err
 	// }
 
-	options := daemon.defaultTarCopyOptions(noOverwriteDirNonDir)
+	options := daemon.defaultTarCopyOptions(allowOverwriteDirWithFile)
 	if err := chrootarchive.UntarWithRoot(content, resolvedPath, options, container.BaseFS); err != nil {
 		return err
 	}
@@ -302,7 +302,7 @@ func (daemon *Daemon) containerCopy(container *container.Container, resource str
 // loaded inside the utility VM, not the host.
 // IMPORTANT: The container lock MUST be held when calling this function.
 func (daemon *Daemon) isOnlineFSOperationPermitted(ctr *container.Container) error {
-	if !ctr.Running {
+	if !ctr.State.Running {
 		return nil
 	}
 

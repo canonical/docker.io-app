@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	pluginmanager "github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli-plugins/socket"
@@ -20,7 +20,7 @@ import (
 	cliflags "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/cli/version"
 	platformsignals "github.com/docker/cli/cmd/docker/internal/signals"
-	"github.com/docker/docker/api/types/versions"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -41,7 +41,7 @@ func main() {
 		os.Exit(getExitCode(err))
 	}
 
-	if err != nil && !cerrdefs.IsCanceled(err) {
+	if err != nil && !errdefs.IsCanceled(err) {
 		if err.Error() != "" {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
@@ -144,6 +144,11 @@ func newDockerCommand(dockerCli *command.DockerCli) *cli.TopLevelCommand {
 			DisableDescriptions: os.Getenv("DOCKER_CLI_DISABLE_COMPLETION_DESCRIPTION") != "",
 		},
 	}
+
+	// Disable file-completion by default. Most commands and flags should not
+	// complete with filenames.
+	cmd.CompletionOptions.SetDefaultShellCompDirective(cobra.ShellCompDirectiveNoFileComp)
+
 	cmd.SetIn(dockerCli.In())
 	cmd.SetOut(dockerCli.Out())
 	cmd.SetErr(dockerCli.Err())
@@ -163,8 +168,7 @@ func newDockerCommand(dockerCli *command.DockerCli) *cli.TopLevelCommand {
 	cmd.SetOut(dockerCli.Out())
 	commands.AddCommands(cmd, dockerCli)
 
-	cli.DisableFlagsInUseLine(cmd)
-	setValidateArgs(dockerCli, cmd)
+	visitAll(cmd, setValidateArgs(dockerCli))
 
 	// flags must be the top-level command flags, not cmd.Flags()
 	return cli.NewTopLevelCommand(cmd, dockerCli, opts, cmd.Flags())
@@ -177,13 +181,7 @@ func setFlagErrorFunc(dockerCli command.Cli, cmd *cobra.Command) {
 	// is called.
 	flagErrorFunc := cmd.FlagErrorFunc()
 	cmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
-		if err := pluginmanager.AddPluginCommandStubs(dockerCli, cmd.Root()); err != nil {
-			return err
-		}
 		if err := isSupported(cmd, dockerCli); err != nil {
-			return err
-		}
-		if err := hideUnsupportedFeatures(cmd, dockerCli); err != nil {
 			return err
 		}
 		return flagErrorFunc(cmd, err)
@@ -201,7 +199,7 @@ func setupHelpCommand(dockerCli command.Cli, rootCmd, helpCmd *cobra.Command) {
 			if err == nil {
 				return helpcmd.Run()
 			}
-			if !pluginmanager.IsNotFound(err) {
+			if !errdefs.IsNotFound(err) {
 				return fmt.Errorf("unknown help topic: %v", strings.Join(args, " "))
 			}
 		}
@@ -240,7 +238,7 @@ func setHelpFunc(dockerCli command.Cli, cmd *cobra.Command) {
 			if err == nil {
 				return
 			}
-			if !pluginmanager.IsNotFound(err) {
+			if !errdefs.IsNotFound(err) {
 				ccmd.Println(err)
 				return
 			}
@@ -256,23 +254,35 @@ func setHelpFunc(dockerCli command.Cli, cmd *cobra.Command) {
 			ccmd.Println(err)
 			return
 		}
-		if err := hideUnsupportedFeatures(ccmd, dockerCli); err != nil {
-			ccmd.Println(err)
-			return
-		}
+		hideUnsupportedFeatures(ccmd, dockerCli)
 
 		defaultHelpFunc(ccmd, args)
 	})
 }
 
-func setValidateArgs(dockerCli command.Cli, cmd *cobra.Command) {
-	// The Args is handled by ValidateArgs in cobra, which does not allows a pre-hook.
-	// As a result, here we replace the existing Args validation func to a wrapper,
-	// where the wrapper will check to see if the feature is supported or not.
-	// The Args validation error will only be returned if the feature is supported.
-	cli.VisitAll(cmd, func(ccmd *cobra.Command) {
+// visitAll traverses all commands from the root.
+func visitAll(root *cobra.Command, fns ...func(*cobra.Command)) {
+	for _, cmd := range root.Commands() {
+		visitAll(cmd, fns...)
+	}
+	for _, fn := range fns {
+		fn(root)
+	}
+}
+
+// The Args is handled by ValidateArgs in cobra, which does not allows a pre-hook.
+// As a result, here we replace the existing Args validation func to a wrapper,
+// where the wrapper will check to see if the feature is supported or not.
+// The Args validation error will only be returned if the feature is supported.
+func setValidateArgs(dockerCLI versionDetails) func(*cobra.Command) {
+	return func(ccmd *cobra.Command) {
 		// if there is no tags for a command or any of its parent,
 		// there is no need to wrap the Args validation.
+		//
+		// FIXME(thaJeztah): can we memoize properties of the parent?
+		//  visitAll traverses root -> all childcommands, and hasTags
+		//  goes the reverse (cmd -> visit all parents), so we may
+		//  end traversing two directions.
 		if !hasTags(ccmd) {
 			return
 		}
@@ -283,12 +293,12 @@ func setValidateArgs(dockerCli command.Cli, cmd *cobra.Command) {
 
 		cmdArgs := ccmd.Args
 		ccmd.Args = func(cmd *cobra.Command, args []string) error {
-			if err := isSupported(cmd, dockerCli); err != nil {
+			if err := isSupported(cmd, dockerCLI); err != nil {
 				return err
 			}
 			return cmdArgs(cmd, args)
 		}
-	})
+	}
 }
 
 func tryPluginRun(ctx context.Context, dockerCli command.Cli, cmd *cobra.Command, subcommand string, envs []string) error {
@@ -302,12 +312,12 @@ func tryPluginRun(ctx context.Context, dockerCli command.Cli, cmd *cobra.Command
 	srv, err := socket.NewPluginServer(nil)
 	if err == nil {
 		plugincmd.Env = append(plugincmd.Env, socket.EnvKey+"="+srv.Addr().String())
+		defer func() {
+			// Close the server when plugin execution is over, so that in case
+			// it's still open, any sockets on the filesystem are cleaned up.
+			_ = srv.Close()
+		}()
 	}
-	defer func() {
-		// Close the server when plugin execution is over, so that in case
-		// it's still open, any sockets on the filesystem are cleaned up.
-		_ = srv.Close()
-	}()
 
 	// Set additional environment variables specified by the caller.
 	plugincmd.Env = append(plugincmd.Env, envs...)
@@ -321,20 +331,22 @@ func tryPluginRun(ctx context.Context, dockerCli command.Cli, cmd *cobra.Command
 		// signals to the subprocess because the shared
 		// pgid makes the TTY a controlling terminal.
 		//
-		// The plugin should have it's own copy of this
+		// The plugin should have its own copy of this
 		// termination logic, and exit after 3 retries
-		// on it's own.
+		// on its own.
 		if dockerCli.Out().IsTerminal() {
 			return
 		}
 
-		// Terminate the plugin server, which will
-		// close all connections with plugin
-		// subprocesses, and signal them to exit.
+		// Terminate the plugin server, which closes
+		// all connections with plugin subprocesses,
+		// and signal them to exit.
 		//
-		// Repeated invocations will result in EINVAL,
-		// or EBADF; but that is fine for our purposes.
-		_ = srv.Close()
+		// Repeated invocations result in EINVAL or EBADF,
+		// but that is fine for our purposes.
+		if srv != nil {
+			_ = srv.Close()
+		}
 
 		// force the process to terminate if it hasn't already
 		if force {
@@ -349,15 +361,15 @@ func tryPluginRun(ctx context.Context, dockerCli command.Cli, cmd *cobra.Command
 
 	go func() {
 		retries := 0
-		force := false
 		// catch the first signal through context cancellation
 		<-ctx.Done()
-		tryTerminatePlugin(force)
+		tryTerminatePlugin(false)
 
 		// register subsequent signals
 		signals := make(chan os.Signal, exitLimit)
 		signal.Notify(signals, platformsignals.TerminationSignals...)
 
+		force := false
 		for range signals {
 			retries++
 			// If we're still running after 3 interruptions
@@ -438,7 +450,7 @@ func runDocker(ctx context.Context, dockerCli *command.DockerCli) error {
 			}
 		}()
 	} else {
-		fmt.Fprint(dockerCli.Err(), "Warning: Unexpected OTEL error, metrics may not be flushed")
+		_, _ = fmt.Fprint(dockerCli.Err(), "Warning: Unexpected OTEL error, metrics may not be flushed")
 	}
 
 	dockerCli.InstrumentCobraCommands(ctx, cmd)
@@ -449,12 +461,11 @@ func runDocker(ctx context.Context, dockerCli *command.DockerCli) error {
 		return err
 	}
 
-	if cli.HasCompletionArg(args) {
+	if hasCompletionArg(args) {
 		// We add plugin command stubs early only for completion. We don't
 		// want to add them for normal command execution as it would cause
 		// a significant performance hit.
-		err = pluginmanager.AddPluginCommandStubs(dockerCli, cmd)
-		if err != nil {
+		if err := pluginmanager.AddPluginCommandStubs(dockerCli, cmd); err != nil {
 			return err
 		}
 	}
@@ -471,7 +482,7 @@ func runDocker(ctx context.Context, dockerCli *command.DockerCli) error {
 				}
 				return nil
 			}
-			if !pluginmanager.IsNotFound(err) {
+			if !errdefs.IsNotFound(err) {
 				// For plugin not found we fall through to
 				// cmd.Execute() which deals with reporting
 				// "command not found" in a consistent way.
@@ -500,6 +511,16 @@ func runDocker(ctx context.Context, dockerCli *command.DockerCli) error {
 	}
 
 	return err
+}
+
+// hasCompletionArg returns true if a cobra completion arg request is found.
+func hasCompletionArg(args []string) bool {
+	for _, arg := range args {
+		if arg == cobra.ShellCompRequestCmd || arg == cobra.ShellCompNoDescRequestCmd {
+			return true
+		}
+	}
+	return false
 }
 
 type versionDetails interface {
@@ -533,7 +554,7 @@ func hideSubcommandIf(subcmd *cobra.Command, condition func(string) bool, annota
 	}
 }
 
-func hideUnsupportedFeatures(cmd *cobra.Command, details versionDetails) error {
+func hideUnsupportedFeatures(cmd *cobra.Command, details versionDetails) {
 	var (
 		notExperimental = func(_ string) bool { return !details.ServerInfo().HasExperimental }
 		notOSType       = func(v string) bool { return details.ServerInfo().OSType != "" && v != details.ServerInfo().OSType }
@@ -589,7 +610,6 @@ func hideUnsupportedFeatures(cmd *cobra.Command, details versionDetails) error {
 		hideSubcommandIf(subcmd, notSwarmStatus, "swarm")
 		hideSubcommandIf(subcmd, versionOlderThan, "version")
 	}
-	return nil
 }
 
 // Checks if a command or one of its ancestors is in the list

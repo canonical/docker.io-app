@@ -9,8 +9,8 @@ import (
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
 	"github.com/fvbommel/sortorder"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ type listOptions struct {
 	filter opts.FilterOpt
 }
 
-func newSecretListCommand(dockerCli command.Cli) *cobra.Command {
+func newSecretListCommand(dockerCLI command.Cli) *cobra.Command {
 	options := listOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
@@ -29,11 +29,10 @@ func newSecretListCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "List secrets",
 		Args:    cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSecretList(cmd.Context(), dockerCli, options)
+			return runSecretList(cmd.Context(), dockerCLI, options)
 		},
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			return completeNames(dockerCli)(cmd, args, toComplete)
-		},
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -44,29 +43,29 @@ func newSecretListCommand(dockerCli command.Cli) *cobra.Command {
 	return cmd
 }
 
-func runSecretList(ctx context.Context, dockerCli command.Cli, options listOptions) error {
-	client := dockerCli.Client()
+func runSecretList(ctx context.Context, dockerCLI command.Cli, options listOptions) error {
+	apiClient := dockerCLI.Client()
 
-	secrets, err := client.SecretList(ctx, swarm.SecretListOptions{Filters: options.filter.Value()})
+	res, err := apiClient.SecretList(ctx, client.SecretListOptions{Filters: options.filter.Value()})
 	if err != nil {
 		return err
 	}
 	format := options.format
 	if len(format) == 0 {
-		if len(dockerCli.ConfigFile().SecretFormat) > 0 && !options.quiet {
-			format = dockerCli.ConfigFile().SecretFormat
+		if len(dockerCLI.ConfigFile().SecretFormat) > 0 && !options.quiet {
+			format = dockerCLI.ConfigFile().SecretFormat
 		} else {
 			format = formatter.TableFormatKey
 		}
 	}
 
-	sort.Slice(secrets, func(i, j int) bool {
-		return sortorder.NaturalLess(secrets[i].Spec.Name, secrets[j].Spec.Name)
+	sort.Slice(res.Items, func(i, j int) bool {
+		return sortorder.NaturalLess(res.Items[i].Spec.Name, res.Items[j].Spec.Name)
 	})
 
 	secretCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewFormat(format, options.quiet),
+		Output: dockerCLI.Out(),
+		Format: newFormat(format, options.quiet),
 	}
-	return FormatWrite(secretCtx, secrets)
+	return formatWrite(secretCtx, res)
 }

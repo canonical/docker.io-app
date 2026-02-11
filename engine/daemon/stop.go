@@ -1,14 +1,15 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
 	"time"
 
 	"github.com/containerd/log"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/errdefs"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/signal"
 	"github.com/pkg/errors"
 )
@@ -21,12 +22,12 @@ import (
 // If the timeout is nil, the container's StopTimeout value is used, if set,
 // otherwise the engine default. A negative timeout value can be specified,
 // meaning no timeout, i.e. no forceful termination is performed.
-func (daemon *Daemon) ContainerStop(ctx context.Context, name string, options containertypes.StopOptions) error {
+func (daemon *Daemon) ContainerStop(ctx context.Context, name string, options backend.ContainerStopOptions) error {
 	ctr, err := daemon.GetContainer(name)
 	if err != nil {
 		return err
 	}
-	if !ctr.IsRunning() {
+	if !ctr.State.IsRunning() {
 		// This is not an actual error, but produces a 304 "not modified"
 		// when returned through the API to indicates the container is
 		// already in the desired state. It's implemented as an error
@@ -44,11 +45,11 @@ func (daemon *Daemon) ContainerStop(ctx context.Context, name string, options co
 // containerStop sends a stop signal, waits, sends a kill signal. It uses
 // a [context.WithoutCancel], so cancelling the context does not cancel
 // the request to stop the container.
-func (daemon *Daemon) containerStop(ctx context.Context, ctr *container.Container, options containertypes.StopOptions) (retErr error) {
+func (daemon *Daemon) containerStop(ctx context.Context, ctr *container.Container, options backend.ContainerStopOptions) (retErr error) {
 	// Cancelling the request should not cancel the stop.
 	ctx = context.WithoutCancel(ctx)
 
-	if !ctr.IsRunning() {
+	if !ctr.State.IsRunning() {
 		return nil
 	}
 
@@ -74,6 +75,9 @@ func (daemon *Daemon) containerStop(ctx context.Context, ctr *container.Containe
 	defer func() {
 		if retErr == nil {
 			daemon.LogContainerEvent(ctr, events.ActionStop)
+			// Ensure container status changes are committed by handler of container exit before returning control to the caller
+			ctr.Lock()
+			defer ctr.Unlock()
 		}
 	}()
 
@@ -92,7 +96,7 @@ func (daemon *Daemon) containerStop(ctx context.Context, ctr *container.Containe
 	}
 	defer cancel()
 
-	if status := <-ctr.Wait(subCtx, containertypes.WaitConditionNotRunning); status.Err() == nil {
+	if status := <-ctr.State.Wait(subCtx, containertypes.WaitConditionNotRunning); status.Err() == nil {
 		// container did exit, so ignore any previous errors and return
 		return nil
 	}
@@ -114,7 +118,7 @@ func (daemon *Daemon) containerStop(ctx context.Context, ctr *container.Containe
 		// got a kill error, but give container 2 more seconds to exit just in case
 		subCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		status := <-ctr.Wait(subCtx, containertypes.WaitConditionNotRunning)
+		status := <-ctr.State.Wait(subCtx, containertypes.WaitConditionNotRunning)
 		if status.Err() != nil {
 			log.G(ctx).WithError(err).WithField("container", ctr.ID).Errorf("error killing container: %v", status.Err())
 			return err

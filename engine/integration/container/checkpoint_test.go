@@ -1,32 +1,21 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
-	"context"
 	"os/exec"
 	"regexp"
 	"sort"
 	"testing"
 
-	"github.com/docker/docker/api/types/checkpoint"
-	containertypes "github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/testutil/request"
+	containertypes "github.com/moby/moby/api/types/container"
+	mounttypes "github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 	"gotest.tools/v3/skip"
 )
-
-//nolint:unused // false positive: linter detects this as "unused"
-func containerExec(ctx context.Context, t *testing.T, client client.APIClient, cID string, cmd []string) {
-	t.Logf("Exec: %s", cmd)
-	r, err := container.Exec(ctx, client, cID, cmd)
-	assert.NilError(t, err)
-	t.Log(r.Combined())
-	assert.Equal(t, r.ExitCode, 0)
-}
 
 func TestCheckpoint(t *testing.T) {
 	t.Skip("TestCheckpoint is broken; see https://github.com/moby/moby/issues/38963")
@@ -65,7 +54,7 @@ func TestCheckpoint(t *testing.T) {
 	}()
 
 	t.Log("Do a checkpoint and leave the container running")
-	err = apiClient.CheckpointCreate(ctx, cID, checkpoint.CreateOptions{
+	_, err = apiClient.CheckpointCreate(ctx, cID, client.CheckpointCreateOptions{
 		Exit:         false,
 		CheckpointID: "test",
 	})
@@ -84,21 +73,24 @@ func TestCheckpoint(t *testing.T) {
 	}
 	assert.NilError(t, err)
 
-	inspect, err := apiClient.ContainerInspect(ctx, cID)
+	inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(true, inspect.State.Running))
+	assert.Check(t, is.Equal(true, inspect.Container.State.Running))
 
-	checkpoints, err := apiClient.CheckpointList(ctx, cID, checkpoint.ListOptions{})
+	res, err := apiClient.CheckpointList(ctx, cID, client.CheckpointListOptions{})
 	assert.NilError(t, err)
-	assert.Equal(t, len(checkpoints), 1)
-	assert.Equal(t, checkpoints[0].Name, "test")
+	assert.Equal(t, len(res.Items), 1)
+	assert.Equal(t, res.Items[0].Name, "test")
 
 	// Create a test file on a tmpfs mount.
-	containerExec(ctx, t, apiClient, cID, []string{"touch", "/tmp/test-file"})
+	cmd := []string{"touch", "/tmp/test-file"}
+	r, err := container.Exec(ctx, apiClient, cID, cmd)
+	assert.NilError(t, err, "failed to exec command:", cmd)
+	r.AssertSuccess(t)
 
 	// Do a second checkpoint
 	t.Log("Do a checkpoint and stop the container")
-	err = apiClient.CheckpointCreate(ctx, cID, checkpoint.CreateOptions{
+	_, err = apiClient.CheckpointCreate(ctx, cID, client.CheckpointCreateOptions{
 		Exit:         true,
 		CheckpointID: "test2",
 	})
@@ -106,16 +98,16 @@ func TestCheckpoint(t *testing.T) {
 
 	poll.WaitOn(t, container.IsInState(ctx, apiClient, cID, containertypes.StateExited))
 
-	inspect, err = apiClient.ContainerInspect(ctx, cID)
+	inspect, err = apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(false, inspect.State.Running))
+	assert.Check(t, is.Equal(false, inspect.Container.State.Running))
 
 	// Check that both checkpoints are listed.
-	checkpoints, err = apiClient.CheckpointList(ctx, cID, checkpoint.ListOptions{})
+	res, err = apiClient.CheckpointList(ctx, cID, client.CheckpointListOptions{})
 	assert.NilError(t, err)
-	assert.Equal(t, len(checkpoints), 2)
+	assert.Equal(t, len(res.Items), 2)
 	cptNames := make([]string, 2)
-	for i, c := range checkpoints {
+	for i, c := range res.Items {
 		cptNames[i] = c.Name
 	}
 	sort.Strings(cptNames)
@@ -124,20 +116,23 @@ func TestCheckpoint(t *testing.T) {
 
 	// Restore the container from a second checkpoint.
 	t.Log("Restore the container")
-	err = apiClient.ContainerStart(ctx, cID, containertypes.StartOptions{
+	_, err = apiClient.ContainerStart(ctx, cID, client.ContainerStartOptions{
 		CheckpointID: "test2",
 	})
 	assert.NilError(t, err)
 
-	inspect, err = apiClient.ContainerInspect(ctx, cID)
+	inspect, err = apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(true, inspect.State.Running))
+	assert.Check(t, is.Equal(true, inspect.Container.State.Running))
 
 	// Check that the test file has been restored.
-	containerExec(ctx, t, apiClient, cID, []string{"test", "-f", "/tmp/test-file"})
+	cmd = []string{"test", "-f", "/tmp/test-file"}
+	r, err = container.Exec(ctx, apiClient, cID, cmd)
+	assert.NilError(t, err, "failed to exec command:", cmd)
+	r.AssertSuccess(t)
 
 	for _, id := range []string{"test", "test2"} {
-		err = apiClient.CheckpointDelete(ctx, cID, checkpoint.DeleteOptions{
+		_, err = apiClient.CheckpointRemove(ctx, cID, client.CheckpointRemoveOptions{
 			CheckpointID: id,
 		})
 		assert.NilError(t, err)

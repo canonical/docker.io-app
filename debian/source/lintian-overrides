@@ -1,0 +1,4 @@
+# The manpages are auto-generated from upstream sources
+docker.io-app source: maintainer-manual-page
+# This is way too recurrent upstream
+docker.io-app source: very-long-line-length-in-source-file

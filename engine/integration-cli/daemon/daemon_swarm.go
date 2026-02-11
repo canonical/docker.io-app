@@ -1,22 +1,23 @@
-package daemon // import "github.com/docker/docker/integration-cli/daemon"
+package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
 // CheckServiceTasksInState returns the number of tasks with a matching state,
 // and optional message substring.
-func (d *Daemon) CheckServiceTasksInState(ctx context.Context, service string, state swarm.TaskState, message string) func(*testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		tasks := d.GetServiceTasks(ctx, c, service)
+func (d *Daemon) CheckServiceTasksInState(ctx context.Context, service string, state swarm.TaskState, message string) func(*testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		tasks := d.GetServiceTasks(ctx, t, service)
 		var count int
 		for _, task := range tasks {
 			if task.Status.State == state {
@@ -31,9 +32,9 @@ func (d *Daemon) CheckServiceTasksInState(ctx context.Context, service string, s
 
 // CheckServiceTasksInStateWithError returns the number of tasks with a matching state,
 // and optional message substring.
-func (d *Daemon) CheckServiceTasksInStateWithError(ctx context.Context, service string, state swarm.TaskState, errorMessage string) func(*testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		tasks := d.GetServiceTasks(ctx, c, service)
+func (d *Daemon) CheckServiceTasksInStateWithError(ctx context.Context, service string, state swarm.TaskState, errorMessage string) func(*testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		tasks := d.GetServiceTasks(ctx, t, service)
 		var count int
 		for _, task := range tasks {
 			if task.Status.State == state {
@@ -47,14 +48,14 @@ func (d *Daemon) CheckServiceTasksInStateWithError(ctx context.Context, service 
 }
 
 // CheckServiceRunningTasks returns the number of running tasks for the specified service
-func (d *Daemon) CheckServiceRunningTasks(ctx context.Context, service string) func(*testing.T) (interface{}, string) {
+func (d *Daemon) CheckServiceRunningTasks(ctx context.Context, service string) func(*testing.T) (any, string) {
 	return d.CheckServiceTasksInState(ctx, service, swarm.TaskStateRunning, "")
 }
 
 // CheckServiceUpdateState returns the current update state for the specified service
-func (d *Daemon) CheckServiceUpdateState(ctx context.Context, service string) func(*testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		service := d.GetService(ctx, c, service)
+func (d *Daemon) CheckServiceUpdateState(ctx context.Context, service string) func(*testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		service := d.GetService(ctx, t, service)
 		if service.UpdateStatus == nil {
 			return "", ""
 		}
@@ -63,52 +64,52 @@ func (d *Daemon) CheckServiceUpdateState(ctx context.Context, service string) fu
 }
 
 // CheckPluginRunning returns the runtime state of the plugin
-func (d *Daemon) CheckPluginRunning(ctx context.Context, plugin string) func(c *testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		apiclient := d.NewClientT(c)
-		resp, _, err := apiclient.PluginInspectWithRaw(ctx, plugin)
+func (d *Daemon) CheckPluginRunning(ctx context.Context, plugin string) func(c *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		apiclient := d.NewClientT(t)
+		resp, err := apiclient.PluginInspect(ctx, plugin, client.PluginInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			return false, fmt.Sprintf("%v", err)
 		}
-		assert.NilError(c, err)
-		return resp.Enabled, fmt.Sprintf("%+v", resp)
+		assert.NilError(t, err)
+		return resp.Plugin.Enabled, fmt.Sprintf("%+v", resp.Plugin)
 	}
 }
 
 // CheckPluginImage returns the runtime state of the plugin
-func (d *Daemon) CheckPluginImage(ctx context.Context, plugin string) func(c *testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		apiclient := d.NewClientT(c)
-		resp, _, err := apiclient.PluginInspectWithRaw(ctx, plugin)
+func (d *Daemon) CheckPluginImage(ctx context.Context, plugin string) func(c *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		apiclient := d.NewClientT(t)
+		resp, err := apiclient.PluginInspect(ctx, plugin, client.PluginInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			return false, fmt.Sprintf("%v", err)
 		}
-		assert.NilError(c, err)
-		return resp.PluginReference, fmt.Sprintf("%+v", resp)
+		assert.NilError(t, err)
+		return resp.Plugin.PluginReference, fmt.Sprintf("%+v", resp.Plugin)
 	}
 }
 
 // CheckServiceTasks returns the number of tasks for the specified service
-func (d *Daemon) CheckServiceTasks(ctx context.Context, service string) func(*testing.T) (interface{}, string) {
-	return func(c *testing.T) (interface{}, string) {
-		tasks := d.GetServiceTasks(ctx, c, service)
+func (d *Daemon) CheckServiceTasks(ctx context.Context, service string) func(*testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
+		tasks := d.GetServiceTasks(ctx, t, service)
 		return len(tasks), ""
 	}
 }
 
 // CheckRunningTaskNetworks returns the number of times each network is referenced from a task.
-func (d *Daemon) CheckRunningTaskNetworks(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckRunningTaskNetworks(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		cli := d.NewClientT(t)
 		defer cli.Close()
 
-		tasks, err := cli.TaskList(ctx, swarm.TaskListOptions{
-			Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
+		taskList, err := cli.TaskList(ctx, client.TaskListOptions{
+			Filters: make(client.Filters).Add("desired-state", "running"),
 		})
 		assert.NilError(t, err)
 
 		result := make(map[string]int)
-		for _, task := range tasks {
+		for _, task := range taskList.Items {
 			for _, network := range task.Spec.Networks {
 				result[network.Target]++
 			}
@@ -118,18 +119,18 @@ func (d *Daemon) CheckRunningTaskNetworks(ctx context.Context) func(t *testing.T
 }
 
 // CheckRunningTaskImages returns the times each image is running as a task.
-func (d *Daemon) CheckRunningTaskImages(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckRunningTaskImages(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		cli := d.NewClientT(t)
 		defer cli.Close()
 
-		tasks, err := cli.TaskList(ctx, swarm.TaskListOptions{
-			Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
+		taskList, err := cli.TaskList(ctx, client.TaskListOptions{
+			Filters: make(client.Filters).Add("desired-state", "running"),
 		})
 		assert.NilError(t, err)
 
 		result := make(map[string]int)
-		for _, task := range tasks {
+		for _, task := range taskList.Items {
 			if task.Status.State == swarm.TaskStateRunning && task.Spec.ContainerSpec != nil {
 				result[task.Spec.ContainerSpec.Image]++
 			}
@@ -139,8 +140,8 @@ func (d *Daemon) CheckRunningTaskImages(ctx context.Context) func(t *testing.T) 
 }
 
 // CheckNodeReadyCount returns the number of ready node on the swarm
-func (d *Daemon) CheckNodeReadyCount(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckNodeReadyCount(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		nodes := d.ListNodes(ctx, t)
 		var readyCount int
 		for _, node := range nodes {
@@ -153,16 +154,16 @@ func (d *Daemon) CheckNodeReadyCount(ctx context.Context) func(t *testing.T) (in
 }
 
 // CheckLocalNodeState returns the current swarm node state
-func (d *Daemon) CheckLocalNodeState(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckLocalNodeState(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		info := d.SwarmInfo(ctx, t)
 		return info.LocalNodeState, ""
 	}
 }
 
 // CheckControlAvailable returns the current swarm control available
-func (d *Daemon) CheckControlAvailable(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckControlAvailable(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		info := d.SwarmInfo(ctx, t)
 		assert.Equal(t, info.LocalNodeState, swarm.LocalNodeStateActive)
 		return info.ControlAvailable, ""
@@ -170,24 +171,24 @@ func (d *Daemon) CheckControlAvailable(ctx context.Context) func(t *testing.T) (
 }
 
 // CheckLeader returns whether there is a leader on the swarm or not
-func (d *Daemon) CheckLeader(ctx context.Context) func(t *testing.T) (interface{}, string) {
-	return func(t *testing.T) (interface{}, string) {
+func (d *Daemon) CheckLeader(ctx context.Context) func(t *testing.T) (any, string) {
+	return func(t *testing.T) (any, string) {
 		cli := d.NewClientT(t)
 		defer cli.Close()
 
 		errList := "could not get node list"
 
-		ls, err := cli.NodeList(ctx, swarm.NodeListOptions{})
+		result, err := cli.NodeList(ctx, client.NodeListOptions{})
 		if err != nil {
 			return err, errList
 		}
 
-		for _, node := range ls {
+		for _, node := range result.Items {
 			if node.ManagerStatus != nil && node.ManagerStatus.Leader {
 				return nil, ""
 			}
 		}
-		return fmt.Errorf("no leader"), "could not find leader"
+		return errors.New("no leader"), "could not find leader"
 	}
 }
 

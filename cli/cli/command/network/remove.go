@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strconv"
 
-	cerrdefs "github.com/containerd/errdefs"
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/internal/prompt"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +18,7 @@ type removeOptions struct {
 	force bool
 }
 
-func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
+func newRemoveCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts removeOptions
 
 	cmd := &cobra.Command{
@@ -27,9 +27,10 @@ func newRemoveCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "Remove one or more networks",
 		Args:    cli.RequiresMinArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRemove(cmd.Context(), dockerCli, args, &opts)
+			return runRemove(cmd.Context(), dockerCLI, args, &opts)
 		},
-		ValidArgsFunction: completion.NetworkNames(dockerCli),
+		ValidArgsFunction:     completion.NetworkNames(dockerCLI),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -48,8 +49,8 @@ func runRemove(ctx context.Context, dockerCLI command.Cli, networks []string, op
 	status := 0
 
 	for _, name := range networks {
-		nw, _, err := apiClient.NetworkInspectWithRaw(ctx, name, network.InspectOptions{})
-		if err == nil && nw.Ingress {
+		res, err := apiClient.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+		if err == nil && res.Network.Ingress {
 			r, err := prompt.Confirm(ctx, dockerCLI.In(), dockerCLI.Out(), ingressWarning)
 			if err != nil {
 				return err
@@ -58,8 +59,9 @@ func runRemove(ctx context.Context, dockerCLI command.Cli, networks []string, op
 				continue
 			}
 		}
-		if err := apiClient.NetworkRemove(ctx, name); err != nil {
-			if opts.force && cerrdefs.IsNotFound(err) {
+		_, err = apiClient.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
+		if err != nil {
+			if opts.force && errdefs.IsNotFound(err) {
 				continue
 			}
 			_, _ = fmt.Fprintln(dockerCLI.Err(), err)

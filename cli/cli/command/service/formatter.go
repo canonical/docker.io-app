@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -10,14 +11,13 @@ import (
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/cli/command/inspect"
-	"github.com/docker/docker/api/types/container"
-	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/pkg/stringid"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
 	"github.com/fvbommel/sortorder"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 const serviceInspectPrettyTemplate formatter.Format = `
@@ -196,8 +196,8 @@ Ports:
 {{- end }}
 `
 
-// NewFormat returns a Format for rendering using a Context
-func NewFormat(source string) formatter.Format {
+// newFormat returns a Format for rendering using a Context.
+func newFormat(source string) formatter.Format {
 	switch source {
 	case formatter.PrettyFormatKey:
 		return serviceInspectPrettyTemplate
@@ -218,12 +218,13 @@ func resolveNetworks(service swarm.Service, getNetwork inspect.GetRefFunc) map[s
 	return networkNames
 }
 
-// InspectFormatWrite renders the context for a list of services
-func InspectFormatWrite(ctx formatter.Context, refs []string, getRef, getNetwork inspect.GetRefFunc) error {
-	if ctx.Format != serviceInspectPrettyTemplate {
-		return inspect.Inspect(ctx.Output, refs, string(ctx.Format), getRef)
+// inspectFormatWrite renders the context for a list of services
+func inspectFormatWrite(fmtCtx formatter.Context, refs []string, getRef, getNetwork inspect.GetRefFunc) error {
+	if fmtCtx.Format != serviceInspectPrettyTemplate {
+		return inspect.Inspect(fmtCtx.Output, refs, string(fmtCtx.Format), getRef)
 	}
-	render := func(format func(subContext formatter.SubContext) error) error {
+
+	return fmtCtx.Write(&serviceInspectContext{}, func(format func(subContext formatter.SubContext) error) error {
 		for _, ref := range refs {
 			serviceI, _, err := getRef(ref)
 			if err != nil {
@@ -231,15 +232,17 @@ func InspectFormatWrite(ctx formatter.Context, refs []string, getRef, getNetwork
 			}
 			service, ok := serviceI.(swarm.Service)
 			if !ok {
-				return errors.Errorf("got wrong object to inspect")
+				return errors.New("got wrong object to inspect")
 			}
-			if err := format(&serviceInspectContext{Service: service, networkNames: resolveNetworks(service, getNetwork)}); err != nil {
+			if err := format(&serviceInspectContext{
+				Service:      service,
+				networkNames: resolveNetworks(service, getNetwork),
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	return ctx.Write(&serviceInspectContext{}, render)
+	})
 }
 
 type serviceInspectContext struct {
@@ -379,11 +382,11 @@ func (ctx *serviceInspectContext) UpdateDelay() time.Duration {
 }
 
 func (ctx *serviceInspectContext) UpdateOnFailure() string {
-	return ctx.Service.Spec.UpdateConfig.FailureAction
+	return string(ctx.Service.Spec.UpdateConfig.FailureAction)
 }
 
 func (ctx *serviceInspectContext) UpdateOrder() string {
-	return ctx.Service.Spec.UpdateConfig.Order
+	return string(ctx.Service.Spec.UpdateConfig.Order)
 }
 
 func (ctx *serviceInspectContext) HasUpdateMonitor() bool {
@@ -415,7 +418,7 @@ func (ctx *serviceInspectContext) RollbackDelay() time.Duration {
 }
 
 func (ctx *serviceInspectContext) RollbackOnFailure() string {
-	return ctx.Service.Spec.RollbackConfig.FailureAction
+	return string(ctx.Service.Spec.RollbackConfig.FailureAction)
 }
 
 func (ctx *serviceInspectContext) HasRollbackMonitor() bool {
@@ -431,7 +434,7 @@ func (ctx *serviceInspectContext) RollbackMaxFailureRatio() float32 {
 }
 
 func (ctx *serviceInspectContext) RollbackOrder() string {
-	return ctx.Service.Spec.RollbackConfig.Order
+	return string(ctx.Service.Spec.RollbackConfig.Order)
 }
 
 func (ctx *serviceInspectContext) ContainerImage() string {
@@ -462,7 +465,7 @@ func (ctx *serviceInspectContext) ContainerInit() bool {
 	return *ctx.Service.Spec.TaskTemplate.ContainerSpec.Init
 }
 
-func (ctx *serviceInspectContext) ContainerMounts() []mounttypes.Mount {
+func (ctx *serviceInspectContext) ContainerMounts() []mount.Mount {
 	return ctx.Service.Spec.TaskTemplate.ContainerSpec.Mounts
 }
 
@@ -610,12 +613,12 @@ func NewListFormat(source string, quiet bool) formatter.Format {
 }
 
 // ListFormatWrite writes the context
-func ListFormatWrite(ctx formatter.Context, services []swarm.Service) error {
+func ListFormatWrite(ctx formatter.Context, services client.ServiceListResult) error {
 	render := func(format func(subContext formatter.SubContext) error) error {
-		sort.Slice(services, func(i, j int) bool {
-			return sortorder.NaturalLess(services[i].Spec.Name, services[j].Spec.Name)
+		sort.Slice(services.Items, func(i, j int) bool {
+			return sortorder.NaturalLess(services.Items[i].Spec.Name, services.Items[j].Spec.Name)
 		})
-		for _, service := range services {
+		for _, service := range services.Items {
 			serviceCtx := &serviceContext{service: service}
 			if err := format(serviceCtx); err != nil {
 				return err
@@ -645,7 +648,7 @@ func (c *serviceContext) MarshalJSON() ([]byte, error) {
 }
 
 func (c *serviceContext) ID() string {
-	return stringid.TruncateID(c.service.ID)
+	return formatter.TruncateID(c.service.ID)
 }
 
 func (c *serviceContext) Name() string {
@@ -733,7 +736,7 @@ type portRange struct {
 	pEnd     uint32
 	tStart   uint32
 	tEnd     uint32
-	protocol swarm.PortConfigProtocol
+	protocol network.IPProtocol
 }
 
 func (pr portRange) String() string {

@@ -17,6 +17,7 @@ on:
       - '[0-9]+.x'
     tags:
       - 'v*'
+      - 'docker-v*'
   pull_request:
     # The branches below must be a subset of the branches above
     branches: ["master"]
@@ -32,6 +33,9 @@ on:
     #        * * * * *
     - cron: '0 9 * * 4'
 
+env:
+  GO_VERSION: "1.25.5"
+
 jobs:
   codeql:
     runs-on: ubuntu-24.04
@@ -43,22 +47,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 2
-      # CodeQL 2.16.4's auto-build added support for multi-module repositories,
-      # and is trying to be smart by searching for modules in every directory,
-      # including vendor directories. If no module is found, it's creating one
-      # which is ... not what we want, so let's give it a "go.mod".
-      # see: https://github.com/docker/cli/pull/4944#issuecomment-2002034698
-      - name: Create go.mod
-        run: |
-          ln -s vendor.mod go.mod
-          ln -s vendor.sum go.sum
-      - name: Update Go
-        uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.24.3"
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:

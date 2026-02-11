@@ -3,30 +3,47 @@ package image
 import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/internal/commands"
 	"github.com/spf13/cobra"
 )
 
-// NewImageCommand returns a cobra command for `image` subcommands
-func NewImageCommand(dockerCli command.Cli) *cobra.Command {
+func init() {
+	commands.Register(newBuildCommand)
+	commands.Register(newPullCommand)
+	commands.Register(newPushCommand)
+	commands.Register(newImagesCommand)
+	commands.Register(newImageCommand)
+	commands.RegisterLegacy(newHistoryCommand)
+	commands.RegisterLegacy(newImportCommand)
+	commands.RegisterLegacy(newLoadCommand)
+	commands.RegisterLegacy(newRemoveCommand)
+	commands.RegisterLegacy(newSaveCommand)
+	commands.RegisterLegacy(newTagCommand)
+}
+
+// newImageCommand returns a cobra command for `image` subcommands
+func newImageCommand(dockerCli command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Manage images",
 		Args:  cli.NoArgs,
 		RunE:  command.ShowHelp(dockerCli.Err()),
+
+		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(
-		NewBuildCommand(dockerCli),
-		NewHistoryCommand(dockerCli),
-		NewImportCommand(dockerCli),
-		NewLoadCommand(dockerCli),
-		NewPullCommand(dockerCli),
-		NewPushCommand(dockerCli),
-		NewSaveCommand(dockerCli),
-		NewTagCommand(dockerCli),
+		newBuildCommand(dockerCli),
+		newHistoryCommand(dockerCli),
+		newImportCommand(dockerCli),
+		newLoadCommand(dockerCli),
+		newPullCommand(dockerCli),
+		newPushCommand(dockerCli),
+		newSaveCommand(dockerCli),
+		newTagCommand(dockerCli),
 		newListCommand(dockerCli),
-		newRemoveCommand(dockerCli),
+		newImageRemoveCommand(dockerCli),
 		newInspectCommand(dockerCli),
-		NewPruneCommand(dockerCli),
+		newPruneCommand(dockerCli),
 	)
 	return cmd
 }
