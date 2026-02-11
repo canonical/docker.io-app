@@ -1,14 +1,14 @@
 package system
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/cli/cli/command/idresolver"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -160,6 +160,20 @@ func validEventNames() []string {
 	return names
 }
 
+// configNames contacts the API to get a list of config names.
+// In case of an error, an empty list is returned.
+func configNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
+	res, err := dockerCLI.Client().ConfigList(cmd.Context(), client.ConfigListOptions{})
+	if err != nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(res.Items))
+	for _, v := range res.Items {
+		names = append(names, v.Spec.Name)
+	}
+	return names
+}
+
 // containerNames contacts the API to get names and optionally IDs of containers.
 // In case of an error, an empty list is returned.
 func containerNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command, args []string, toComplete string) []string {
@@ -173,22 +187,22 @@ func containerNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command, 
 // daemonNames contacts the API to get name and ID of the current docker daemon.
 // In case of an error, an empty list is returned.
 func daemonNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
-	info, err := dockerCLI.Client().Info(cmd.Context())
+	res, err := dockerCLI.Client().Info(cmd.Context(), client.InfoOptions{})
 	if err != nil {
 		return []string{}
 	}
-	return []string{info.Name, info.ID}
+	return []string{res.Info.Name, res.Info.ID}
 }
 
 // imageNames contacts the API to get a list of image names.
 // In case of an error, an empty list is returned.
 func imageNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
-	list, err := dockerCLI.Client().ImageList(cmd.Context(), image.ListOptions{})
+	res, err := dockerCLI.Client().ImageList(cmd.Context(), client.ImageListOptions{})
 	if err != nil {
 		return []string{}
 	}
-	names := make([]string, 0, len(list))
-	for _, img := range list {
+	names := make([]string, 0, len(res.Items))
+	for _, img := range res.Items {
 		names = append(names, img.RepoTags...)
 	}
 	return names
@@ -197,12 +211,12 @@ func imageNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []st
 // networkNames contacts the API to get a list of network names.
 // In case of an error, an empty list is returned.
 func networkNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
-	list, err := dockerCLI.Client().NetworkList(cmd.Context(), network.ListOptions{})
+	res, err := dockerCLI.Client().NetworkList(cmd.Context(), client.NetworkListOptions{})
 	if err != nil {
 		return []string{}
 	}
-	names := make([]string, 0, len(list))
-	for _, nw := range list {
+	names := make([]string, 0, len(res.Items))
+	for _, nw := range res.Items {
 		names = append(names, nw.Name)
 	}
 	return names
@@ -211,13 +225,79 @@ func networkNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []
 // nodeNames contacts the API to get a list of node names.
 // In case of an error, an empty list is returned.
 func nodeNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
-	list, err := dockerCLI.Client().NodeList(cmd.Context(), swarm.NodeListOptions{})
+	res, err := dockerCLI.Client().NodeList(cmd.Context(), client.NodeListOptions{})
 	if err != nil {
 		return []string{}
 	}
-	names := make([]string, 0, len(list))
-	for _, node := range list {
+	names := make([]string, 0, len(res.Items))
+	for _, node := range res.Items {
 		names = append(names, node.Description.Hostname)
+	}
+	return names
+}
+
+// pluginNames contacts the API to get a list of plugin names.
+// In case of an error, an empty list is returned.
+func pluginNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
+	res, err := dockerCLI.Client().PluginList(cmd.Context(), client.PluginListOptions{})
+	if err != nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(res.Items))
+	for _, v := range res.Items {
+		names = append(names, v.Name)
+	}
+	return names
+}
+
+// secretNames contacts the API to get a list of secret names.
+// In case of an error, an empty list is returned.
+func secretNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
+	res, err := dockerCLI.Client().SecretList(cmd.Context(), client.SecretListOptions{})
+	if err != nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(res.Items))
+	for _, v := range res.Items {
+		names = append(names, v.Spec.Name)
+	}
+	return names
+}
+
+// serviceNames contacts the API to get a list of service names.
+// In case of an error, an empty list is returned.
+func serviceNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
+	res, err := dockerCLI.Client().ServiceList(cmd.Context(), client.ServiceListOptions{})
+	if err != nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(res.Items))
+	for _, v := range res.Items {
+		names = append(names, v.Spec.Name)
+	}
+	return names
+}
+
+// taskNames contacts the API to get a list of service names.
+// In case of an error, an empty list is returned.
+func taskNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
+	res, err := dockerCLI.Client().TaskList(cmd.Context(), client.TaskListOptions{})
+	if err != nil || len(res.Items) == 0 {
+		return []string{}
+	}
+
+	resolver := idresolver.New(dockerCLI.Client(), false)
+	names := make([]string, 0, len(res.Items))
+	for _, task := range res.Items {
+		serviceName, err := resolver.Resolve(cmd.Context(), swarm.Service{}, task.ServiceID)
+		if err != nil {
+			continue
+		}
+		if task.Slot != 0 {
+			names = append(names, fmt.Sprintf("%v.%v", serviceName, task.Slot))
+		} else {
+			names = append(names, fmt.Sprintf("%v.%v", serviceName, task.NodeID))
+		}
 	}
 	return names
 }
@@ -225,13 +305,49 @@ func nodeNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []str
 // volumeNames contacts the API to get a list of volume names.
 // In case of an error, an empty list is returned.
 func volumeNames(dockerCLI completion.APIClientProvider, cmd *cobra.Command) []string {
-	list, err := dockerCLI.Client().VolumeList(cmd.Context(), volume.ListOptions{})
+	res, err := dockerCLI.Client().VolumeList(cmd.Context(), client.VolumeListOptions{})
 	if err != nil {
 		return []string{}
 	}
-	names := make([]string, 0, len(list.Volumes))
-	for _, v := range list.Volumes {
+	names := make([]string, 0, len(res.Items))
+	for _, v := range res.Items {
 		names = append(names, v.Name)
 	}
 	return names
+}
+
+// completeObjectNames completes names of objects based on the "--type" flag
+//
+// TODO(thaJeztah): completion functions in this package don't remove names that have already been completed
+// this causes completion to continue even if a given name was already completed.
+func completeObjectNames(dockerCLI completion.APIClientProvider) cobra.CompletionFunc {
+	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if f := cmd.Flags().Lookup("type"); f != nil && f.Changed {
+			switch f.Value.String() {
+			case typeConfig:
+				return configNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeContainer:
+				return containerNames(dockerCLI, cmd, args, toComplete), cobra.ShellCompDirectiveNoFileComp
+			case typeImage:
+				return imageNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeNetwork:
+				return networkNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeNode:
+				return nodeNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typePlugin:
+				return pluginNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeSecret:
+				return secretNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeService:
+				return serviceNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeTask:
+				return taskNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			case typeVolume:
+				return volumeNames(dockerCLI, cmd), cobra.ShellCompDirectiveNoFileComp
+			default:
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
 }

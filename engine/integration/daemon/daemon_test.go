@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/integration/daemon"
+package daemon
 
 import (
 	"bytes"
@@ -15,16 +15,15 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/process"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/process"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -297,12 +296,12 @@ func TestDaemonProxy(t *testing.T) {
 		assert.Check(t, is.Equal(info.HTTPSProxy, proxyServer.URL))
 		assert.Check(t, is.Equal(info.NoProxy, "example.com"))
 
-		_, err := c.ImagePull(ctx, "example.org:5000/some/image:latest", image.PullOptions{})
+		_, err := c.ImagePull(ctx, "example.org:5000/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5000")
 
 		// Test NoProxy: example.com should not hit the proxy, and "received" variable should not be changed.
-		_, err = c.ImagePull(ctx, "example.com/some/image:latest", image.PullOptions{})
+		_, err = c.ImagePull(ctx, "example.com/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5000", "should not have used proxy")
 	})
@@ -349,12 +348,12 @@ func TestDaemonProxy(t *testing.T) {
 		ok, logs := d.ScanLogsT(ctx, t, daemon.ScanLogsMatchString(userPass))
 		assert.Assert(t, !ok, "logs should not contain the non-sanitized proxy URL: %s", logs)
 
-		_, err := c.ImagePull(ctx, "example.org:5001/some/image:latest", image.PullOptions{})
+		_, err := c.ImagePull(ctx, "example.org:5001/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5001")
 
 		// Test NoProxy: example.com should not hit the proxy, and "received" variable should not be changed.
-		_, err = c.ImagePull(ctx, "example.com/some/image:latest", image.PullOptions{})
+		_, err = c.ImagePull(ctx, "example.com/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5001", "should not have used proxy")
 	})
@@ -400,12 +399,12 @@ func TestDaemonProxy(t *testing.T) {
 			"NO_PROXY",
 		))
 
-		_, err := c.ImagePull(ctx, "example.org:5002/some/image:latest", image.PullOptions{})
+		_, err := c.ImagePull(ctx, "example.org:5002/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5002")
 
 		// Test NoProxy: example.com should not hit the proxy, and "received" variable should not be changed.
-		_, err = c.ImagePull(ctx, "example.com/some/image:latest", image.PullOptions{})
+		_, err = c.ImagePull(ctx, "example.com/some/image:latest", client.ImagePullOptions{})
 		assert.ErrorContains(t, err, "", "pulling should have failed")
 		assert.Equal(t, received, "example.org:5002", "should not have used proxy")
 	})
@@ -491,7 +490,7 @@ func testLiveRestoreAutoRemove(t *testing.T) {
 			// Run until a 'stop' file is created.
 			container.WithCmd("sh", "-c", "while [ ! -f /v/stop ]; do sleep 0.1; done"),
 			container.WithAutoRemove)
-		t.Cleanup(func() { apiClient.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true}) })
+		t.Cleanup(func() { apiClient.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true}) })
 		finishContainer := func() {
 			file, err := os.Create(filepath.Join(tmpDir, "stop"))
 			assert.NilError(t, err, "Failed to create 'stop' file")
@@ -506,7 +505,7 @@ func testLiveRestoreAutoRemove(t *testing.T) {
 		d.Restart(t, "--live-restore", "--iptables=false", "--ip6tables=false")
 
 		apiClient := d.NewClientT(t)
-		_, err := apiClient.ContainerInspect(ctx, cID)
+		_, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 		assert.NilError(t, err, "Container shouldn't be removed after engine restart")
 
 		finishContainer()
@@ -519,9 +518,9 @@ func testLiveRestoreAutoRemove(t *testing.T) {
 		apiClient := d.NewClientT(t)
 
 		// Get PID of the container process.
-		inspect, err := apiClient.ContainerInspect(ctx, cID)
+		inspect, err := apiClient.ContainerInspect(ctx, cID, client.ContainerInspectOptions{})
 		assert.NilError(t, err)
-		pid := inspect.State.Pid
+		pid := inspect.Container.State.Pid
 
 		d.Stop(t)
 
@@ -551,7 +550,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 		t.Run(string(policy), func(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			volName := "test-live-restore-volume-references-" + string(policy)
-			_, err := c.VolumeCreate(ctx, volume.CreateOptions{Name: volName})
+			_, err := c.VolumeCreate(ctx, client.VolumeCreateOptions{Name: volName})
 			assert.NilError(t, err)
 
 			// Create a container that uses the volume
@@ -561,16 +560,16 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 				Target: "/foo",
 			}
 			cID := container.Run(ctx, t, c, container.WithMount(m), container.WithCmd("top"), container.WithRestartPolicy(policy))
-			defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 			// Stop the daemon
 			d.Restart(t, "--live-restore", "--iptables=false", "--ip6tables=false")
 
 			// Try to remove the volume
-			err = c.VolumeRemove(ctx, volName, false)
+			_, err = c.VolumeRemove(ctx, volName, client.VolumeRemoveOptions{})
 			assert.ErrorContains(t, err, "volume is in use")
 
-			_, err = c.VolumeInspect(ctx, volName)
+			_, err = c.VolumeInspect(ctx, volName, client.VolumeInspectOptions{})
 			assert.NilError(t, err)
 		})
 	}
@@ -586,7 +585,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 	// Addresses https://github.com/moby/moby/issues/44422
 	t.Run("local volume with mount options", func(t *testing.T) {
 		ctx := testutil.StartSpan(ctx, t)
-		v, err := c.VolumeCreate(ctx, volume.CreateOptions{
+		created, err := c.VolumeCreate(ctx, client.VolumeCreateOptions{
 			Driver: "local",
 			Name:   "test-live-restore-volume-references-local",
 			DriverOpts: map[string]string{
@@ -595,6 +594,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 			},
 		})
 		assert.NilError(t, err)
+		v := created.Volume
 		m := mount.Mount{
 			Type:   mount.TypeVolume,
 			Source: v.Name,
@@ -603,11 +603,11 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 
 		const testContent = "hello"
 		cID := container.Run(ctx, t, c, container.WithMount(m), container.WithCmd("sh", "-c", "echo "+testContent+">>/foo/test.txt; sleep infinity"))
-		defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 		// Wait until container creates a file in the volume.
 		poll.WaitOn(t, func(t poll.LogT) poll.Result {
-			stat, err := c.ContainerStatPath(ctx, cID, "/foo/test.txt")
+			res, err := c.ContainerStatPath(ctx, cID, client.ContainerStatPathOptions{Path: "/foo/test.txt"})
 			if err != nil {
 				if cerrdefs.IsNotFound(err) {
 					return poll.Continue("file doesn't yet exist")
@@ -615,8 +615,8 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 				return poll.Error(err)
 			}
 
-			if int(stat.Size) != len(testContent)+1 {
-				return poll.Error(fmt.Errorf("unexpected test file size: %d", stat.Size))
+			if int(res.Stat.Size) != len(testContent)+1 {
+				return poll.Error(fmt.Errorf("unexpected test file size: %d", res.Stat.Size))
 			}
 
 			return poll.Success()
@@ -626,7 +626,7 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 
 		// Try to remove the volume
 		// This should fail since its used by a container
-		err = c.VolumeRemove(ctx, v.Name, false)
+		_, err = c.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{})
 		assert.ErrorContains(t, err, "volume is in use")
 
 		t.Run("volume still mounted", func(t *testing.T) {
@@ -635,16 +635,16 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 			// Check if a new container with the same volume has access to the previous content.
 			// This fails if the volume gets unmounted at startup.
 			cID2 := container.Run(ctx, t, c, container.WithMount(m), container.WithCmd("cat", "/foo/test.txt"))
-			defer c.ContainerRemove(ctx, cID2, containertypes.RemoveOptions{Force: true})
+			defer c.ContainerRemove(ctx, cID2, client.ContainerRemoveOptions{Force: true})
 
 			poll.WaitOn(t, container.IsStopped(ctx, c, cID2))
 
-			inspect, err := c.ContainerInspect(ctx, cID2)
+			inspect, err := c.ContainerInspect(ctx, cID2, client.ContainerInspectOptions{})
 			if assert.Check(t, err) {
-				assert.Check(t, is.Equal(inspect.State.ExitCode, 0), "volume doesn't have the same file")
+				assert.Check(t, is.Equal(inspect.Container.State.ExitCode, 0), "volume doesn't have the same file")
 			}
 
-			logs, err := c.ContainerLogs(ctx, cID2, containertypes.LogsOptions{ShowStdout: true})
+			logs, err := c.ContainerLogs(ctx, cID2, client.ContainerLogsOptions{ShowStdout: true})
 			assert.NilError(t, err)
 			defer logs.Close()
 
@@ -656,11 +656,11 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 		})
 
 		// Remove that container which should free the references in the volume
-		err = c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		_, err = c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 		assert.NilError(t, err)
 
 		// Now we should be able to remove the volume
-		err = c.VolumeRemove(ctx, v.Name, false)
+		_, err = c.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{})
 		assert.NilError(t, err)
 	})
 
@@ -677,10 +677,10 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 		}
 
 		cID := container.Run(ctx, t, c, container.WithMount(m))
-		defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 		waitFn := func(t poll.LogT) poll.Result {
-			_, err := c.ContainerStatPath(ctx, cID, "/image/hello")
+			_, err := c.ContainerStatPath(ctx, cID, client.ContainerStatPathOptions{Path: "/image/hello"})
 			if err != nil {
 				if cerrdefs.IsNotFound(err) {
 					return poll.Continue("file doesn't yet exist")
@@ -700,15 +700,15 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 			poll.WaitOn(t, waitFn)
 		})
 
-		_, err := c.ImageRemove(ctx, mountedImage, image.RemoveOptions{})
+		_, err := c.ImageRemove(ctx, mountedImage, client.ImageRemoveOptions{})
 		assert.ErrorContains(t, err, fmt.Sprintf("container %s is using its referenced image", cID[:12]))
 
 		// Remove that container which should free the references in the volume
-		err = c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		_, err = c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 		assert.NilError(t, err)
 
 		// Now we should be able to remove the volume
-		_, err = c.ImageRemove(ctx, mountedImage, image.RemoveOptions{})
+		_, err = c.ImageRemove(ctx, mountedImage, client.ImageRemoveOptions{})
 		assert.NilError(t, err)
 	})
 
@@ -723,18 +723,18 @@ func testLiveRestoreVolumeReferences(t *testing.T) {
 			Target: "/foo",
 		}
 		cID := container.Run(ctx, t, c, container.WithMount(m), container.WithCmd("top"))
-		defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 		d.Restart(t, "--live-restore", "--iptables=false", "--ip6tables=false")
 
-		err := c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		_, err := c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 		assert.NilError(t, err)
 	})
 }
 
 func testLiveRestoreUserChainsSetup(t *testing.T) {
 	skip.If(t, testEnv.IsRootless(), "rootless daemon uses it's own network namespace")
-	skip.If(t, testEnv.FirewallBackendDriver() == "nftables", "nftables enabled, skipping iptables test")
+	skip.If(t, strings.HasPrefix(testEnv.FirewallBackendDriver(), "nftables"), "nftables enabled, skipping iptables test")
 
 	t.Parallel()
 	ctx := testutil.StartSpan(baseContext, t)
@@ -750,7 +750,7 @@ func testLiveRestoreUserChainsSetup(t *testing.T) {
 		c := d.NewClientT(t)
 
 		cID := container.Run(ctx, t, c, container.WithCmd("top"))
-		defer c.ContainerRemove(ctx, cID, containertypes.RemoveOptions{Force: true})
+		defer c.ContainerRemove(ctx, cID, client.ContainerRemoveOptions{Force: true})
 
 		d.Stop(t)
 		icmd.RunCommand("iptables", "--flush", "FORWARD").Assert(t, icmd.Success)

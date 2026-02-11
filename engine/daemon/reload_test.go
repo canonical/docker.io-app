@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/daemon/images"
-	"github.com/docker/docker/libnetwork"
-	"github.com/docker/docker/registry"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/images"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	"github.com/moby/moby/v2/daemon/pkg/registry"
 	"gotest.tools/v3/assert"
 )
 
@@ -25,7 +25,7 @@ func muteLogs(t *testing.T) {
 func newDaemonForReloadT(t *testing.T, cfg *config.Config) *Daemon {
 	t.Helper()
 	daemon := &Daemon{
-		imageService: images.NewImageService(images.ImageServiceConfig{}),
+		imageService: images.NewImageService(t.Context(), images.ImageServiceConfig{}),
 	}
 	var err error
 	daemon.registryService, err = registry.NewService(registry.ServiceOptions{})
@@ -42,7 +42,7 @@ func TestDaemonReloadLabels(t *testing.T) {
 	})
 	muteLogs(t)
 
-	valuesSets := make(map[string]interface{})
+	valuesSets := make(map[string]any)
 	valuesSets["labels"] = "foo:baz"
 	newConfig := &config.Config{
 		CommonConfig: config.CommonConfig{
@@ -63,7 +63,7 @@ func TestDaemonReloadLabels(t *testing.T) {
 
 func TestDaemonReloadMirrors(t *testing.T) {
 	daemon := &Daemon{
-		imageService: images.NewImageService(images.ImageServiceConfig{}),
+		imageService: images.NewImageService(t.Context(), images.ImageServiceConfig{}),
 	}
 	muteLogs(t)
 
@@ -110,7 +110,7 @@ func TestDaemonReloadMirrors(t *testing.T) {
 	}
 
 	for _, value := range loadMirrors {
-		valuesSets := make(map[string]interface{})
+		valuesSets := make(map[string]any)
 		valuesSets["registry-mirrors"] = value.mirrors
 
 		newConfig := &config.Config{
@@ -162,7 +162,7 @@ func TestDaemonReloadMirrors(t *testing.T) {
 
 func TestDaemonReloadInsecureRegistries(t *testing.T) {
 	daemon := &Daemon{
-		imageService: images.NewImageService(images.ImageServiceConfig{}),
+		imageService: images.NewImageService(t.Context(), images.ImageServiceConfig{}),
 	}
 	muteLogs(t)
 
@@ -195,7 +195,7 @@ func TestDaemonReloadInsecureRegistries(t *testing.T) {
 		"https://mirror.test.example.com",
 	}
 
-	valuesSets := make(map[string]interface{})
+	valuesSets := make(map[string]any)
 	valuesSets["insecure-registries"] = insecureRegistries
 	valuesSets["registry-mirrors"] = mirrors
 
@@ -269,7 +269,7 @@ func TestDaemonReloadNotAffectOthers(t *testing.T) {
 	})
 	muteLogs(t)
 
-	valuesSets := make(map[string]interface{})
+	valuesSets := make(map[string]any)
 	valuesSets["labels"] = "foo:baz"
 	newConfig := &config.Config{
 		CommonConfig: config.CommonConfig{
@@ -301,7 +301,7 @@ func TestDaemonReloadNetworkDiagnosticPort(t *testing.T) {
 	enableConfig := &config.Config{
 		CommonConfig: config.CommonConfig{
 			NetworkDiagnosticPort: 2000,
-			ValuesSet: map[string]interface{}{
+			ValuesSet: map[string]any{
 				"network-diagnostic-port": 2000,
 			},
 		},

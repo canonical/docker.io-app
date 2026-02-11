@@ -8,8 +8,8 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -18,7 +18,7 @@ func TestVolumeListErrors(t *testing.T) {
 	testCases := []struct {
 		args           []string
 		flags          map[string]string
-		volumeListFunc func(filter filters.Args) (volume.ListResponse, error)
+		volumeListFunc func(client.VolumeListOptions) (client.VolumeListResult, error)
 		expectedError  string
 	}{
 		{
@@ -26,8 +26,8 @@ func TestVolumeListErrors(t *testing.T) {
 			expectedError: "accepts no argument",
 		},
 		{
-			volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-				return volume.ListResponse{}, errors.New("error listing volumes")
+			volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+				return client.VolumeListResult{}, errors.New("error listing volumes")
 			},
 			expectedError: "error listing volumes",
 		},
@@ -50,9 +50,9 @@ func TestVolumeListErrors(t *testing.T) {
 
 func TestVolumeListWithoutFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-			return volume.ListResponse{
-				Volumes: []*volume.Volume{
+		volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+			return client.VolumeListResult{
+				Items: []volume.Volume{
 					builders.Volume(),
 					builders.Volume(builders.VolumeName("foo"), builders.VolumeDriver("bar")),
 					builders.Volume(builders.VolumeName("baz"), builders.VolumeLabels(map[string]string{
@@ -69,9 +69,9 @@ func TestVolumeListWithoutFormat(t *testing.T) {
 
 func TestVolumeListWithConfigFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-			return volume.ListResponse{
-				Volumes: []*volume.Volume{
+		volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+			return client.VolumeListResult{
+				Items: []volume.Volume{
 					builders.Volume(),
 					builders.Volume(builders.VolumeName("foo"), builders.VolumeDriver("bar")),
 					builders.Volume(builders.VolumeName("baz"), builders.VolumeLabels(map[string]string{
@@ -91,9 +91,9 @@ func TestVolumeListWithConfigFormat(t *testing.T) {
 
 func TestVolumeListWithFormat(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-			return volume.ListResponse{
-				Volumes: []*volume.Volume{
+		volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+			return client.VolumeListResult{
+				Items: []volume.Volume{
 					builders.Volume(),
 					builders.Volume(builders.VolumeName("foo"), builders.VolumeDriver("bar")),
 					builders.Volume(builders.VolumeName("baz"), builders.VolumeLabels(map[string]string{
@@ -111,9 +111,9 @@ func TestVolumeListWithFormat(t *testing.T) {
 
 func TestVolumeListSortOrder(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-			return volume.ListResponse{
-				Volumes: []*volume.Volume{
+		volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+			return client.VolumeListResult{
+				Items: []volume.Volume{
 					builders.Volume(builders.VolumeName("volume-2-foo")),
 					builders.Volume(builders.VolumeName("volume-10-foo")),
 					builders.Volume(builders.VolumeName("volume-1-foo")),
@@ -129,9 +129,9 @@ func TestVolumeListSortOrder(t *testing.T) {
 
 func TestClusterVolumeList(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		volumeListFunc: func(filter filters.Args) (volume.ListResponse, error) {
-			return volume.ListResponse{
-				Volumes: []*volume.Volume{
+		volumeListFunc: func(client.VolumeListOptions) (client.VolumeListResult, error) {
+			return client.VolumeListResult{
+				Items: []volume.Volume{
 					{
 						Name:   "volume1",
 						Scope:  "global",

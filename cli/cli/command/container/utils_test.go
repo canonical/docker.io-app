@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func waitFn(cid string) (<-chan container.WaitResponse, <-chan error) {
+func waitFn(cid string) client.ContainerWaitResult {
 	resC := make(chan container.WaitResponse)
 	errC := make(chan error, 1)
 	var res container.WaitResponse
@@ -33,8 +33,10 @@ func waitFn(cid string) (<-chan container.WaitResponse, <-chan error) {
 			resC <- res
 		}
 	}()
-
-	return resC, errC
+	return client.ContainerWaitResult{
+		Result: resC,
+		Error:  errC,
+	}
 }
 
 func TestWaitExitOrRemoved(t *testing.T) {
@@ -60,10 +62,10 @@ func TestWaitExitOrRemoved(t *testing.T) {
 		},
 	}
 
-	client := &fakeClient{waitFunc: waitFn, Version: api.DefaultVersion}
+	apiClient := &fakeClient{waitFunc: waitFn, Version: client.MaxAPIVersion}
 	for _, tc := range tests {
 		t.Run(tc.cid, func(t *testing.T) {
-			statusC := waitExitOrRemoved(context.Background(), client, tc.cid, true)
+			statusC := waitExitOrRemoved(context.Background(), apiClient, tc.cid, true)
 			exitCode := <-statusC
 			assert.Check(t, is.Equal(tc.exitCode, exitCode))
 		})

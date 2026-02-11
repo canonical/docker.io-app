@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/build"
+	"github.com/moby/moby/client"
 )
 
 func TestBuilderPromptTermination(t *testing.T) {
@@ -15,11 +15,11 @@ func TestBuilderPromptTermination(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cli := test.NewFakeCli(&fakeClient{
-		builderPruneFunc: func(ctx context.Context, opts build.CachePruneOptions) (*build.CachePruneReport, error) {
-			return nil, errors.New("fakeClient builderPruneFunc should not be called")
+		builderPruneFunc: func(ctx context.Context, opts client.BuildCachePruneOptions) (client.BuildCachePruneResult, error) {
+			return client.BuildCachePruneResult{}, errors.New("fakeClient builderPruneFunc should not be called")
 		},
 	})
-	cmd := NewPruneCommand(cli)
+	cmd := newPruneCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	test.TerminatePrompt(ctx, t, cmd, cli)

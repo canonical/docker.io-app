@@ -18,9 +18,9 @@ import (
 	runcoptions "github.com/containerd/containerd/api/types/runc/options"
 	"github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/libcontainerd/shimopts"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/internal/libcontainerd/shimopts"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/atomicwriter"
 	"github.com/opencontainers/runtime-spec/specs-go/features"
 	"github.com/pkg/errors"
@@ -35,7 +35,7 @@ const (
 
 type shimConfig struct {
 	Shim     string
-	Opts     interface{}
+	Opts     any
 	Features *features.Features
 
 	// Check if the ShimConfig is valid given the current state of the system.
@@ -200,7 +200,7 @@ func wrapRuntime(dir, name, binary string, args []string) (string, error) {
 // Get returns the containerd runtime and options for name, suitable to pass
 // into containerd.WithRuntime(). The runtime and options for the default
 // runtime are returned when name is the empty string.
-func (r *runtimes) Get(name string) (string, interface{}, error) {
+func (r *runtimes) Get(name string) (string, any, error) {
 	if name == "" {
 		name = r.Default
 	}

@@ -1,4 +1,4 @@
-package logger // import "github.com/docker/docker/daemon/logger"
+package logger
 
 import (
 	"bytes"
@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	types "github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/v2/daemon/internal/stringid"
+	types "github.com/moby/moby/v2/daemon/server/backend"
 )
 
 const (

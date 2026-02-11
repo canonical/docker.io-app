@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/client/pkg/stringid"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -26,7 +26,7 @@ func (s *DockerDaemonSuite) TestDaemonUserNamespaceRootSetting(c *testing.T) {
 	testRequires(c, UserNamespaceInKernel)
 
 	ctx := testutil.GetContext(c)
-	s.d.StartWithBusybox(ctx, c, "--userns-remap", "default")
+	s.d.StartWithBusybox(ctx, c, "--userns-remap", "default", "--storage-driver", "vfs")
 
 	out, err := s.d.Cmd("run", "busybox", "stat", "-c", "%u:%g", "/bin/cat")
 	assert.Check(c, err)
@@ -95,13 +95,13 @@ func (s *DockerDaemonSuite) TestDaemonUserNamespaceRootSetting(c *testing.T) {
 }
 
 // findUser finds the uid or name of the user of the first process that runs in a container
-func (s *DockerDaemonSuite) findUser(c *testing.T, container string) string {
+func (s *DockerDaemonSuite) findUser(t *testing.T, container string) string {
 	out, err := s.d.Cmd("top", container)
-	assert.Assert(c, err == nil, "Output: %s", out)
+	assert.Assert(t, err == nil, "Output: %s", out)
 	rows := strings.Split(out, "\n")
 	if len(rows) < 2 {
 		// No process rows founds
-		c.FailNow()
+		t.FailNow()
 	}
 	return strings.Fields(rows[1])[0]
 }

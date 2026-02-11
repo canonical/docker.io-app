@@ -1,59 +1,39 @@
-package client // import "github.com/docker/docker/client"
+package client
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/volume"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestVolumeCreateError(t *testing.T) {
-	client := &Client{
-		client: newMockClient(errorMock(http.StatusInternalServerError, "Server error")),
-	}
+	client, err := New(WithMockClient(errorMock(http.StatusInternalServerError, "Server error")))
+	assert.NilError(t, err)
 
-	_, err := client.VolumeCreate(context.Background(), volume.CreateOptions{})
+	_, err = client.VolumeCreate(t.Context(), VolumeCreateOptions{})
 	assert.Check(t, is.ErrorType(err, cerrdefs.IsInternal))
 }
 
 func TestVolumeCreate(t *testing.T) {
-	expectedURL := "/volumes/create"
+	const expectedURL = "/volumes/create"
 
-	client := &Client{
-		client: newMockClient(func(req *http.Request) (*http.Response, error) {
-			if !strings.HasPrefix(req.URL.Path, expectedURL) {
-				return nil, fmt.Errorf("Expected URL '%s', got '%s'", expectedURL, req.URL)
-			}
+	client, err := New(WithMockClient(func(req *http.Request) (*http.Response, error) {
+		if err := assertRequest(req, http.MethodPost, expectedURL); err != nil {
+			return nil, err
+		}
+		return mockJSONResponse(http.StatusOK, nil, volume.Volume{
+			Name:       "volume",
+			Driver:     "local",
+			Mountpoint: "mountpoint",
+		})(req)
+	}))
+	assert.NilError(t, err)
 
-			if req.Method != http.MethodPost {
-				return nil, fmt.Errorf("expected POST method, got %s", req.Method)
-			}
-
-			content, err := json.Marshal(volume.Volume{
-				Name:       "volume",
-				Driver:     "local",
-				Mountpoint: "mountpoint",
-			})
-			if err != nil {
-				return nil, err
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader(content)),
-			}, nil
-		}),
-	}
-
-	vol, err := client.VolumeCreate(context.Background(), volume.CreateOptions{
+	res, err := client.VolumeCreate(t.Context(), VolumeCreateOptions{
 		Name:   "myvolume",
 		Driver: "mydriver",
 		DriverOpts: map[string]string{
@@ -61,7 +41,8 @@ func TestVolumeCreate(t *testing.T) {
 		},
 	})
 	assert.NilError(t, err)
-	assert.Check(t, is.Equal(vol.Name, "volume"))
-	assert.Check(t, is.Equal(vol.Driver, "local"))
-	assert.Check(t, is.Equal(vol.Mountpoint, "mountpoint"))
+	v := res.Volume
+	assert.Check(t, is.Equal(v.Name, "volume"))
+	assert.Check(t, is.Equal(v.Driver, "local"))
+	assert.Check(t, is.Equal(v.Mountpoint, "mountpoint"))
 }

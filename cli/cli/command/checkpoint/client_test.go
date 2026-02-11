@@ -3,34 +3,33 @@ package checkpoint
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/checkpoint"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type fakeClient struct {
 	client.Client
-	checkpointCreateFunc func(container string, options checkpoint.CreateOptions) error
-	checkpointDeleteFunc func(container string, options checkpoint.DeleteOptions) error
-	checkpointListFunc   func(container string, options checkpoint.ListOptions) ([]checkpoint.Summary, error)
+	checkpointCreateFunc func(container string, options client.CheckpointCreateOptions) (client.CheckpointCreateResult, error)
+	checkpointDeleteFunc func(container string, options client.CheckpointRemoveOptions) (client.CheckpointRemoveResult, error)
+	checkpointListFunc   func(container string, options client.CheckpointListOptions) (client.CheckpointListResult, error)
 }
 
-func (cli *fakeClient) CheckpointCreate(_ context.Context, container string, options checkpoint.CreateOptions) error {
+func (cli *fakeClient) CheckpointCreate(_ context.Context, container string, options client.CheckpointCreateOptions) (client.CheckpointCreateResult, error) {
 	if cli.checkpointCreateFunc != nil {
 		return cli.checkpointCreateFunc(container, options)
 	}
-	return nil
+	return client.CheckpointCreateResult{}, nil
 }
 
-func (cli *fakeClient) CheckpointDelete(_ context.Context, container string, options checkpoint.DeleteOptions) error {
+func (cli *fakeClient) CheckpointRemove(_ context.Context, container string, options client.CheckpointRemoveOptions) (client.CheckpointRemoveResult, error) {
 	if cli.checkpointDeleteFunc != nil {
 		return cli.checkpointDeleteFunc(container, options)
 	}
-	return nil
+	return client.CheckpointRemoveResult{}, nil
 }
 
-func (cli *fakeClient) CheckpointList(_ context.Context, container string, options checkpoint.ListOptions) ([]checkpoint.Summary, error) {
+func (cli *fakeClient) CheckpointList(_ context.Context, container string, options client.CheckpointListOptions) (client.CheckpointListResult, error) {
 	if cli.checkpointListFunc != nil {
 		return cli.checkpointListFunc(container, options)
 	}
-	return []checkpoint.Summary{}, nil
+	return client.CheckpointListResult{}, nil
 }

@@ -3,20 +3,15 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/image"
 	"github.com/docker/cli/internal/jsonstream"
 	"github.com/docker/cli/internal/prompt"
-	"github.com/docker/docker/api/types"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/registry"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 type pluginOptions struct {
@@ -26,15 +21,9 @@ type pluginOptions struct {
 	disable         bool
 	args            []string
 	skipRemoteCheck bool
-	untrusted       bool
 }
 
-func loadPullFlags(dockerCli command.Cli, opts *pluginOptions, flags *pflag.FlagSet) {
-	flags.BoolVar(&opts.grantPerms, "grant-all-permissions", false, "Grant all permissions necessary to run the plugin")
-	command.AddTrustVerificationFlags(flags, &opts.untrusted, dockerCli.ContentTrustEnabled())
-}
-
-func newInstallCommand(dockerCli command.Cli) *cobra.Command {
+func newInstallCommand(dockerCLI command.Cli) *cobra.Command {
 	var options pluginOptions
 	cmd := &cobra.Command{
 		Use:   "install [OPTIONS] PLUGIN [KEY=VALUE...]",
@@ -45,61 +34,46 @@ func newInstallCommand(dockerCli command.Cli) *cobra.Command {
 			if len(args) > 1 {
 				options.args = args[1:]
 			}
-			return runInstall(cmd.Context(), dockerCli, options)
+			return runInstall(cmd.Context(), dockerCLI, options)
 		},
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
-	loadPullFlags(dockerCli, &options, flags)
+	flags.BoolVar(&options.grantPerms, "grant-all-permissions", false, "Grant all permissions necessary to run the plugin")
 	flags.BoolVar(&options.disable, "disable", false, "Do not enable the plugin on install")
 	flags.StringVar(&options.localName, "alias", "", "Local name for plugin")
+
+	// TODO(thaJeztah): DEPRECATED: remove in v29.1 or v30
+	flags.Bool("disable-content-trust", true, "Skip image verification (deprecated)")
+	_ = flags.MarkDeprecated("disable-content-trust", "support for docker content trust was removed")
 	return cmd
 }
 
-func buildPullConfig(ctx context.Context, dockerCli command.Cli, opts pluginOptions, cmdName string) (types.PluginInstallOptions, error) {
+func buildPullConfig(dockerCLI command.Cli, opts pluginOptions) (client.PluginInstallOptions, error) {
 	// Names with both tag and digest will be treated by the daemon
 	// as a pull by digest with a local name for the tag
 	// (if no local name is provided).
 	ref, err := reference.ParseNormalizedNamed(opts.remote)
 	if err != nil {
-		return types.PluginInstallOptions{}, err
+		return client.PluginInstallOptions{}, err
 	}
 
-	repoInfo, _ := registry.ParseRepositoryInfo(ref)
-
-	remote := ref.String()
-
-	_, isCanonical := ref.(reference.Canonical)
-	if !opts.untrusted && !isCanonical {
-		ref = reference.TagNameOnly(ref)
-		nt, ok := ref.(reference.NamedTagged)
-		if !ok {
-			return types.PluginInstallOptions{}, errors.Errorf("invalid name: %s", ref.String())
-		}
-
-		trusted, err := image.TrustedReference(ctx, dockerCli, nt)
-		if err != nil {
-			return types.PluginInstallOptions{}, err
-		}
-		remote = reference.FamiliarString(trusted)
-	}
-
-	authConfig := command.ResolveAuthConfig(dockerCli.ConfigFile(), repoInfo.Index)
-	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
+	encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCLI.ConfigFile(), ref.String())
 	if err != nil {
-		return types.PluginInstallOptions{}, err
+		return client.PluginInstallOptions{}, err
 	}
 
-	options := types.PluginInstallOptions{
+	return client.PluginInstallOptions{
 		RegistryAuth:          encodedAuth,
-		RemoteRef:             remote,
+		RemoteRef:             ref.String(),
 		Disabled:              opts.disable,
 		AcceptAllPermissions:  opts.grantPerms,
-		AcceptPermissionsFunc: acceptPrivileges(dockerCli, opts.remote),
-		PrivilegeFunc:         command.RegistryAuthenticationPrivilegedFunc(dockerCli, repoInfo.Index, cmdName),
+		AcceptPermissionsFunc: acceptPrivileges(dockerCLI, opts.remote),
+		PrivilegeFunc:         nil,
 		Args:                  opts.args,
-	}
-	return options, nil
+	}, nil
 }
 
 func runInstall(ctx context.Context, dockerCLI command.Cli, opts pluginOptions) error {
@@ -110,23 +84,22 @@ func runInstall(ctx context.Context, dockerCLI command.Cli, opts pluginOptions) 
 			return err
 		}
 		if _, ok := aref.(reference.Canonical); ok {
-			return errors.Errorf("invalid name: %s", opts.localName)
+			return fmt.Errorf("invalid name: %s", opts.localName)
 		}
 		localName = reference.FamiliarString(reference.TagNameOnly(aref))
 	}
 
-	options, err := buildPullConfig(ctx, dockerCLI, opts, "plugin install")
+	options, err := buildPullConfig(dockerCLI, opts)
 	if err != nil {
 		return err
 	}
 	responseBody, err := dockerCLI.Client().PluginInstall(ctx, localName, options)
 	if err != nil {
-		if strings.Contains(err.Error(), "(image) when fetching") {
-			return errors.New(err.Error() + " - Use \"docker image pull\"")
-		}
 		return err
 	}
-	defer responseBody.Close()
+	defer func() {
+		_ = responseBody.Close()
+	}()
 	if err := jsonstream.Display(ctx, responseBody, dockerCLI.Out()); err != nil {
 		return err
 	}
@@ -134,8 +107,8 @@ func runInstall(ctx context.Context, dockerCLI command.Cli, opts pluginOptions) 
 	return nil
 }
 
-func acceptPrivileges(dockerCLI command.Streams, name string) func(ctx context.Context, privileges types.PluginPrivileges) (bool, error) {
-	return func(ctx context.Context, privileges types.PluginPrivileges) (bool, error) {
+func acceptPrivileges(dockerCLI command.Streams, name string) func(ctx context.Context, privileges plugin.Privileges) (bool, error) {
+	return func(ctx context.Context, privileges plugin.Privileges) (bool, error) {
 		_, _ = fmt.Fprintf(dockerCLI.Out(), "Plugin %q is requesting the following privileges:\n", name)
 		for _, privilege := range privileges {
 			_, _ = fmt.Fprintf(dockerCLI.Out(), " - %s: %v\n", privilege.Name, privilege.Value)

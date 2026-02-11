@@ -1,10 +1,8 @@
-// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
-
 package containerd
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -13,16 +11,16 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	imagetypes "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/storage"
-	"github.com/docker/docker/internal/sliceutil"
-	imagespec "github.com/moby/docker-image-spec/specs-go/v1"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	imagetypes "github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/storage"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/internal/sliceutil"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sync/semaphore"
 )
 
-func (i *ImageService) ImageInspect(ctx context.Context, refOrID string, opts backend.ImageInspectOpts) (*imagetypes.InspectResponse, error) {
+func (i *ImageService) ImageInspect(ctx context.Context, refOrID string, opts imagebackend.ImageInspectOpts) (*imagebackend.InspectData, error) {
 	requestedPlatform := opts.Platform
 
 	c8dImg, err := i.resolveImage(ctx, refOrID)
@@ -66,13 +64,6 @@ func (i *ImageService) ImageInspect(ctx context.Context, refOrID string, opts ba
 		}
 	}
 
-	var img imagespec.DockerOCIImage
-	if multi.Best != nil {
-		if err := multi.Best.ReadConfig(ctx, &img); err != nil {
-			return nil, err
-		}
-	}
-
 	parent, err := i.getImageLabelByDigest(ctx, target.Digest, imageLabelClassicBuilderParent)
 	if err != nil {
 		log.G(ctx).WithError(err).Warn("failed to determine Parent property")
@@ -89,47 +80,54 @@ func (i *ImageService) ImageInspect(ctx context.Context, refOrID string, opts ba
 		target = multi.Best.Target()
 	}
 
-	resp := &imagetypes.InspectResponse{
-		ID:            target.Digest.String(),
-		RepoTags:      repoTags,
-		Descriptor:    &target,
-		RepoDigests:   repoDigests,
-		Parent:        parent,
-		DockerVersion: "",
-		Size:          size,
-		Manifests:     manifests,
-		GraphDriver: storage.DriverData{
-			Name: i.snapshotter,
-			Data: nil,
+	resp := &imagebackend.InspectData{
+		InspectResponse: imagetypes.InspectResponse{
+			ID:          target.Digest.String(),
+			RepoTags:    repoTags,
+			Descriptor:  &target,
+			RepoDigests: repoDigests,
+			Size:        size,
+			Manifests:   manifests,
+			Metadata: imagetypes.Metadata{
+				LastTagTime: lastUpdated,
+			},
 		},
-		Metadata: imagetypes.Metadata{
-			LastTagTime: lastUpdated,
-		},
+		Parent: parent, // field is deprecated with the legacy builder, but returned by the API if present.
+
+		// GraphDriver is omitted in API v1.52 unless using a graphdriver.
+		GraphDriverLegacy: &storage.DriverData{Name: i.snapshotter},
 	}
 
+	var img dockerspec.DockerOCIImage
 	if multi.Best != nil {
-		imgConfig := img.Config
-		resp.Author = img.Author
-		resp.Config = &imgConfig
-		resp.Architecture = img.Architecture
-		resp.Variant = img.Variant
-		resp.Os = img.OS
-		resp.OsVersion = img.OSVersion
+		if err := multi.Best.ReadConfig(ctx, &img); err != nil && !cerrdefs.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to read image config: %w", err)
+		}
+	}
 
-		if len(img.History) > 0 {
-			resp.Comment = img.History[len(img.History)-1].Comment
-		}
+	// Copy the config
+	imgConfig := img.Config
+	resp.Config = &imgConfig
 
-		if img.Created != nil {
-			resp.Created = img.Created.Format(time.RFC3339Nano)
-		}
+	resp.Author = img.Author
+	resp.Architecture = img.Architecture
+	resp.Variant = img.Variant
+	resp.Os = img.OS
+	resp.OsVersion = img.OSVersion
 
-		resp.RootFS = imagetypes.RootFS{
-			Type: img.RootFS.Type,
-		}
-		for _, layer := range img.RootFS.DiffIDs {
-			resp.RootFS.Layers = append(resp.RootFS.Layers, layer.String())
-		}
+	if len(img.History) > 0 {
+		resp.Comment = img.History[len(img.History)-1].Comment
+	}
+
+	if img.Created != nil {
+		resp.Created = img.Created.Format(time.RFC3339Nano)
+	}
+
+	resp.RootFS = imagetypes.RootFS{
+		Type: img.RootFS.Type,
+	}
+	for _, layer := range img.RootFS.DiffIDs {
+		resp.RootFS.Layers = append(resp.RootFS.Layers, layer.String())
 	}
 
 	return resp, nil

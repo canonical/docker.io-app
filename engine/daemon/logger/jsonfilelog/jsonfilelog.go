@@ -1,7 +1,7 @@
 // Package jsonfilelog provides the default Logger implementation for
 // Docker logging. This logger logs to files on the host server in the
 // JSON format.
-package jsonfilelog // import "github.com/docker/docker/daemon/logger/jsonfilelog"
+package jsonfilelog
 
 import (
 	"bytes"
@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/jsonfilelog/jsonlog"
-	"github.com/docker/docker/daemon/logger/loggerutils"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/jsonfilelog/jsonlog"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
 	"github.com/pkg/errors"
 )
 
@@ -25,7 +25,7 @@ const Name = "json-file"
 // So let's start with a buffer bigger than this.
 const initialBufSize = 256
 
-var buffersPool = sync.Pool{New: func() interface{} { return bytes.NewBuffer(make([]byte, 0, initialBufSize)) }}
+var buffersPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, initialBufSize)) }}
 
 // JSONFileLogger is Logger implementation for default Docker logging.
 type JSONFileLogger struct {
@@ -54,7 +54,7 @@ func New(info logger.Info) (logger.Logger, error) {
 			return nil, err
 		}
 		if capval <= 0 {
-			return nil, fmt.Errorf("max-size must be a positive number")
+			return nil, errors.New("max-size must be a positive number")
 		}
 	}
 	maxFiles := 1
@@ -65,7 +65,7 @@ func New(info logger.Info) (logger.Logger, error) {
 			return nil, err
 		}
 		if maxFiles < 1 {
-			return nil, fmt.Errorf("max-file cannot be less than 1")
+			return nil, errors.New("max-file cannot be less than 1")
 		}
 	}
 
@@ -77,7 +77,7 @@ func New(info logger.Info) (logger.Logger, error) {
 			return nil, err
 		}
 		if compress && (maxFiles == 1 || capval == -1) {
-			return nil, fmt.Errorf("compress cannot be true when max-file is less than 2 or max-size is not set")
+			return nil, errors.New("compress cannot be true when max-file is less than 2 or max-size is not set")
 		}
 	}
 

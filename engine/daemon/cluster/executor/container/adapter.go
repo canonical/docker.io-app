@@ -1,4 +1,4 @@
-package container // import "github.com/docker/docker/daemon/cluster/executor/container"
+package container
 
 import (
 	"context"
@@ -13,18 +13,20 @@ import (
 
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/daemon"
-	"github.com/docker/docker/daemon/cluster/convert"
-	executorpkg "github.com/docker/docker/daemon/cluster/executor"
-	networkSettings "github.com/docker/docker/daemon/network"
-	"github.com/docker/docker/libnetwork"
-	volumeopts "github.com/docker/docker/volume/service/opts"
 	gogotypes "github.com/gogo/protobuf/types"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/v2/daemon"
+	"github.com/moby/moby/v2/daemon/cluster/convert"
+	executorpkg "github.com/moby/moby/v2/daemon/cluster/executor"
+	containerpkg "github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	networkSettings "github.com/moby/moby/v2/daemon/network"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	volumeopts "github.com/moby/moby/v2/daemon/volume/service/opts"
 	"github.com/moby/swarmkit/v2/agent/exec"
 	"github.com/moby/swarmkit/v2/api"
 	swarmlog "github.com/moby/swarmkit/v2/log"
@@ -75,7 +77,7 @@ func (c *containerAdapter) pullImage(ctx context.Context) error {
 	named, err := reference.ParseNormalizedNamed(spec.Image)
 	if err == nil {
 		if _, ok := named.(reference.Canonical); ok {
-			_, err := c.imageBackend.GetImage(ctx, spec.Image, backend.GetImageOpts{})
+			_, err := c.imageBackend.GetImage(ctx, spec.Image, imagebackend.GetImageOpts{})
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
@@ -106,13 +108,17 @@ func (c *containerAdapter) pullImage(ctx context.Context) error {
 
 		// Make sure the image has a tag, otherwise it will pull all tags.
 		ref := reference.TagNameOnly(named)
-		err := c.imageBackend.PullImage(ctx, ref, nil, metaHeaders, authConfig, pw)
+		err := c.imageBackend.PullImage(ctx, ref, imagebackend.PullOptions{
+			MetaHeaders: metaHeaders,
+			AuthConfig:  authConfig,
+			OutStream:   pw,
+		})
 		pw.CloseWithError(err)
 	}()
 
 	dec := json.NewDecoder(pr)
 	dec.UseNumber()
-	m := map[string]interface{}{}
+	m := map[string]any{}
 	spamLimiter := rate.NewLimiter(rate.Every(time.Second), 1)
 
 	lastStatus := ""
@@ -127,7 +133,7 @@ func (c *containerAdapter) pullImage(ctx context.Context) error {
 		// limit pull progress logs unless the status changes
 		if spamLimiter.Allow() || lastStatus != m["status"] {
 			// if we have progress details, we have everything we need
-			if progress, ok := m["progressDetail"].(map[string]interface{}); ok {
+			if progress, ok := m["progressDetail"].(map[string]any); ok {
 				// first, log the image and status
 				l = l.WithFields(log.Fields{
 					"image":  c.container.image(),
@@ -166,7 +172,7 @@ func (c *containerAdapter) waitNodeAttachments(ctx context.Context) error {
 	// we'll wait and try again.
 	attachmentStore := c.backend.GetAttachmentStore()
 	if attachmentStore == nil {
-		return fmt.Errorf("error getting attachment store")
+		return errors.New("error getting attachment store")
 	}
 
 	// essentially, we're long-polling here. this is really sub-optimal, but a
@@ -199,7 +205,7 @@ func (c *containerAdapter) waitNodeAttachments(ctx context.Context) error {
 		// otherwise, try polling again, or wait for context canceled.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("node is missing network attachments, ip addresses may be exhausted")
+			return errors.New("node is missing network attachments, ip addresses may be exhausted")
 		case <-poll.C:
 		}
 	}
@@ -369,7 +375,7 @@ func (c *containerAdapter) start(ctx context.Context) error {
 }
 
 func (c *containerAdapter) inspect(ctx context.Context) (containertypes.InspectResponse, error) {
-	cs, err := c.backend.ContainerInspect(ctx, c.container.name(), backend.ContainerInspectOptions{})
+	cs, _, err := c.backend.ContainerInspect(ctx, c.container.name(), backend.ContainerInspectOptions{})
 	if ctx.Err() != nil {
 		return containertypes.InspectResponse{}, ctx.Err()
 	}
@@ -415,12 +421,12 @@ func (c *containerAdapter) events(ctx context.Context) <-chan events.Message {
 	return eventsq
 }
 
-func (c *containerAdapter) wait(ctx context.Context) (<-chan containertypes.StateStatus, error) {
+func (c *containerAdapter) wait(ctx context.Context) (<-chan containerpkg.StateStatus, error) {
 	return c.backend.ContainerWait(ctx, c.container.nameOrID(), containertypes.WaitConditionNotRunning)
 }
 
 func (c *containerAdapter) shutdown(ctx context.Context) error {
-	options := containertypes.StopOptions{}
+	options := backend.ContainerStopOptions{}
 	// Default stop grace period to nil (daemon will use the stopTimeout of the container)
 	if spec := c.container.spec(); spec.StopGracePeriod != nil {
 		timeout := int(spec.StopGracePeriod.Seconds)
@@ -505,7 +511,7 @@ func (c *containerAdapter) deactivateServiceBinding() error {
 }
 
 func (c *containerAdapter) logs(ctx context.Context, options api.LogSubscriptionOptions) (<-chan *backend.LogMessage, error) {
-	apiOptions := &containertypes.LogsOptions{
+	apiOptions := &backend.ContainerLogsOptions{
 		Follow: options.Follow,
 
 		// Always say yes to Timestamps and Details. we make the decision
@@ -522,7 +528,7 @@ func (c *containerAdapter) logs(ctx context.Context, options api.LogSubscription
 		}
 		// print since as this formatted string because the docker container
 		// logs interface expects it like this.
-		// see github.com/docker/docker/api/types/time.ParseTimestamps
+		// see [github.com/moby/moby/v2/daemon/internal/timestamp.ParseTimestamps]
 		apiOptions.Since = fmt.Sprintf("%d.%09d", since.Unix(), int64(since.Nanosecond()))
 	}
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/poll"
 )
 
@@ -70,9 +70,9 @@ func CheckGoroutineCount(ctx context.Context, apiClient client.SystemAPIClient, 
 }
 
 func getGoroutineNumber(ctx context.Context, apiClient client.SystemAPIClient) (int, error) {
-	info, err := apiClient.Info(ctx)
+	result, err := apiClient.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return 0, err
 	}
-	return info.NGoroutines, nil
+	return result.Info.NGoroutines, nil
 }

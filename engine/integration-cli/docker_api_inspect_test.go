@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -32,7 +32,7 @@ func (s *DockerAPISuite) TestInspectAPIContainerResponse(c *testing.T) {
 	for _, cs := range cases {
 		body := getInspectBody(c, cs.version, cleanedContainerID)
 
-		var inspectJSON map[string]interface{}
+		var inspectJSON map[string]any
 		err := json.Unmarshal(body, &inspectJSON)
 		assert.NilError(c, err, "Unable to unmarshal body for version %s", cs.version)
 
@@ -53,26 +53,26 @@ func (s *DockerAPISuite) TestInspectAPIContainerVolumeDriver(c *testing.T) {
 
 	body := getInspectBody(c, "v1.25", cleanedContainerID)
 
-	var inspectJSON map[string]interface{}
+	var inspectJSON map[string]any
 	err := json.Unmarshal(body, &inspectJSON)
 	assert.NilError(c, err, "Unable to unmarshal body for version 1.25")
 
 	config, ok := inspectJSON["Config"]
 	assert.Assert(c, ok, "Unable to find 'Config'")
-	cfg := config.(map[string]interface{})
+	cfg := config.(map[string]any)
 	_, ok = cfg["VolumeDriver"]
 	assert.Assert(c, !ok, "API version 1.25 expected to not include VolumeDriver in 'Config'")
 
 	config, ok = inspectJSON["HostConfig"]
 	assert.Assert(c, ok, "Unable to find 'HostConfig'")
-	cfg = config.(map[string]interface{})
+	cfg = config.(map[string]any)
 	_, ok = cfg["VolumeDriver"]
 	assert.Assert(c, ok, "API version 1.25 expected to include VolumeDriver in 'HostConfig'")
 }
 
 func (s *DockerAPISuite) TestInspectAPIImageResponse(c *testing.T) {
 	cli.DockerCmd(c, "tag", "busybox:latest", "busybox:mytag")
-	apiClient, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.New(client.FromEnv)
 	assert.NilError(c, err)
 	defer apiClient.Close()
 
@@ -103,7 +103,6 @@ func (s *DockerAPISuite) TestInspectAPIBridgeNetworkSettings121(c *testing.T) {
 	assert.NilError(c, err)
 
 	settings := inspectJSON.NetworkSettings
-	assert.Assert(c, len(settings.IPAddress) != 0)
 	assert.Assert(c, settings.Networks["bridge"] != nil)
-	assert.Equal(c, settings.IPAddress, settings.Networks["bridge"].IPAddress)
+	assert.Assert(c, settings.Networks["bridge"].IPAddress.IsValid())
 }

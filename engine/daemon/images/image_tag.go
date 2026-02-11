@@ -1,11 +1,11 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
 
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/image"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/internal/image"
 )
 
 // TagImage adds the given reference to the image ID provided.

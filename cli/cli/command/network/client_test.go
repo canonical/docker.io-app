@@ -3,67 +3,65 @@ package network
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 type fakeClient struct {
 	client.Client
-	networkCreateFunc     func(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
-	networkConnectFunc    func(ctx context.Context, networkID, container string, config *network.EndpointSettings) error
-	networkDisconnectFunc func(ctx context.Context, networkID, container string, force bool) error
+	networkCreateFunc     func(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error)
+	networkConnectFunc    func(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
+	networkDisconnectFunc func(ctx context.Context, networkID string, options client.NetworkDisconnectOptions) (client.NetworkDisconnectResult, error)
 	networkRemoveFunc     func(ctx context.Context, networkID string) error
-	networkListFunc       func(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
-	networkPruneFunc      func(ctx context.Context, pruneFilters filters.Args) (network.PruneReport, error)
-	networkInspectFunc    func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, []byte, error)
+	networkListFunc       func(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error)
+	networkPruneFunc      func(ctx context.Context, options client.NetworkPruneOptions) (client.NetworkPruneResult, error)
+	networkInspectFunc    func(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
 }
 
-func (c *fakeClient) NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error) {
+func (c *fakeClient) NetworkCreate(ctx context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	if c.networkCreateFunc != nil {
 		return c.networkCreateFunc(ctx, name, options)
 	}
-	return network.CreateResponse{}, nil
+	return client.NetworkCreateResult{}, nil
 }
 
-func (c *fakeClient) NetworkConnect(ctx context.Context, networkID, container string, config *network.EndpointSettings) error {
+func (c *fakeClient) NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
 	if c.networkConnectFunc != nil {
-		return c.networkConnectFunc(ctx, networkID, container, config)
+		return c.networkConnectFunc(ctx, networkID, options)
 	}
-	return nil
+	return client.NetworkConnectResult{}, nil
 }
 
-func (c *fakeClient) NetworkDisconnect(ctx context.Context, networkID, container string, force bool) error {
+func (c *fakeClient) NetworkDisconnect(ctx context.Context, networkID string, options client.NetworkDisconnectOptions) (client.NetworkDisconnectResult, error) {
 	if c.networkDisconnectFunc != nil {
-		return c.networkDisconnectFunc(ctx, networkID, container, force)
+		return c.networkDisconnectFunc(ctx, networkID, options)
 	}
-	return nil
+	return client.NetworkDisconnectResult{}, nil
 }
 
-func (c *fakeClient) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error) {
+func (c *fakeClient) NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error) {
 	if c.networkListFunc != nil {
 		return c.networkListFunc(ctx, options)
 	}
-	return []network.Inspect{}, nil
+	return client.NetworkListResult{}, nil
 }
 
-func (c *fakeClient) NetworkRemove(ctx context.Context, networkID string) error {
+func (c *fakeClient) NetworkRemove(ctx context.Context, networkID string, _ client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
 	if c.networkRemoveFunc != nil {
-		return c.networkRemoveFunc(ctx, networkID)
+		return client.NetworkRemoveResult{}, c.networkRemoveFunc(ctx, networkID)
 	}
-	return nil
+	return client.NetworkRemoveResult{}, nil
 }
 
-func (c *fakeClient) NetworkInspectWithRaw(ctx context.Context, networkID string, opts network.InspectOptions) (network.Inspect, []byte, error) {
+func (c *fakeClient) NetworkInspect(ctx context.Context, networkID string, opts client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
 	if c.networkInspectFunc != nil {
 		return c.networkInspectFunc(ctx, networkID, opts)
 	}
-	return network.Inspect{}, nil, nil
+	return client.NetworkInspectResult{}, nil
 }
 
-func (c *fakeClient) NetworksPrune(ctx context.Context, pruneFilter filters.Args) (network.PruneReport, error) {
+func (c *fakeClient) NetworksPrune(ctx context.Context, opts client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
 	if c.networkPruneFunc != nil {
-		return c.networkPruneFunc(ctx, pruneFilter)
+		return c.networkPruneFunc(ctx, opts)
 	}
-	return network.PruneReport{}, nil
+	return client.NetworkPruneResult{}, nil
 }

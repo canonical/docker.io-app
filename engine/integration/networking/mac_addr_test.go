@@ -1,15 +1,21 @@
 package networking
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/netip"
+	"slices"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/integration/internal/network"
-	"github.com/docker/docker/libnetwork/drivers/bridge"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/daemon/libnetwork/drivers/bridge"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/integration/internal/network"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -47,10 +53,10 @@ func TestMACAddrOnRestart(t *testing.T) {
 		container.WithImage("busybox:latest"),
 		container.WithCmd("top"),
 		container.WithNetworkMode(netName))
-	defer c.ContainerRemove(ctx, id1, containertypes.RemoveOptions{
+	defer c.ContainerRemove(ctx, id1, client.ContainerRemoveOptions{
 		Force: true,
 	})
-	err := c.ContainerStop(ctx, ctr1Name, containertypes.StopOptions{})
+	_, err := c.ContainerStop(ctx, ctr1Name, client.ContainerStopOptions{})
 	assert.Assert(t, is.Nil(err))
 
 	// Start a second container, giving the daemon a chance to recycle the first container's
@@ -61,12 +67,12 @@ func TestMACAddrOnRestart(t *testing.T) {
 		container.WithImage("busybox:latest"),
 		container.WithCmd("top"),
 		container.WithNetworkMode(netName))
-	defer c.ContainerRemove(ctx, id2, containertypes.RemoveOptions{
+	defer c.ContainerRemove(ctx, id2, client.ContainerRemoveOptions{
 		Force: true,
 	})
 
 	// Restart the first container.
-	err = c.ContainerStart(ctx, ctr1Name, containertypes.StartOptions{})
+	_, err = c.ContainerStart(ctx, ctr1Name, client.ContainerStartOptions{})
 	assert.Assert(t, is.Nil(err))
 
 	// Check that the containers ended up with different MAC addresses.
@@ -77,7 +83,7 @@ func TestMACAddrOnRestart(t *testing.T) {
 	ctr2Inspect := container.Inspect(ctx, t, c, ctr2Name)
 	ctr2MAC := ctr2Inspect.NetworkSettings.Networks[netName].MacAddress
 
-	assert.Check(t, ctr1MAC != ctr2MAC,
+	assert.Check(t, !slices.Equal(ctr1MAC, ctr2MAC),
 		"expected containers to have different MAC addresses; got %q for both", ctr1MAC)
 }
 
@@ -109,30 +115,30 @@ func TestCfgdMACAddrOnRestart(t *testing.T) {
 		container.WithCmd("top"),
 		container.WithNetworkMode(netName),
 		container.WithMacAddress(netName, wantMAC))
-	defer c.ContainerRemove(ctx, id1, containertypes.RemoveOptions{
+	defer c.ContainerRemove(ctx, id1, client.ContainerRemoveOptions{
 		Force: true,
 	})
 
 	inspect := container.Inspect(ctx, t, c, ctr1Name)
 	gotMAC := inspect.NetworkSettings.Networks[netName].MacAddress
-	assert.Check(t, is.Equal(wantMAC, gotMAC))
+	assert.Check(t, is.Equal(wantMAC, gotMAC.String()))
 
 	startAndCheck := func() {
 		t.Helper()
-		err := c.ContainerStart(ctx, ctr1Name, containertypes.StartOptions{})
+		_, err := c.ContainerStart(ctx, ctr1Name, client.ContainerStartOptions{})
 		assert.Assert(t, is.Nil(err))
 		inspect = container.Inspect(ctx, t, c, ctr1Name)
 		gotMAC = inspect.NetworkSettings.Networks[netName].MacAddress
-		assert.Check(t, is.Equal(wantMAC, gotMAC))
+		assert.Check(t, is.Equal(wantMAC, gotMAC.String()))
 	}
 
 	// Restart the container, check that the MAC address is restored.
-	err := c.ContainerStop(ctx, ctr1Name, containertypes.StopOptions{})
+	_, err := c.ContainerStop(ctx, ctr1Name, client.ContainerStopOptions{})
 	assert.Assert(t, is.Nil(err))
 	startAndCheck()
 
 	// Restart the daemon, check that the MAC address is restored.
-	err = c.ContainerStop(ctx, ctr1Name, containertypes.StopOptions{})
+	_, err = c.ContainerStop(ctx, ctr1Name, client.ContainerStopOptions{})
 	assert.Assert(t, is.Nil(err))
 	d.Restart(t)
 	startAndCheck()
@@ -146,7 +152,7 @@ func TestInspectCfgdMAC(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	d := daemon.New(t)
+	d := daemon.New(t, daemon.WithEnvVars("DOCKER_MIN_API_VERSION=1.43"))
 	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
@@ -188,7 +194,9 @@ func TestInspectCfgdMAC(t *testing.T) {
 
 			var copts []client.Opt
 			if tc.ctrWide {
-				copts = append(copts, client.WithVersion("1.43"))
+				copts = append(copts, client.WithAPIVersion("1.43"))
+			} else {
+				copts = append(copts, client.WithAPIVersion("1.51"))
 			}
 			c := d.NewClientT(t, copts...)
 			defer c.Close()
@@ -213,21 +221,35 @@ func TestInspectCfgdMAC(t *testing.T) {
 			if tc.netName != "bridge" {
 				opts = append(opts, container.WithNetworkMode(tc.netName))
 			}
+			var id string
 			if tc.desiredMAC != "" {
 				if tc.ctrWide {
-					opts = append(opts, container.WithContainerWideMacAddress(tc.desiredMAC))
+					id = createLegacyContainer(ctx, t, c, tc.desiredMAC, opts...)
 				} else {
 					opts = append(opts, container.WithMacAddress(tc.netName, tc.desiredMAC))
+					id = container.Create(ctx, t, c, opts...)
 				}
+			} else {
+				id = container.Create(ctx, t, c, opts...)
 			}
-			id := container.Create(ctx, t, c, opts...)
-			defer c.ContainerRemove(ctx, id, containertypes.RemoveOptions{
+			defer c.ContainerRemove(ctx, id, client.ContainerRemoveOptions{
 				Force: true,
 			})
 
-			inspect := container.Inspect(ctx, t, c, ctrName)
-			configMAC := inspect.Config.MacAddress //nolint:staticcheck // ignore SA1019: field is deprecated, but still used on API < v1.44.
-			assert.Check(t, is.DeepEqual(configMAC, tc.desiredMAC))
+			inspect, err := c.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+			assert.NilError(t, err)
+			var resp struct {
+				Config struct {
+					// Mac Address of the container.
+					//
+					// MacAddress field is deprecated since API v1.44. Use EndpointSettings.MacAddress instead.
+					MacAddress string `json:",omitempty"`
+				}
+			}
+			err = json.Unmarshal(inspect.Raw, &resp)
+			assert.NilError(t, err, string(inspect.Raw))
+			configMAC := resp.Config.MacAddress
+			assert.Check(t, is.DeepEqual(configMAC, tc.desiredMAC), string(inspect.Raw))
 		})
 	}
 }
@@ -241,11 +263,11 @@ func TestWatchtowerCreate(t *testing.T) {
 
 	ctx := setupTest(t)
 
-	d := daemon.New(t)
+	d := daemon.New(t, daemon.WithEnvVars("DOCKER_MIN_API_VERSION=1.25"))
 	d.StartWithBusybox(ctx, t)
 	defer d.Stop(t)
 
-	c := d.NewClientT(t, client.WithVersion("1.25"))
+	c := d.NewClientT(t, client.WithAPIVersion("1.25"))
 	defer c.Close()
 
 	// Create a "/29" network, with a single address in iprange for IPAM to
@@ -266,17 +288,52 @@ func TestWatchtowerCreate(t *testing.T) {
 	const ctrName = "ctr1"
 	const ctrIP = "172.30.0.2"
 	const ctrMAC = "02:42:ac:11:00:42"
-	id := container.Run(ctx, t, c,
+	opts := []func(*container.TestContainerConfig){
 		container.WithName(ctrName),
 		container.WithNetworkMode(netId),
-		container.WithContainerWideMacAddress(ctrMAC),
 		container.WithIPv4(netName, ctrIP),
-	)
-	defer c.ContainerRemove(ctx, id, containertypes.RemoveOptions{Force: true})
+	}
+	id := createLegacyContainer(ctx, t, c, ctrMAC, opts...)
+	defer c.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+	_, err := c.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	assert.NilError(t, err)
 
 	// Check that the container got the expected addresses.
 	inspect := container.Inspect(ctx, t, c, ctrName)
 	netSettings := inspect.NetworkSettings.Networks[netName]
-	assert.Check(t, is.Equal(netSettings.IPAddress, ctrIP))
-	assert.Check(t, is.Equal(netSettings.MacAddress, ctrMAC))
+	assert.Check(t, is.Equal(netSettings.IPAddress, netip.MustParseAddr(ctrIP)))
+	assert.Check(t, is.Equal(netSettings.MacAddress.String(), ctrMAC))
+}
+
+type legacyCreateRequest struct {
+	containertypes.CreateRequest
+	// Mac Address of the container.
+	//
+	// MacAddress field is deprecated since API v1.44. Use EndpointSettings.MacAddress instead.
+	MacAddress string `json:",omitempty"`
+}
+
+func createLegacyContainer(ctx context.Context, t *testing.T, apiClient client.APIClient, desiredMAC string, ops ...func(*container.TestContainerConfig)) string {
+	t.Helper()
+	config := container.NewTestConfig(ops...)
+	ep := "/v" + apiClient.ClientVersion() + "/containers/create"
+	if config.Name != "" {
+		ep += "?name=" + config.Name
+	}
+	res, _, err := request.Post(ctx, ep, request.Host(apiClient.DaemonHost()), request.JSONBody(&legacyCreateRequest{
+		CreateRequest: containertypes.CreateRequest{
+			Config:           config.Config,
+			HostConfig:       config.HostConfig,
+			NetworkingConfig: config.NetworkingConfig,
+		},
+		MacAddress: desiredMAC,
+	}))
+	assert.NilError(t, err)
+	buf, err := request.ReadBody(res.Body)
+	assert.NilError(t, err)
+	assert.Equal(t, res.StatusCode, http.StatusCreated, string(buf))
+	var resp containertypes.CreateResponse
+	err = json.Unmarshal(buf, &resp)
+	assert.NilError(t, err)
+	return resp.ID
 }

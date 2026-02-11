@@ -1,23 +1,19 @@
 package network
 
 import (
-	"context"
-
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
 type disconnectOptions struct {
-	network   string
-	container string
-	force     bool
+	force bool
 }
 
-func newDisconnectCommand(dockerCli command.Cli) *cobra.Command {
+func newDisconnectCommand(dockerCLI command.Cli) *cobra.Command {
 	opts := disconnectOptions{}
 
 	cmd := &cobra.Command{
@@ -25,27 +21,27 @@ func newDisconnectCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Disconnect a container from a network",
 		Args:  cli.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.network = args[0]
-			opts.container = args[1]
-			return runDisconnect(cmd.Context(), dockerCli.Client(), opts)
+			network := args[0]
+			_, err := dockerCLI.Client().NetworkDisconnect(cmd.Context(), network, client.NetworkDisconnectOptions{
+				Container: args[1],
+				Force:     opts.force,
+			})
+			return err
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 0 {
-				return completion.NetworkNames(dockerCli)(cmd, args, toComplete)
+				return completion.NetworkNames(dockerCLI)(cmd, args, toComplete)
 			}
-			network := args[0]
-			return completion.ContainerNames(dockerCli, true, isConnected(network))(cmd, args, toComplete)
+			nw := args[0]
+			return completion.ContainerNames(dockerCLI, true, isConnected(nw))(cmd, args, toComplete)
 		},
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 	flags.BoolVarP(&opts.force, "force", "f", false, "Force the container to disconnect from a network")
 
 	return cmd
-}
-
-func runDisconnect(ctx context.Context, apiClient client.NetworkAPIClient, opts disconnectOptions) error {
-	return apiClient.NetworkDisconnect(ctx, opts.network, opts.container, opts.force)
 }
 
 func isConnected(network string) func(container.Summary) bool {

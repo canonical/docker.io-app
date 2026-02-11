@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/container"
-	daemonevents "github.com/docker/docker/daemon/events"
-	"github.com/docker/docker/libnetwork"
 	gogotypes "github.com/gogo/protobuf/types"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	daemonevents "github.com/moby/moby/v2/daemon/events"
+	"github.com/moby/moby/v2/daemon/internal/filters"
+	"github.com/moby/moby/v2/daemon/libnetwork"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 )
 
@@ -27,7 +27,7 @@ func (daemon *Daemon) LogContainerEventWithAttributes(container *container.Conta
 	if container.Config.Image != "" {
 		attributes["image"] = container.Config.Image
 	}
-	attributes["name"] = strings.TrimLeft(container.Name, "/")
+	attributes["name"] = strings.TrimPrefix(container.Name, "/")
 	daemon.EventsService.Log(action, events.ContainerEventType, events.Actor{
 		ID:         container.ID,
 		Attributes: attributes,
@@ -79,13 +79,13 @@ func (daemon *Daemon) LogDaemonEventWithAttributes(action events.Action, attribu
 }
 
 // SubscribeToEvents returns the currently record of events, a channel to stream new events from, and a function to cancel the stream of events.
-func (daemon *Daemon) SubscribeToEvents(since, until time.Time, filter filters.Args) ([]events.Message, chan interface{}) {
+func (daemon *Daemon) SubscribeToEvents(since, until time.Time, filter filters.Args) ([]events.Message, chan any) {
 	return daemon.EventsService.SubscribeTopic(since, until, daemonevents.NewFilter(filter))
 }
 
 // UnsubscribeFromEvents stops the event subscription for a client by closing the
 // channel where the daemon sends events to.
-func (daemon *Daemon) UnsubscribeFromEvents(listener chan interface{}) {
+func (daemon *Daemon) UnsubscribeFromEvents(listener chan any) {
 	daemon.EventsService.Evict(listener)
 }
 

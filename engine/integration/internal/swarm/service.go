@@ -6,13 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	swarmtypes "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/testutil/daemon"
-	"github.com/docker/docker/testutil/environment"
+	swarmtypes "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
+	"github.com/moby/moby/v2/internal/testutil/environment"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
 	"gotest.tools/v3/skip"
@@ -64,7 +61,9 @@ func CreateService(ctx context.Context, t *testing.T, d *daemon.Daemon, opts ...
 	defer apiClient.Close()
 
 	spec := CreateServiceSpec(t, opts...)
-	resp, err := apiClient.ServiceCreate(ctx, spec, swarmtypes.ServiceCreateOptions{})
+	resp, err := apiClient.ServiceCreate(ctx, client.ServiceCreateOptions{
+		Spec: spec,
+	})
 	assert.NilError(t, err, "error creating service")
 	return resp.ID
 }
@@ -149,6 +148,13 @@ func ServiceWithMaxReplicas(n uint64) ServiceSpecOpt {
 	}
 }
 
+func ServiceWithPlacementConstraints(constraints ...string) ServiceSpecOpt {
+	return func(spec *swarmtypes.ServiceSpec) {
+		ensurePlacement(spec)
+		spec.TaskTemplate.Placement.Constraints = constraints
+	}
+}
+
 // ServiceWithName sets the name of the service
 func ServiceWithName(name string) ServiceSpecOpt {
 	return func(spec *swarmtypes.ServiceSpec) {
@@ -196,33 +202,47 @@ func ServiceWithPidsLimit(limit int64) ServiceSpecOpt {
 	}
 }
 
+func ServiceWithMemorySwap(swap *int64, memoryLimit int64) ServiceSpecOpt {
+	return func(spec *swarmtypes.ServiceSpec) {
+		ensureResources(spec)
+		spec.TaskTemplate.Resources.SwapBytes = swap
+		spec.TaskTemplate.Resources.Limits.MemoryBytes = memoryLimit
+	}
+}
+
+func ServiceWithMemorySwappiness(swappiness *int64) ServiceSpecOpt {
+	return func(spec *swarmtypes.ServiceSpec) {
+		ensureResources(spec)
+		spec.TaskTemplate.Resources.MemorySwappiness = swappiness
+	}
+}
+
 // GetRunningTasks gets the list of running tasks for a service
-func GetRunningTasks(ctx context.Context, t *testing.T, c client.ServiceAPIClient, serviceID string) []swarmtypes.Task {
+func GetRunningTasks(ctx context.Context, t *testing.T, c client.TaskAPIClient, serviceID string) []swarmtypes.Task {
 	t.Helper()
 
-	tasks, err := c.TaskList(ctx, swarmtypes.TaskListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("service", serviceID),
-			filters.Arg("desired-state", "running"),
-		),
+	taskList, err := c.TaskList(ctx, client.TaskListOptions{
+		Filters: make(client.Filters).
+			Add("service", serviceID).
+			Add("desired-state", "running"),
 	})
 
 	assert.NilError(t, err)
-	return tasks
+	return taskList.Items
 }
 
 // ExecTask runs the passed in exec config on the given task
-func ExecTask(ctx context.Context, t *testing.T, d *daemon.Daemon, task swarmtypes.Task, options container.ExecOptions) types.HijackedResponse {
+func ExecTask(ctx context.Context, t *testing.T, d *daemon.Daemon, task swarmtypes.Task, options client.ExecCreateOptions) client.HijackedResponse {
 	t.Helper()
 	apiClient := d.NewClientT(t)
 	defer apiClient.Close()
 
-	resp, err := apiClient.ContainerExecCreate(ctx, task.Status.ContainerStatus.ContainerID, options)
+	res, err := apiClient.ExecCreate(ctx, task.Status.ContainerStatus.ContainerID, options)
 	assert.NilError(t, err, "error creating exec")
 
-	attach, err := apiClient.ContainerExecAttach(ctx, resp.ID, container.ExecAttachOptions{})
+	attach, err := apiClient.ExecAttach(ctx, res.ID, client.ExecAttachOptions{})
 	assert.NilError(t, err, "error attaching to exec")
-	return attach
+	return attach.HijackedResponse
 }
 
 func ensureResources(spec *swarmtypes.ServiceSpec) {

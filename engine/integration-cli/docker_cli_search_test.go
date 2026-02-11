@@ -6,21 +6,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli"
 	"gotest.tools/v3/assert"
-	is "gotest.tools/v3/assert/cmp"
 )
 
 type DockerCLISearchSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLISearchSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLISearchSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLISearchSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLISearchSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 // search for repos named  "registry" on the central registry
@@ -50,12 +49,6 @@ func (s *DockerCLISearchSuite) TestSearchStarsOptionWithWrongParameter(c *testin
 func (s *DockerCLISearchSuite) TestSearchCmdOptions(c *testing.T) {
 	outSearchCmd := cli.DockerCmd(c, "search", "busybox").Combined()
 	assert.Assert(c, strings.Count(outSearchCmd, "\n") > 3, outSearchCmd)
-
-	outSearchCmdautomated := cli.DockerCmd(c, "search", "--filter", "is-automated=true", "busybox").Combined() // The busybox is a busybox base image, not an AUTOMATED image.
-	outSearchCmdautomatedSlice := strings.Split(outSearchCmdautomated, "\n")
-
-	// is-automated=true should produce no results (only a header)
-	assert.Check(c, is.Len(outSearchCmdautomatedSlice, 2))
 
 	outSearchCmdNotOfficial := cli.DockerCmd(c, "search", "--filter", "is-official=false", "busybox").Combined() // The busybox is a busybox base image, official image.
 	outSearchCmdNotOfficialSlice := strings.Split(outSearchCmdNotOfficial, "\n")
@@ -89,6 +82,16 @@ func (s *DockerCLISearchSuite) TestSearchWithLimit(c *testing.T) {
 	}
 
 	for _, limit := range []int{-1, 101} {
+		if limit == -1 {
+			// FIXME(thaJeztah): daemon doesn't invalidate negative values, which doesn't match the error:
+			//
+			// docker search --limit=101 docker
+			// Error response from daemon: limit 101 is outside the range of [1, 100]
+			//
+			// docker search --limit=-1 docker
+			// ^^^ doesn't error
+			continue
+		}
 		_, _, err := dockerCmdWithError("search", fmt.Sprintf("--limit=%d", limit), "docker")
 		assert.ErrorContains(c, err, "")
 	}

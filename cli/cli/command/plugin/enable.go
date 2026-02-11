@@ -6,43 +6,38 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/docker/api/types"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-type enableOpts struct {
-	timeout int
-	name    string
-}
-
-func newEnableCommand(dockerCli command.Cli) *cobra.Command {
-	var opts enableOpts
+func newEnableCommand(dockerCLI command.Cli) *cobra.Command {
+	var opts client.PluginEnableOptions
 
 	cmd := &cobra.Command{
 		Use:   "enable [OPTIONS] PLUGIN",
 		Short: "Enable a plugin",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.name = args[0]
-			return runEnable(cmd.Context(), dockerCli, &opts)
+			name := args[0]
+			if err := runEnable(cmd.Context(), dockerCLI, name, opts); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintln(dockerCLI.Out(), name)
+			return nil
 		},
+		ValidArgsFunction:     completeNames(dockerCLI, stateDisabled),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
-	flags.IntVar(&opts.timeout, "timeout", 30, "HTTP client timeout (in seconds)")
+	flags.IntVar(&opts.Timeout, "timeout", 30, "HTTP client timeout (in seconds)")
 	return cmd
 }
 
-func runEnable(ctx context.Context, dockerCli command.Cli, opts *enableOpts) error {
-	name := opts.name
-	if opts.timeout < 0 {
-		return errors.Errorf("negative timeout %d is invalid", opts.timeout)
+func runEnable(ctx context.Context, dockerCli command.Cli, name string, opts client.PluginEnableOptions) error {
+	if opts.Timeout < 0 {
+		return fmt.Errorf("negative timeout %d is invalid", opts.Timeout)
 	}
-
-	if err := dockerCli.Client().PluginEnable(ctx, name, types.PluginEnableOptions{Timeout: opts.timeout}); err != nil {
-		return err
-	}
-	fmt.Fprintln(dockerCli.Out(), name)
-	return nil
+	_, err := dockerCli.Client().PluginEnable(ctx, name, opts)
+	return err
 }

@@ -8,31 +8,20 @@ import (
 
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
+
+	// Make sure pruners are registered for tests (they're included automatically when building).
+	_ "github.com/docker/cli/cli/command/builder"
+	_ "github.com/docker/cli/cli/command/container"
+	_ "github.com/docker/cli/cli/command/image"
+	_ "github.com/docker/cli/cli/command/network"
+	_ "github.com/docker/cli/cli/command/volume"
 )
 
-func TestPrunePromptPre131DoesNotIncludeBuildCache(t *testing.T) {
-	cli := test.NewFakeCli(&fakeClient{version: "1.30"})
-	cmd := newPruneCommand(cli)
-	cmd.SetArgs([]string{})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	assert.ErrorContains(t, cmd.Execute(), "system prune has been cancelled")
-	expected := `WARNING! This will remove:
-  - all stopped containers
-  - all networks not used by at least one container
-  - all dangling images
-
-Are you sure you want to continue? [y/N] `
-	assert.Check(t, is.Equal(expected, cli.OutBuffer().String()))
-}
-
 func TestPrunePromptFilters(t *testing.T) {
-	cli := test.NewFakeCli(&fakeClient{version: "1.31"})
+	cli := test.NewFakeCli(&fakeClient{version: "1.51"})
 	cli.SetConfigFile(&configfile.ConfigFile{
 		PruneFilters: []string{"label!=never=remove-me", "label=remove=me"},
 	})
@@ -65,11 +54,11 @@ func TestSystemPrunePromptTermination(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cli := test.NewFakeCli(&fakeClient{
-		containerPruneFunc: func(ctx context.Context, pruneFilters filters.Args) (container.PruneReport, error) {
-			return container.PruneReport{}, errors.New("fakeClient containerPruneFunc should not be called")
+		containerPruneFunc: func(context.Context, client.ContainerPruneOptions) (client.ContainerPruneResult, error) {
+			return client.ContainerPruneResult{}, errors.New("fakeClient containerPruneFunc should not be called")
 		},
-		networkPruneFunc: func(ctx context.Context, pruneFilters filters.Args) (network.PruneReport, error) {
-			return network.PruneReport{}, errors.New("fakeClient networkPruneFunc should not be called")
+		networkPruneFunc: func(context.Context, client.NetworkPruneOptions) (client.NetworkPruneResult, error) {
+			return client.NetworkPruneResult{}, errors.New("fakeClient networkPruneFunc should not be called")
 		},
 	})
 

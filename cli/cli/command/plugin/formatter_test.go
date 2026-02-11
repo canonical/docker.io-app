@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package plugin
 
@@ -11,94 +11,115 @@ import (
 
 	"github.com/docker/cli/cli/command/formatter"
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/plugin"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestPluginContext(t *testing.T) {
-	pluginID := stringid.GenerateRandomID()
+	pluginID := test.RandomID()
 
-	var ctx pluginContext
-	cases := []struct {
+	var pCtx pluginContext
+	tests := []struct {
 		pluginCtx pluginContext
 		expValue  string
 		call      func() string
 	}{
-		{pluginContext{
-			p:     types.Plugin{ID: pluginID},
-			trunc: false,
-		}, pluginID, ctx.ID},
-		{pluginContext{
-			p:     types.Plugin{ID: pluginID},
-			trunc: true,
-		}, stringid.TruncateID(pluginID), ctx.ID},
-		{pluginContext{
-			p: types.Plugin{Name: "plugin_name"},
-		}, "plugin_name", ctx.Name},
-		{pluginContext{
-			p: types.Plugin{Config: types.PluginConfig{Description: "plugin_description"}},
-		}, "plugin_description", ctx.Description},
+		{
+			pluginCtx: pluginContext{
+				p:     plugin.Plugin{ID: pluginID},
+				trunc: false,
+			},
+			expValue: pluginID,
+			call:     pCtx.ID,
+		},
+		{
+			pluginCtx: pluginContext{
+				p:     plugin.Plugin{ID: pluginID},
+				trunc: true,
+			},
+			expValue: formatter.TruncateID(pluginID),
+			call:     pCtx.ID,
+		},
+		{
+			pluginCtx: pluginContext{
+				p: plugin.Plugin{Name: "plugin_name"},
+			},
+			expValue: "plugin_name",
+			call:     pCtx.Name,
+		},
+		{
+			pluginCtx: pluginContext{
+				p: plugin.Plugin{Config: plugin.Config{Description: "plugin_description"}},
+			},
+			expValue: "plugin_description",
+			call:     pCtx.Description,
+		},
 	}
 
-	for _, c := range cases {
-		ctx = c.pluginCtx
-		v := c.call()
+	for _, tc := range tests {
+		pCtx = tc.pluginCtx
+		v := tc.call()
 		if strings.Contains(v, ",") {
-			test.CompareMultipleValues(t, v, c.expValue)
-		} else if v != c.expValue {
-			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
+			test.CompareMultipleValues(t, v, tc.expValue)
+		} else if v != tc.expValue {
+			t.Fatalf("Expected %s, was %s\n", tc.expValue, v)
 		}
 	}
 }
 
 func TestPluginContextWrite(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
+		doc      string
 		context  formatter.Context
 		expected string
 	}{
-		// Errors
 		{
-			formatter.Context{Format: "{{InvalidFunction}}"},
-			`template parsing error: template: :1: function "InvalidFunction" not defined`,
+			doc:      "invalid function",
+			context:  formatter.Context{Format: "{{InvalidFunction}}"},
+			expected: `template parsing error: template: :1: function "InvalidFunction" not defined`,
 		},
 		{
-			formatter.Context{Format: "{{nil}}"},
-			`template parsing error: template: :1:2: executing "" at <nil>: nil is not a command`,
+			doc:      "nil template",
+			context:  formatter.Context{Format: "{{nil}}"},
+			expected: `template parsing error: template: :1:2: executing "" at <nil>: nil is not a command`,
 		},
-		// Table format
 		{
-			formatter.Context{Format: NewFormat("table", false)},
-			`ID          NAME         DESCRIPTION     ENABLED
+			doc:     "table format",
+			context: formatter.Context{Format: newFormat("table", false)},
+			expected: `ID          NAME         DESCRIPTION     ENABLED
 pluginID1   foobar_baz   description 1   true
 pluginID2   foobar_bar   description 2   false
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("table", true)},
-			`pluginID1
+			doc:     "table format, quiet",
+			context: formatter.Context{Format: newFormat("table", true)},
+			expected: `pluginID1
 pluginID2
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("table {{.Name}}", false)},
-			`NAME
+			doc:     "table format name col",
+			context: formatter.Context{Format: newFormat("table {{.Name}}", false)},
+			expected: `NAME
 foobar_baz
 foobar_bar
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("table {{.Name}}", true)},
-			`NAME
+			doc:     "table format name col, quiet",
+			context: formatter.Context{Format: newFormat("table {{.Name}}", true)},
+			expected: `NAME
 foobar_baz
 foobar_bar
 `,
 		},
-		// Raw Format
 		{
-			formatter.Context{Format: NewFormat("raw", false)},
-			`plugin_id: pluginID1
+			doc:     "raw format",
+			context: formatter.Context{Format: newFormat("raw", false)},
+			expected: `plugin_id: pluginID1
 name: foobar_baz
 description: description 1
 enabled: true
@@ -111,31 +132,34 @@ enabled: false
 `,
 		},
 		{
-			formatter.Context{Format: NewFormat("raw", true)},
-			`plugin_id: pluginID1
+			doc:     "raw format, quiet",
+			context: formatter.Context{Format: newFormat("raw", true)},
+			expected: `plugin_id: pluginID1
 plugin_id: pluginID2
 `,
 		},
-		// Custom Format
 		{
-			formatter.Context{Format: NewFormat("{{.Name}}", false)},
-			`foobar_baz
+			doc:     "custom format",
+			context: formatter.Context{Format: newFormat("{{.Name}}", false)},
+			expected: `foobar_baz
 foobar_bar
 `,
 		},
 	}
 
-	plugins := []*types.Plugin{
-		{ID: "pluginID1", Name: "foobar_baz", Config: types.PluginConfig{Description: "description 1"}, Enabled: true},
-		{ID: "pluginID2", Name: "foobar_bar", Config: types.PluginConfig{Description: "description 2"}, Enabled: false},
+	plugins := client.PluginListResult{
+		Items: []plugin.Plugin{
+			{ID: "pluginID1", Name: "foobar_baz", Config: plugin.Config{Description: "description 1"}, Enabled: true},
+			{ID: "pluginID2", Name: "foobar_bar", Config: plugin.Config{Description: "description 2"}, Enabled: false},
+		},
 	}
 
-	for _, tc := range cases {
-		t.Run(string(tc.context.Format), func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
 			var out bytes.Buffer
 			tc.context.Output = &out
 
-			err := FormatWrite(tc.context, plugins)
+			err := formatWrite(tc.context, plugins)
 			if err != nil {
 				assert.Error(t, err, tc.expected)
 			} else {
@@ -146,9 +170,11 @@ foobar_bar
 }
 
 func TestPluginContextWriteJSON(t *testing.T) {
-	plugins := []*types.Plugin{
-		{ID: "pluginID1", Name: "foobar_baz"},
-		{ID: "pluginID2", Name: "foobar_bar"},
+	plugins := client.PluginListResult{
+		Items: []plugin.Plugin{
+			{ID: "pluginID1", Name: "foobar_baz"},
+			{ID: "pluginID2", Name: "foobar_bar"},
+		},
 	}
 	expectedJSONs := []map[string]any{
 		{"Description": "", "Enabled": false, "ID": "pluginID1", "Name": "foobar_baz", "PluginReference": ""},
@@ -156,7 +182,7 @@ func TestPluginContextWriteJSON(t *testing.T) {
 	}
 
 	out := bytes.NewBufferString("")
-	err := FormatWrite(formatter.Context{Format: "{{json .}}", Output: out}, plugins)
+	err := formatWrite(formatter.Context{Format: "{{json .}}", Output: out}, plugins)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,12 +196,14 @@ func TestPluginContextWriteJSON(t *testing.T) {
 }
 
 func TestPluginContextWriteJSONField(t *testing.T) {
-	plugins := []*types.Plugin{
-		{ID: "pluginID1", Name: "foobar_baz"},
-		{ID: "pluginID2", Name: "foobar_bar"},
+	plugins := client.PluginListResult{
+		Items: []plugin.Plugin{
+			{ID: "pluginID1", Name: "foobar_baz"},
+			{ID: "pluginID2", Name: "foobar_bar"},
+		},
 	}
 	out := bytes.NewBufferString("")
-	err := FormatWrite(formatter.Context{Format: "{{json .ID}}", Output: out}, plugins)
+	err := formatWrite(formatter.Context{Format: "{{json .ID}}", Output: out}, plugins)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +212,6 @@ func TestPluginContextWriteJSONField(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &s); err != nil {
 			t.Fatal(err)
 		}
-		assert.Check(t, is.Equal(plugins[i].ID, s))
+		assert.Check(t, is.Equal(plugins.Items[i].ID, s))
 	}
 }

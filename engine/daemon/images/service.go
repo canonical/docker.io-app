@@ -1,4 +1,4 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
@@ -8,14 +8,15 @@ import (
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/leases"
-	"github.com/docker/docker/container"
-	daemonevents "github.com/docker/docker/daemon/events"
-	"github.com/docker/docker/distribution"
-	"github.com/docker/docker/distribution/metadata"
-	"github.com/docker/docker/distribution/xfer"
-	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
-	dockerreference "github.com/docker/docker/reference"
+	"github.com/containerd/log"
+	"github.com/moby/moby/v2/daemon/container"
+	daemonevents "github.com/moby/moby/v2/daemon/events"
+	"github.com/moby/moby/v2/daemon/internal/distribution"
+	"github.com/moby/moby/v2/daemon/internal/distribution/metadata"
+	"github.com/moby/moby/v2/daemon/internal/distribution/xfer"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/internal/layer"
+	refstore "github.com/moby/moby/v2/daemon/internal/refstore"
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 )
@@ -40,7 +41,7 @@ type ImageServiceConfig struct {
 	MaxConcurrentDownloads    int
 	MaxConcurrentUploads      int
 	MaxDownloadAttempts       int
-	ReferenceStore            dockerreference.Store
+	ReferenceStore            refstore.Store
 	RegistryService           distribution.RegistryResolver
 	ContentStore              content.Store
 	Leases                    leases.Manager
@@ -48,7 +49,11 @@ type ImageServiceConfig struct {
 }
 
 // NewImageService returns a new ImageService from a configuration
-func NewImageService(config ImageServiceConfig) *ImageService {
+func NewImageService(ctx context.Context, config ImageServiceConfig) *ImageService {
+	log.G(ctx).Debugf("Max Concurrent Downloads: %d", config.MaxConcurrentDownloads)
+	log.G(ctx).Debugf("Max Concurrent Uploads: %d", config.MaxConcurrentUploads)
+	log.G(ctx).Debugf("Max Download Attempts: %d", config.MaxDownloadAttempts)
+
 	return &ImageService{
 		containers:                config.ContainerStore,
 		distributionMetadataStore: config.DistributionMetadataStore,
@@ -74,7 +79,7 @@ type ImageService struct {
 	imageStore                image.Store
 	layerStore                layer.Store
 	pruneRunning              atomic.Bool
-	referenceStore            dockerreference.Store
+	referenceStore            refstore.Store
 	registryService           distribution.RegistryResolver
 	uploadManager             *xfer.LayerUploadManager
 	leases                    leases.Manager
@@ -88,7 +93,7 @@ type DistributionServices struct {
 	V2MetadataService metadata.V2MetadataService
 	LayerStore        layer.Store
 	ImageStore        image.Store
-	ReferenceStore    dockerreference.Store
+	ReferenceStore    refstore.Store
 }
 
 // DistributionServices return services controlling daemon image storage
@@ -190,7 +195,9 @@ func (i *ImageService) ReleaseLayer(rwlayer container.RWLayer) error {
 	}
 
 	metaData, err := i.layerStore.ReleaseRWLayer(l)
-	layer.LogReleaseMetadata(metaData)
+	for _, m := range metaData {
+		log.G(context.TODO()).WithField("chainID", m.ChainID).Infof("release RWLayer: cleaned up layer %s", m.ChainID)
+	}
 	if err != nil && !errors.Is(err, layer.ErrMountDoesNotExist) && !errors.Is(err, os.ErrNotExist) {
 		return errors.Wrapf(err, "driver %q failed to remove root filesystem",
 			i.layerStore.DriverName())

@@ -6,8 +6,7 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
-	"github.com/docker/docker/api/types/checkpoint"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +17,7 @@ type createOptions struct {
 	leaveRunning  bool
 }
 
-func newCreateCommand(dockerCli command.Cli) *cobra.Command {
+func newCreateCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts createOptions
 
 	cmd := &cobra.Command{
@@ -28,9 +27,10 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.container = args[0]
 			opts.checkpoint = args[1]
-			return runCreate(cmd.Context(), dockerCli, opts)
+			return runCreate(cmd.Context(), dockerCLI, opts)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -41,7 +41,7 @@ func newCreateCommand(dockerCli command.Cli) *cobra.Command {
 }
 
 func runCreate(ctx context.Context, dockerCLI command.Cli, opts createOptions) error {
-	err := dockerCLI.Client().CheckpointCreate(ctx, opts.container, checkpoint.CreateOptions{
+	_, err := dockerCLI.Client().CheckpointCreate(ctx, opts.container, client.CheckpointCreateOptions{
 		CheckpointID:  opts.checkpoint,
 		CheckpointDir: opts.checkpointDir,
 		Exit:          !opts.leaveRunning,

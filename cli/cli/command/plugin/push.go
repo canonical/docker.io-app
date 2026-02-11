@@ -2,69 +2,59 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/trust"
 	"github.com/docker/cli/internal/jsonstream"
-	registrytypes "github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/registry"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-type pushOptions struct {
-	name      string
-	untrusted bool
-}
-
-func newPushCommand(dockerCli command.Cli) *cobra.Command {
-	var opts pushOptions
+func newPushCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push [OPTIONS] PLUGIN[:TAG]",
 		Short: "Push a plugin to a registry",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.name = args[0]
-			return runPush(cmd.Context(), dockerCli, opts)
+			name := args[0]
+			return runPush(cmd.Context(), dockerCLI, name)
 		},
+		ValidArgsFunction:     completeNames(dockerCLI, stateAny),
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
-
-	command.AddTrustSigningFlags(flags, &opts.untrusted, dockerCli.ContentTrustEnabled())
-
+	// TODO(thaJeztah): DEPRECATED: remove in v29.1 or v30
+	flags.Bool("disable-content-trust", true, "Skip image verification (deprecated)")
+	_ = flags.MarkDeprecated("disable-content-trust", "support for docker content trust was removed")
 	return cmd
 }
 
-func runPush(ctx context.Context, dockerCli command.Cli, opts pushOptions) error {
-	named, err := reference.ParseNormalizedNamed(opts.name)
+func runPush(ctx context.Context, dockerCli command.Cli, name string) error {
+	named, err := reference.ParseNormalizedNamed(name)
 	if err != nil {
 		return err
 	}
 	if _, ok := named.(reference.Canonical); ok {
-		return errors.Errorf("invalid name: %s", opts.name)
+		return fmt.Errorf("invalid name: %s", name)
 	}
 
 	named = reference.TagNameOnly(named)
-
-	repoInfo, _ := registry.ParseRepositoryInfo(named)
-	authConfig := command.ResolveAuthConfig(dockerCli.ConfigFile(), repoInfo.Index)
-	encodedAuth, err := registrytypes.EncodeAuthConfig(authConfig)
+	encodedAuth, err := command.RetrieveAuthTokenFromImage(dockerCli.ConfigFile(), named.String())
 	if err != nil {
 		return err
 	}
 
-	responseBody, err := dockerCli.Client().PluginPush(ctx, reference.FamiliarString(named), encodedAuth)
+	responseBody, err := dockerCli.Client().PluginPush(ctx, reference.FamiliarString(named), client.PluginPushOptions{
+		RegistryAuth: encodedAuth,
+	})
 	if err != nil {
 		return err
 	}
-	defer responseBody.Close()
-
-	if !opts.untrusted {
-		return trust.PushTrustedReference(ctx, dockerCli, repoInfo, named, authConfig, responseBody, command.UserAgent())
-	}
-
+	defer func() {
+		_ = responseBody.Close()
+	}()
 	return jsonstream.Display(ctx, responseBody, dockerCli.Out())
 }

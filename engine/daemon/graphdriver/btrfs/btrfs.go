@@ -1,6 +1,6 @@
 //go:build linux
 
-package btrfs // import "github.com/docker/docker/daemon/graphdriver/btrfs"
+package btrfs
 
 /*
 #include <stdlib.h>
@@ -35,10 +35,10 @@ import (
 	"unsafe"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/daemon/internal/fstype"
-	"github.com/docker/docker/internal/containerfs"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/v2/daemon/graphdriver"
+	"github.com/moby/moby/v2/daemon/internal/containerfs"
+	"github.com/moby/moby/v2/daemon/internal/fstype"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/user"
 	"github.com/moby/sys/userns"
@@ -181,7 +181,7 @@ func openDir(path string) (*C.DIR, error) {
 
 	dir := C.opendir(Cpath)
 	if dir == nil {
-		return nil, fmt.Errorf("Can't open dir")
+		return nil, errors.New("Can't open dir")
 	}
 	return dir, nil
 }

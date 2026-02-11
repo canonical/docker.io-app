@@ -8,35 +8,35 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestRunDiff(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
-		containerDiffFunc: func(
-			ctx context.Context,
-			containerID string,
-		) ([]container.FilesystemChange, error) {
-			return []container.FilesystemChange{
-				{
-					Kind: container.ChangeModify,
-					Path: "/path/to/file0",
-				},
-				{
-					Kind: container.ChangeAdd,
-					Path: "/path/to/file1",
-				},
-				{
-					Kind: container.ChangeDelete,
-					Path: "/path/to/file2",
+		containerDiffFunc: func(ctx context.Context, containerID string) (client.ContainerDiffResult, error) {
+			return client.ContainerDiffResult{
+				Changes: []container.FilesystemChange{
+					{
+						Kind: container.ChangeModify,
+						Path: "/path/to/file0",
+					},
+					{
+						Kind: container.ChangeAdd,
+						Path: "/path/to/file1",
+					},
+					{
+						Kind: container.ChangeDelete,
+						Path: "/path/to/file2",
+					},
 				},
 			}, nil
 		},
 	})
 
-	cmd := NewDiffCommand(cli)
+	cmd := newDiffCommand(cli)
 	cmd.SetOut(io.Discard)
 
 	cmd.SetArgs([]string{"container-id"})
@@ -60,15 +60,12 @@ func TestRunDiffClientError(t *testing.T) {
 	clientError := errors.New("client error")
 
 	cli := test.NewFakeCli(&fakeClient{
-		containerDiffFunc: func(
-			ctx context.Context,
-			containerID string,
-		) ([]container.FilesystemChange, error) {
-			return nil, clientError
+		containerDiffFunc: func(ctx context.Context, containerID string) (client.ContainerDiffResult, error) {
+			return client.ContainerDiffResult{}, clientError
 		},
 	})
 
-	cmd := NewDiffCommand(cli)
+	cmd := newDiffCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 
@@ -76,18 +73,4 @@ func TestRunDiffClientError(t *testing.T) {
 
 	err := cmd.Execute()
 	assert.ErrorIs(t, err, clientError)
-}
-
-func TestRunDiffEmptyContainerError(t *testing.T) {
-	cli := test.NewFakeCli(&fakeClient{})
-
-	cmd := NewDiffCommand(cli)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-
-	containerID := ""
-	cmd.SetArgs([]string{containerID})
-
-	err := cmd.Execute()
-	assert.Error(t, err, "Container name cannot be empty")
 }

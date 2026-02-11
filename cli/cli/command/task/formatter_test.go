@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -27,39 +28,41 @@ func TestTaskContextWrite(t *testing.T) {
 			`template parsing error: template: :1:2: executing "" at <nil>: nil is not a command`,
 		},
 		{
-			formatter.Context{Format: NewTaskFormat("table", true)},
+			formatter.Context{Format: newTaskFormat("table", true)},
 			`taskID1
 taskID2
 `,
 		},
 		{
-			formatter.Context{Format: NewTaskFormat("table {{.Name}}\t{{.Node}}\t{{.Ports}}", false)},
+			formatter.Context{Format: newTaskFormat("table {{.Name}}\t{{.Node}}\t{{.Ports}}", false)},
 			string(golden.Get(t, "task-context-write-table-custom.golden")),
 		},
 		{
-			formatter.Context{Format: NewTaskFormat("table {{.Name}}", true)},
+			formatter.Context{Format: newTaskFormat("table {{.Name}}", true)},
 			`NAME
 foobar_baz
 foobar_bar
 `,
 		},
 		{
-			formatter.Context{Format: NewTaskFormat("raw", true)},
+			formatter.Context{Format: newTaskFormat("raw", true)},
 			`id: taskID1
 id: taskID2
 `,
 		},
 		{
-			formatter.Context{Format: NewTaskFormat("{{.Name}} {{.Node}}", false)},
+			formatter.Context{Format: newTaskFormat("{{.Name}} {{.Node}}", false)},
 			`foobar_baz foo1
 foobar_bar foo2
 `,
 		},
 	}
 
-	tasks := []swarm.Task{
-		{ID: "taskID1"},
-		{ID: "taskID2"},
+	tasks := client.TaskListResult{
+		Items: []swarm.Task{
+			{ID: "taskID1"},
+			{ID: "taskID2"},
+		},
 	}
 	names := map[string]string{
 		"taskID1": "foobar_baz",
@@ -75,7 +78,7 @@ foobar_bar foo2
 			var out bytes.Buffer
 			tc.context.Output = &out
 
-			if err := FormatWrite(tc.context, tasks, names, nodes); err != nil {
+			if err := formatWrite(tc.context, tasks, names, nodes); err != nil {
 				assert.Error(t, err, tc.expected)
 			} else {
 				assert.Equal(t, out.String(), tc.expected)
@@ -85,16 +88,18 @@ foobar_bar foo2
 }
 
 func TestTaskContextWriteJSONField(t *testing.T) {
-	tasks := []swarm.Task{
-		{ID: "taskID1"},
-		{ID: "taskID2"},
+	tasks := client.TaskListResult{
+		Items: []swarm.Task{
+			{ID: "taskID1"},
+			{ID: "taskID2"},
+		},
 	}
 	names := map[string]string{
 		"taskID1": "foobar_baz",
 		"taskID2": "foobar_bar",
 	}
 	out := bytes.NewBufferString("")
-	err := FormatWrite(formatter.Context{Format: "{{json .ID}}", Output: out}, tasks, names, map[string]string{})
+	err := formatWrite(formatter.Context{Format: "{{json .ID}}", Output: out}, tasks, names, map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +108,6 @@ func TestTaskContextWriteJSONField(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &s); err != nil {
 			t.Fatal(err)
 		}
-		assert.Check(t, is.Equal(tasks[i].ID, s))
+		assert.Check(t, is.Equal(tasks.Items[i].ID, s))
 	}
 }

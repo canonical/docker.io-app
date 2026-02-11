@@ -1,11 +1,11 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"fmt"
 	"strings"
 	"syscall"
 
-	"github.com/docker/docker/errdefs"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc/status"
 )
@@ -51,11 +51,6 @@ func errExecNotFound(id string) error {
 
 func errExecPaused(id string) error {
 	cause := errors.Errorf("Container %s is paused, unpause the container before exec", id)
-	return errdefs.Conflict(cause)
-}
-
-func errNotPaused(id string) error {
-	cause := errors.Errorf("Container %s is already paused", id)
 	return errdefs.Conflict(cause)
 }
 

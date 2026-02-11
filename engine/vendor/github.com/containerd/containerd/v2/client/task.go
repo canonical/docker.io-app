@@ -373,10 +373,15 @@ func (t *task) Delete(ctx context.Context, opts ...ProcessDeleteOpts) (*ExitStat
 		return nil, err
 	}
 
+	runtime, err := t.client.defaultRuntime(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get default runtime: %w", err)
+	}
+
 	switch status.Status {
 	case Stopped, Unknown, "":
 	case Created:
-		if t.client.runtime == plugins.RuntimePlugin.String()+".windows" {
+		if runtime == plugins.RuntimePlugin.String()+".windows" {
 			// On windows Created is akin to Stopped
 			break
 		}
@@ -393,7 +398,7 @@ func (t *task) Delete(ctx context.Context, opts ...ProcessDeleteOpts) (*ExitStat
 		// io.Wait locks for restored tasks on Windows unless we call
 		// io.Close first (https://github.com/containerd/containerd/issues/5621)
 		// in other cases, preserve the contract and let IO finish before closing
-		if t.client.runtime == plugins.RuntimePlugin.String()+".windows" {
+		if runtime == plugins.RuntimePlugin.String()+".windows" {
 			t.io.Close()
 		}
 		// io.Cancel is used to cancel the io goroutine while it is in
@@ -416,7 +421,7 @@ func (t *task) Delete(ctx context.Context, opts ...ProcessDeleteOpts) (*ExitStat
 	return &ExitStatus{code: r.ExitStatus, exitedAt: protobuf.FromTimestamp(r.ExitedAt)}, nil
 }
 
-func (t *task) Exec(ctx context.Context, id string, spec *specs.Process, ioCreate cio.Creator) (_ Process, err error) {
+func (t *task) Exec(ctx context.Context, id string, spec *specs.Process, ioCreate cio.Creator) (_ Process, retErr error) {
 	ctx, span := tracing.StartSpan(ctx, "task.Exec",
 		tracing.WithAttribute("task.id", t.ID()),
 	)
@@ -430,7 +435,7 @@ func (t *task) Exec(ctx context.Context, id string, spec *specs.Process, ioCreat
 		return nil, err
 	}
 	defer func() {
-		if err != nil && i != nil {
+		if retErr != nil && i != nil {
 			i.Cancel()
 			i.Close()
 		}

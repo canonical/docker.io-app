@@ -40,6 +40,13 @@ test_env() {
 	(
 		set -e +u
 		[ -n "$TESTDEBUG" ] && set -x
+
+		# Disable collecting local telemetry, as collected by Go and Delve;
+		#
+		# - https://github.com/go-delve/delve/blob/v1.24.1/CHANGELOG.md#1231-2024-09-23
+		# - https://go.dev/doc/telemetry#background
+		HOME="$ABS_DEST/fake-HOME" go telemetry off
+
 		env -i \
 			DOCKER_API_VERSION="$DOCKER_API_VERSION" \
 			DOCKER_INTEGRATION_DAEMON_DEST="$DOCKER_INTEGRATION_DAEMON_DEST" \
@@ -47,6 +54,7 @@ test_env() {
 			DOCKER_CERT_PATH="$DOCKER_TEST_CERT_PATH" \
 			DOCKER_GRAPHDRIVER="$DOCKER_GRAPHDRIVER" \
 			DOCKER_USERLANDPROXY="$DOCKER_USERLANDPROXY" \
+			DOCKER_FIREWALL_BACKEND="$DOCKER_FIREWALL_BACKEND" \
 			DOCKER_HOST="$DOCKER_HOST" \
 			DOCKER_REMAP_ROOT="$DOCKER_REMAP_ROOT" \
 			DOCKER_REMOTE_DAEMON="$DOCKER_REMOTE_DAEMON" \

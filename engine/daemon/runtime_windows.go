@@ -3,12 +3,12 @@ package daemon
 import (
 	"errors"
 
-	"github.com/docker/docker/daemon/config"
+	"github.com/moby/moby/v2/daemon/config"
 )
 
 type runtimes struct{}
 
-func (r *runtimes) Get(name string) (string, interface{}, error) {
+func (r *runtimes) Get(name string) (string, any, error) {
 	return "", nil, errors.New("not implemented")
 }
 

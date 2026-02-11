@@ -1,18 +1,18 @@
 //go:build !linux && !freebsd && !windows
 
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"errors"
 
-	"github.com/docker/docker/pkg/sysinfo"
+	"github.com/moby/moby/v2/pkg/sysinfo"
 )
 
 func checkSystem() error {
 	return errors.New("the Docker daemon is not supported on this platform")
 }
 
-func setupResolvConf(_ *interface{}) {}
+func setupResolvConf(_ *any) {}
 
 func getSysInfo(_ *Daemon) *sysinfo.SysInfo {
 	return sysinfo.New()

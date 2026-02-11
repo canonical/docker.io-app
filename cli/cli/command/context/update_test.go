@@ -11,16 +11,14 @@ import (
 
 func TestUpdateDescriptionOnly(t *testing.T) {
 	cli := makeFakeCli(t)
-	err := RunCreate(cli, &CreateOptions{
-		Name:   "test",
-		Docker: map[string]string{},
+	err := runCreate(cli, "test", createOptions{
+		endpoint: map[string]string{},
 	})
 	assert.NilError(t, err)
 	cli.OutBuffer().Reset()
 	cli.ErrBuffer().Reset()
-	assert.NilError(t, RunUpdate(cli, &UpdateOptions{
-		Name:        "test",
-		Description: "description",
+	assert.NilError(t, runUpdate(cli, "test", updateOptions{
+		description: "description",
 	}))
 	c, err := cli.ContextStore().GetMetadata("test")
 	assert.NilError(t, err)
@@ -35,9 +33,8 @@ func TestUpdateDescriptionOnly(t *testing.T) {
 func TestUpdateDockerOnly(t *testing.T) {
 	cli := makeFakeCli(t)
 	createTestContext(t, cli, "test", nil)
-	assert.NilError(t, RunUpdate(cli, &UpdateOptions{
-		Name: "test",
-		Docker: map[string]string{
+	assert.NilError(t, runUpdate(cli, "test", updateOptions{
+		endpoint: map[string]string{
 			keyHost: "tcp://some-host",
 		},
 	}))
@@ -52,14 +49,12 @@ func TestUpdateDockerOnly(t *testing.T) {
 
 func TestUpdateInvalidDockerHost(t *testing.T) {
 	cli := makeFakeCli(t)
-	err := RunCreate(cli, &CreateOptions{
-		Name:   "test",
-		Docker: map[string]string{},
+	err := runCreate(cli, "test", createOptions{
+		endpoint: map[string]string{},
 	})
 	assert.NilError(t, err)
-	err = RunUpdate(cli, &UpdateOptions{
-		Name: "test",
-		Docker: map[string]string{
+	err = runUpdate(cli, "test", updateOptions{
+		endpoint: map[string]string{
 			keyHost: "some///invalid/host",
 		},
 	})

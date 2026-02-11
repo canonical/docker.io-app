@@ -1,4 +1,4 @@
-package cluster // import "github.com/docker/docker/daemon/cluster"
+package cluster
 
 import (
 	"context"
@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/daemon/cluster/convert"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/stack"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/convert"
+	"github.com/moby/moby/v2/daemon/internal/filters"
+	"github.com/moby/moby/v2/daemon/internal/stack"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/daemon/server/swarmbackend"
+	"github.com/moby/moby/v2/errdefs"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"github.com/moby/swarmkit/v2/manager/encryption"
 	swarmnode "github.com/moby/swarmkit/v2/node"
@@ -218,7 +218,7 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 // Inspect retrieves the configuration properties of a managed swarm cluster.
 func (c *Cluster) Inspect() (types.Swarm, error) {
 	var swarm types.Swarm
-	if err := c.lockedManagerAction(func(ctx context.Context, state nodeState) error {
+	if err := c.lockedManagerAction(context.TODO(), func(ctx context.Context, state nodeState) error {
 		s, err := c.inspect(ctx, state)
 		if err != nil {
 			return err
@@ -240,8 +240,8 @@ func (c *Cluster) inspect(ctx context.Context, state nodeState) (types.Swarm, er
 }
 
 // Update updates configuration of a managed swarm cluster.
-func (c *Cluster) Update(version uint64, spec types.Spec, flags types.UpdateFlags) error {
-	return c.lockedManagerAction(func(ctx context.Context, state nodeState) error {
+func (c *Cluster) Update(version uint64, spec types.Spec, flags swarmbackend.UpdateFlags) error {
+	return c.lockedManagerAction(context.TODO(), func(ctx context.Context, state nodeState) error {
 		swarm, err := getSwarm(ctx, state.controlClient)
 		if err != nil {
 			return err
@@ -284,7 +284,7 @@ func (c *Cluster) Update(version uint64, spec types.Spec, flags types.UpdateFlag
 // GetUnlockKey returns the unlock key for the swarm.
 func (c *Cluster) GetUnlockKey() (string, error) {
 	var resp *swarmapi.GetUnlockKeyResponse
-	if err := c.lockedManagerAction(func(ctx context.Context, state nodeState) error {
+	if err := c.lockedManagerAction(context.TODO(), func(ctx context.Context, state nodeState) error {
 		client := swarmapi.NewCAClient(state.grpcConn)
 
 		r, err := client.GetUnlockKey(ctx, &swarmapi.GetUnlockKeyRequest{})
@@ -314,7 +314,7 @@ func (c *Cluster) UnlockSwarm(req types.UnlockRequest) error {
 	if !state.IsActiveManager() {
 		// when manager is not active,
 		// unless it is locked, otherwise return error.
-		if err := c.errNoManager(state); err != errSwarmLocked {
+		if err := c.errNoManager(state); !errors.Is(err, errSwarmLocked) {
 			c.mu.RUnlock()
 			return err
 		}
@@ -607,7 +607,7 @@ func initClusterSpec(node *swarmnode.Node, spec types.Spec) error {
 
 func (c *Cluster) listContainerForNode(ctx context.Context, nodeID string) ([]string, error) {
 	var ids []string
-	containers, err := c.config.Backend.Containers(ctx, &container.ListOptions{
+	containers, err := c.config.Backend.Containers(ctx, &backend.ContainerListOptions{
 		Filters: filters.NewArgs(filters.Arg("label", "com.docker.swarm.node.id="+nodeID)),
 	})
 	if err != nil {

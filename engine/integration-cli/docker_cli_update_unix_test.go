@@ -12,22 +12,22 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/request"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
 )
 
-func (s *DockerCLIUpdateSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIUpdateSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIUpdateSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIUpdateSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLIUpdateSuite) TestUpdateRunningContainer(c *testing.T) {
@@ -194,10 +194,10 @@ func (s *DockerCLIUpdateSuite) TestUpdateStats(c *testing.T) {
 		assert.NilError(c, err)
 		assert.Equal(c, resp.Header.Get("Content-Type"), "application/json")
 
-		var v *container.StatsResponse
+		var v container.StatsResponse
 		err = json.NewDecoder(body).Decode(&v)
 		assert.NilError(c, err)
-		body.Close()
+		_ = body.Close()
 
 		return v.MemoryStats.Limit
 	}
@@ -264,11 +264,11 @@ func (s *DockerCLIUpdateSuite) TestUpdateWithNanoCPUs(c *testing.T) {
 	out = cli.DockerCmd(c, "exec", "top", "sh", "-c", fmt.Sprintf("cat %s && cat %s", file1, file2)).Combined()
 	assert.Equal(c, strings.TrimSpace(out), "50000\n100000")
 
-	clt, err := client.NewClientWithOpts(client.FromEnv)
+	clt, err := client.New(client.FromEnv)
 	assert.NilError(c, err)
-	inspect, err := clt.ContainerInspect(testutil.GetContext(c), "top")
+	res, err := clt.ContainerInspect(testutil.GetContext(c), "top", client.ContainerInspectOptions{})
 	assert.NilError(c, err)
-	assert.Equal(c, inspect.HostConfig.NanoCPUs, int64(500000000))
+	assert.Equal(c, res.Container.HostConfig.NanoCPUs, int64(500000000))
 
 	out = inspectField(c, "top", "HostConfig.CpuQuota")
 	assert.Equal(c, out, "0", "CPU CFS quota should be 0")
@@ -280,9 +280,9 @@ func (s *DockerCLIUpdateSuite) TestUpdateWithNanoCPUs(c *testing.T) {
 	assert.Assert(c, is.Contains(out, "Conflicting options: CPU Quota cannot be updated as NanoCPUs has already been set"))
 
 	cli.DockerCmd(c, "update", "--cpus", "0.8", "top")
-	inspect, err = clt.ContainerInspect(testutil.GetContext(c), "top")
+	res, err = clt.ContainerInspect(testutil.GetContext(c), "top", client.ContainerInspectOptions{})
 	assert.NilError(c, err)
-	assert.Equal(c, inspect.HostConfig.NanoCPUs, int64(800000000))
+	assert.Equal(c, res.Container.HostConfig.NanoCPUs, int64(800000000))
 
 	out = inspectField(c, "top", "HostConfig.CpuQuota")
 	assert.Equal(c, out, "0", "CPU CFS quota should be 0")

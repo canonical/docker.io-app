@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/internal/testutils/specialimage"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/internal/testutil/specialimage"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -23,12 +23,12 @@ type DockerCLIInspectSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIInspectSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIInspectSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIInspectSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIInspectSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLIInspectSuite) TestInspectImage(c *testing.T) {
@@ -299,10 +299,10 @@ func (s *DockerCLIInspectSuite) TestInspectTemplateError(c *testing.T) {
 
 	out, _, err := dockerCmdWithError("inspect", "--type=container", "--format='Format container: {{.ThisDoesNotExist}}'", "container1")
 	assert.Assert(c, err != nil)
-	assert.Assert(c, is.Contains(out, "Template parsing error"))
+	assert.Assert(c, is.Contains(out, "template parsing error: template"))
 	out, _, err = dockerCmdWithError("inspect", "--type=image", "--format='Format container: {{.ThisDoesNotExist}}'", "busybox")
 	assert.Assert(c, err != nil)
-	assert.Assert(c, is.Contains(out, "Template parsing error"))
+	assert.Assert(c, is.Contains(out, "template parsing error"))
 }
 
 func (s *DockerCLIInspectSuite) TestInspectJSONFields(c *testing.T) {
@@ -327,19 +327,19 @@ func (s *DockerCLIInspectSuite) TestInspectByPrefix(c *testing.T) {
 func (s *DockerCLIInspectSuite) TestInspectStopWhenNotFound(c *testing.T) {
 	runSleepingContainer(c, "--name=busybox1", "-d")
 	runSleepingContainer(c, "--name=busybox2", "-d")
-	result := dockerCmdWithResult("inspect", "--type=container", "--format='{{.Name}}'", "busybox1", "busybox2", "missing")
+	result := cli.Docker(cli.Args("inspect", "--type=container", "--format='{{.Name}}'", "busybox1", "busybox2", "missing"))
 
 	assert.Assert(c, result.Error != nil)
 	assert.Assert(c, is.Contains(result.Stdout(), "busybox1"))
 	assert.Assert(c, is.Contains(result.Stdout(), "busybox2"))
-	assert.Assert(c, is.Contains(result.Stderr(), "Error: No such container: missing"))
+	assert.Assert(c, is.Contains(result.Stderr(), "No such container: missing"))
 	// test inspect would not fast fail
-	result = dockerCmdWithResult("inspect", "--type=container", "--format='{{.Name}}'", "missing", "busybox1", "busybox2")
+	result = cli.Docker(cli.Args("inspect", "--type=container", "--format='{{.Name}}'", "missing", "busybox1", "busybox2"))
 
 	assert.Assert(c, result.Error != nil)
 	assert.Assert(c, is.Contains(result.Stdout(), "busybox1"))
 	assert.Assert(c, is.Contains(result.Stdout(), "busybox2"))
-	assert.Assert(c, is.Contains(result.Stderr(), "Error: No such container: missing"))
+	assert.Assert(c, is.Contains(result.Stderr(), "No such container: missing"))
 }
 
 func (s *DockerCLIInspectSuite) TestInspectHistory(c *testing.T) {

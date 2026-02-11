@@ -6,24 +6,23 @@ import (
 
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
 	flagsHelper "github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/opts"
-	"github.com/docker/docker/api/types/swarm"
 	"github.com/fvbommel/sortorder"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-// ListOptions contains options for the docker config ls command.
-type ListOptions struct {
-	Quiet  bool
-	Format string
-	Filter opts.FilterOpt
+// listOptions contains options for the docker config ls command.
+type listOptions struct {
+	quiet  bool
+	format string
+	filter opts.FilterOpt
 }
 
-func newConfigListCommand(dockerCli command.Cli) *cobra.Command {
-	listOpts := ListOptions{Filter: opts.NewFilterOpt()}
+func newConfigListCommand(dockerCLI command.Cli) *cobra.Command {
+	listOpts := listOptions{filter: opts.NewFilterOpt()}
 
 	cmd := &cobra.Command{
 		Use:     "ls [OPTIONS]",
@@ -31,44 +30,45 @@ func newConfigListCommand(dockerCli command.Cli) *cobra.Command {
 		Short:   "List configs",
 		Args:    cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunConfigList(cmd.Context(), dockerCli, listOpts)
+			return runList(cmd.Context(), dockerCLI, listOpts)
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVarP(&listOpts.Quiet, "quiet", "q", false, "Only display IDs")
-	flags.StringVar(&listOpts.Format, "format", "", flagsHelper.FormatHelp)
-	flags.VarP(&listOpts.Filter, "filter", "f", "Filter output based on conditions provided")
+	flags.BoolVarP(&listOpts.quiet, "quiet", "q", false, "Only display IDs")
+	flags.StringVar(&listOpts.format, "format", "", flagsHelper.FormatHelp)
+	flags.VarP(&listOpts.filter, "filter", "f", "Filter output based on conditions provided")
 
 	return cmd
 }
 
-// RunConfigList lists Swarm configs.
-func RunConfigList(ctx context.Context, dockerCLI command.Cli, options ListOptions) error {
+// runList lists Swarm configs.
+func runList(ctx context.Context, dockerCLI command.Cli, options listOptions) error {
 	apiClient := dockerCLI.Client()
 
-	configs, err := apiClient.ConfigList(ctx, swarm.ConfigListOptions{Filters: options.Filter.Value()})
+	res, err := apiClient.ConfigList(ctx, client.ConfigListOptions{Filters: options.filter.Value()})
 	if err != nil {
 		return err
 	}
 
-	format := options.Format
+	format := options.format
 	if len(format) == 0 {
-		if len(dockerCLI.ConfigFile().ConfigFormat) > 0 && !options.Quiet {
+		if len(dockerCLI.ConfigFile().ConfigFormat) > 0 && !options.quiet {
 			format = dockerCLI.ConfigFile().ConfigFormat
 		} else {
 			format = formatter.TableFormatKey
 		}
 	}
 
-	sort.Slice(configs, func(i, j int) bool {
-		return sortorder.NaturalLess(configs[i].Spec.Name, configs[j].Spec.Name)
+	sort.Slice(res.Items, func(i, j int) bool {
+		return sortorder.NaturalLess(res.Items[i].Spec.Name, res.Items[j].Spec.Name)
 	})
 
 	configCtx := formatter.Context{
 		Output: dockerCLI.Out(),
-		Format: NewFormat(format, options.Quiet),
+		Format: newFormat(format, options.quiet),
 	}
-	return FormatWrite(configCtx, configs)
+	return formatWrite(configCtx, res)
 }

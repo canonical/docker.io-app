@@ -31,8 +31,9 @@ trap "rm -rf '${work_dir}'" EXIT
 # extract main tarball
 tar -xf "${filename}" -C "${work_dir}"
 
-# move sources in a subdirectory
-mv "${work_dir}/moby-${VERSION}" "${work_dir}/engine"
+# move sources in a subdirectory supporting new and old upstream paths
+mv "${work_dir}/moby-${VERSION}" "${work_dir}/engine" || \
+mv "${work_dir}/moby-docker-v${VERSION}" "${work_dir}/engine"
 
 # fetch Docker components
 for I in "${COMPONENTS[@]}"; do

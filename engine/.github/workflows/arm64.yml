@@ -23,7 +23,7 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: "1.24.3"
+  GO_VERSION: "1.25.5"
   TESTSTAT_VERSION: v0.1.25
   DESTDIR: ./build
   SETUP_BUILDX_VERSION: edge
@@ -37,6 +37,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - validate-dco
     strategy:
@@ -70,6 +71,7 @@ jobs:
   build-dev:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - validate-dco
     steps:
@@ -87,18 +89,19 @@ jobs:
           targets: dev
           set: |
             *.cache-from=type=gha,scope=dev-arm64
-            *.cache-to=type=gha,scope=dev-arm64,mode=max
+            *.cache-to=type=gha,scope=dev-arm64
             *.output=type=cacheonly
 
   test-unit:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120 # guardrails timeout for the whole job
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - build-dev
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       -
         name: Set up runner
         uses: ./.github/actions/setup-runner
@@ -109,6 +112,9 @@ jobs:
           version: ${{ env.SETUP_BUILDX_VERSION }}
           driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
           buildkitd-flags: --debug
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       -
         name: Build dev image
         uses: docker/bake-action@v6
@@ -140,7 +146,7 @@ jobs:
       -
         name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-unit-arm64-graphdriver
           path: /tmp/reports/*
@@ -150,19 +156,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only'))
     needs:
       - test-unit
     steps:
       -
         name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: vendor.sum
+          cache: false
       -
         name: Download reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: test-reports-unit-arm64-*
           path: /tmp/reports
@@ -179,12 +185,13 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120 # guardrails timeout for the whole job
     continue-on-error: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     needs:
       - build-dev
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       -
         name: Set up runner
         uses: ./.github/actions/setup-runner
@@ -198,6 +205,9 @@ jobs:
           version: ${{ env.SETUP_BUILDX_VERSION }}
           driver-opts: image=${{ env.SETUP_BUILDKIT_IMAGE }}
           buildkitd-flags: --debug
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       -
         name: Build dev image
         uses: docker/bake-action@v6
@@ -216,13 +226,14 @@ jobs:
         name: Prepare reports
         if: always()
         run: |
+          docker stop otelcol
           reportsPath="/tmp/reports/arm64-graphdriver"
           mkdir -p bundles $reportsPath
           find bundles -path '*/root/*overlay2' -prune -o -type f \( -name '*-report.json' -o -name '*.log' -o -name '*.out' -o -name '*.prof' -o -name '*-report.xml' \) -print | xargs sudo tar -czf /tmp/reports.tar.gz
           tar -xzf /tmp/reports.tar.gz -C $reportsPath
+          mv /tmp/reports/otel-trace*.jsonl $reportsPath/
           sudo chown -R $(id -u):$(id -g) $reportsPath
           tree -nh $reportsPath
-          curl -sSLf localhost:16686/api/traces?service=integration-test-client > $reportsPath/jaeger-trace.json
       -
         name: Send to Codecov
         uses: codecov/codecov-action@v4
@@ -239,7 +250,7 @@ jobs:
       -
         name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports-integration-arm64-graphdriver
           path: /tmp/reports/*
@@ -249,19 +260,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only'))
     needs:
       - test-integration
     steps:
       -
         name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: vendor.sum
+          cache: false
       -
         name: Download reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: /tmp/reports
           pattern: test-reports-integration-arm64-*

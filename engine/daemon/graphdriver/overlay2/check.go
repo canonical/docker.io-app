@@ -1,6 +1,6 @@
 //go:build linux
 
-package overlay2 // import "github.com/docker/docker/daemon/graphdriver/overlay2"
+package overlay2
 
 import (
 	"fmt"
@@ -10,8 +10,8 @@ import (
 	"syscall"
 
 	"github.com/containerd/containerd/v2/core/mount"
-	"github.com/docker/docker/daemon/graphdriver/overlayutils"
-	"github.com/docker/docker/pkg/system"
+	"github.com/moby/moby/v2/daemon/graphdriver/overlayutils"
+	"github.com/moby/moby/v2/daemon/internal/system"
 	"github.com/moby/sys/userns"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
@@ -106,7 +106,7 @@ func doesSupportNativeDiff(d string) error {
 	// rename "d1" to "d2"
 	if err := os.Rename(filepath.Join(td, mergedDirName, "d1"), filepath.Join(td, mergedDirName, "d2")); err != nil {
 		// if rename failed with syscall.EXDEV, the kernel doesn't have CONFIG_OVERLAY_FS_REDIRECT_DIR enabled
-		if err.(*os.LinkError).Err == syscall.EXDEV {
+		if errors.Is(err.(*os.LinkError).Err, syscall.EXDEV) {
 			return nil
 		}
 		return errors.Wrap(err, "failed to rename dir in merged directory")

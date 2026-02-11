@@ -1,30 +1,23 @@
-package network // import "github.com/docker/docker/daemon/network"
+package network
 
 import (
 	"net"
 	"sync"
 
-	networktypes "github.com/docker/docker/api/types/network"
-	clustertypes "github.com/docker/docker/daemon/cluster/provider"
-	"github.com/docker/go-connections/nat"
+	networktypes "github.com/moby/moby/api/types/network"
+	clustertypes "github.com/moby/moby/v2/daemon/cluster/provider"
 	"github.com/pkg/errors"
 )
 
 // Settings stores configuration details about the daemon network config
 // TODO Windows. Many of these fields can be factored out.,
 type Settings struct {
-	Bridge                 string
-	SandboxID              string
-	SandboxKey             string
-	HairpinMode            bool
-	LinkLocalIPv6Address   string
-	LinkLocalIPv6PrefixLen int
-	Networks               map[string]*EndpointSettings
-	Service                *clustertypes.ServiceConfig
-	Ports                  nat.PortMap
-	SecondaryIPAddresses   []networktypes.Address
-	SecondaryIPv6Addresses []networktypes.Address
-	HasSwarmEndpoint       bool
+	SandboxID        string
+	SandboxKey       string
+	Networks         map[string]*EndpointSettings
+	Service          *clustertypes.ServiceConfig
+	Ports            networktypes.PortMap
+	HasSwarmEndpoint bool
 }
 
 // EndpointSettings is a package local wrapper for
@@ -35,7 +28,7 @@ type EndpointSettings struct {
 	IPAMOperational bool
 	// DesiredMacAddress is the configured value, it's copied from MacAddress (the
 	// API param field) when the container is created.
-	DesiredMacAddress string
+	DesiredMacAddress networktypes.HardwareAddr
 }
 
 // AttachmentStore stores the load balancer IP address for a network id.

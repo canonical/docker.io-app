@@ -1,11 +1,12 @@
-package stats // import "github.com/docker/docker/daemon/stats"
+package stats
 
 import (
+	"runtime"
 	"sync"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/container"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/container"
 	"github.com/moby/pubsub"
 )
 
@@ -37,7 +38,7 @@ type supervisor interface {
 // Collect registers the container with the collector and adds it to
 // the event loop for collection on the specified interval returning
 // a channel for the subscriber to receive on.
-func (s *Collector) Collect(c *container.Container) chan interface{} {
+func (s *Collector) Collect(c *container.Container) chan any {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
 
@@ -63,7 +64,7 @@ func (s *Collector) StopCollection(c *container.Container) {
 }
 
 // Unsubscribe removes a specific subscriber from receiving updates for a container's stats.
-func (s *Collector) Unsubscribe(c *container.Container, ch chan interface{}) {
+func (s *Collector) Unsubscribe(c *container.Container, ch chan any) {
 	s.m.Lock()
 	publisher := s.publishers[c]
 	if publisher != nil {
@@ -95,9 +96,12 @@ func (s *Collector) Run() {
 		// but saves allocations in further iterations
 		pairs = pairs[:0]
 
-		for container, publisher := range s.publishers {
+		for ctr, publisher := range s.publishers {
 			// copy pointers here to release the lock ASAP
-			pairs = append(pairs, publishersPair{container, publisher})
+			pairs = append(pairs, publishersPair{
+				container: ctr,
+				publisher: publisher,
+			})
 		}
 
 		s.cond.L.Unlock()
@@ -106,8 +110,9 @@ func (s *Collector) Run() {
 			stats, err := s.supervisor.GetContainerStats(pair.container)
 			if err != nil {
 				stats = &containertypes.StatsResponse{
-					Name: pair.container.Name,
-					ID:   pair.container.ID,
+					ID:     pair.container.ID,
+					Name:   pair.container.Name,
+					OSType: runtime.GOOS,
 				}
 			}
 			pair.publisher.Publish(*stats)

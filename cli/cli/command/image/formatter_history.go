@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/pkg/stringid"
-	units "github.com/docker/go-units"
+	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -20,8 +20,8 @@ const (
 	commentHeader   = "COMMENT"
 )
 
-// NewHistoryFormat returns a format for rendering an HistoryContext
-func NewHistoryFormat(source string, quiet bool, human bool) formatter.Format {
+// newHistoryFormat returns a format for rendering a historyContext.
+func newHistoryFormat(source string, quiet bool, human bool) formatter.Format {
 	if source == formatter.TableFormatKey {
 		switch {
 		case quiet:
@@ -36,27 +36,32 @@ func NewHistoryFormat(source string, quiet bool, human bool) formatter.Format {
 	return formatter.Format(source)
 }
 
-// HistoryWrite writes the context
-func HistoryWrite(ctx formatter.Context, human bool, histories []image.HistoryResponseItem) error {
-	render := func(format func(subContext formatter.SubContext) error) error {
-		for _, history := range histories {
-			historyCtx := &historyContext{trunc: ctx.Trunc, h: history, human: human}
-			if err := format(historyCtx); err != nil {
+// historyWrite writes the context
+func historyWrite(fmtCtx formatter.Context, human bool, history client.ImageHistoryResult) error {
+	historyCtx := &historyContext{
+		HeaderContext: formatter.HeaderContext{
+			Header: formatter.SubHeaderContext{
+				"ID":           historyIDHeader,
+				"CreatedSince": formatter.CreatedSinceHeader,
+				"CreatedAt":    formatter.CreatedAtHeader,
+				"CreatedBy":    createdByHeader,
+				"Size":         formatter.SizeHeader,
+				"Comment":      commentHeader,
+			},
+		},
+	}
+	return fmtCtx.Write(historyCtx, func(format func(subContext formatter.SubContext) error) error {
+		for _, h := range history.Items {
+			if err := format(&historyContext{
+				trunc: fmtCtx.Trunc,
+				h:     h,
+				human: human,
+			}); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	historyCtx := &historyContext{}
-	historyCtx.Header = formatter.SubHeaderContext{
-		"ID":           historyIDHeader,
-		"CreatedSince": formatter.CreatedSinceHeader,
-		"CreatedAt":    formatter.CreatedAtHeader,
-		"CreatedBy":    createdByHeader,
-		"Size":         formatter.SizeHeader,
-		"Comment":      commentHeader,
-	}
-	return ctx.Write(historyCtx, render)
+	})
 }
 
 type historyContext struct {
@@ -72,7 +77,7 @@ func (c *historyContext) MarshalJSON() ([]byte, error) {
 
 func (c *historyContext) ID() string {
 	if c.trunc {
-		return stringid.TruncateID(c.h.ID)
+		return formatter.TruncateID(c.h.ID)
 	}
 	return c.h.ID
 }

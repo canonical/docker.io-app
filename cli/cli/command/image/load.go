@@ -2,6 +2,8 @@ package image
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/containerd/platforms"
@@ -9,20 +11,20 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/internal/jsonstream"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/moby/sys/sequential"
-	"github.com/pkg/errors"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
 type loadOptions struct {
 	input    string
 	quiet    bool
-	platform string
+	platform []string
 }
 
-// NewLoadCommand creates a new `docker load` command
-func NewLoadCommand(dockerCli command.Cli) *cobra.Command {
+// newLoadCommand creates a new "docker image load" command.
+func newLoadCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts loadOptions
 
 	cmd := &cobra.Command{
@@ -30,22 +32,23 @@ func NewLoadCommand(dockerCli command.Cli) *cobra.Command {
 		Short: "Load an image from a tar archive or STDIN",
 		Args:  cli.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLoad(cmd.Context(), dockerCli, opts)
+			return runLoad(cmd.Context(), dockerCLI, opts)
 		},
 		Annotations: map[string]string{
 			"aliases": "docker image load, docker load",
 		},
-		ValidArgsFunction: completion.NoComplete,
+		ValidArgsFunction:     cobra.NoFileCompletions,
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
 
 	flags.StringVarP(&opts.input, "input", "i", "", "Read from tar archive file, instead of STDIN")
 	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress the load output")
-	flags.StringVar(&opts.platform, "platform", "", `Load only the given platform variant. Formatted as "os[/arch[/variant]]" (e.g., "linux/amd64")`)
+	flags.StringSliceVar(&opts.platform, "platform", []string{}, `Load only the given platform(s). Formatted as a comma-separated list of "os[/arch[/variant]]" (e.g., "linux/amd64,linux/arm64/v8").`)
 	_ = flags.SetAnnotation("platform", "version", []string{"1.48"})
 
-	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	_ = cmd.RegisterFlagCompletionFunc("platform", completion.Platforms())
 	return cmd
 }
 
@@ -58,7 +61,7 @@ func runLoad(ctx context.Context, dockerCli command.Cli, opts loadOptions) error
 		// To avoid getting stuck, verify that a tar file is given either in
 		// the input flag or through stdin and if not display an error message and exit.
 		if dockerCli.In().IsTerminal() {
-			return errors.Errorf("requested load from stdin, but stdin is empty")
+			return errors.New("requested load from stdin, but stdin is empty")
 		}
 	default:
 		// We use sequential.Open to use sequential file access on Windows, avoiding
@@ -67,7 +70,7 @@ func runLoad(ctx context.Context, dockerCli command.Cli, opts loadOptions) error
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		input = file
 	}
 
@@ -76,25 +79,23 @@ func runLoad(ctx context.Context, dockerCli command.Cli, opts loadOptions) error
 		options = append(options, client.ImageLoadWithQuiet(true))
 	}
 
-	if opts.platform != "" {
-		p, err := platforms.Parse(opts.platform)
+	platformList := []ocispec.Platform{}
+	for _, p := range opts.platform {
+		pp, err := platforms.Parse(p)
 		if err != nil {
-			return errors.Wrap(err, "invalid platform")
+			return fmt.Errorf("invalid platform: %w", err)
 		}
-		// TODO(thaJeztah): change flag-type to support multiple platforms.
-		options = append(options, client.ImageLoadWithPlatforms(p))
+		platformList = append(platformList, pp)
+	}
+	if len(platformList) > 0 {
+		options = append(options, client.ImageLoadWithPlatforms(platformList...))
 	}
 
-	response, err := dockerCli.Client().ImageLoad(ctx, input, options...)
+	res, err := dockerCli.Client().ImageLoad(ctx, input, options...)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = res.Close() }()
 
-	if response.Body != nil && response.JSON {
-		return jsonstream.Display(ctx, response.Body, dockerCli.Out())
-	}
-
-	_, err = io.Copy(dockerCli.Out(), response.Body)
-	return err
+	return jsonstream.Display(ctx, res, dockerCli.Out())
 }

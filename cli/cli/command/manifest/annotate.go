@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/manifest/store"
-	registryclient "github.com/docker/cli/cli/registry/client"
-	"github.com/docker/docker/api/types/registry"
+	"github.com/docker/cli/internal/registryclient"
+	"github.com/moby/moby/api/types/registry"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +44,27 @@ func newManifestStore(dockerCLI command.Cli) store.Store {
 	return store.NewStore(filepath.Join(config.Dir(), "manifests"))
 }
 
+// authConfigKey is the key used to store credentials for Docker Hub. It is
+// a copy of [registry.IndexServer].
+//
+// [registry.IndexServer]: https://pkg.go.dev/github.com/docker/docker@v28.3.3+incompatible/registry#IndexServer
+const authConfigKey = "https://index.docker.io/v1/"
+
+// getAuthConfigKey special-cases using the full index address of the official
+// index as the AuthConfig key, and uses the (host)name[:port] for private indexes.
+//
+// It is similar to [registry.GetAuthConfigKey], but does not require on
+// [registrytypes.IndexInfo] as intermediate.
+//
+// [registry.GetAuthConfigKey]: https://pkg.go.dev/github.com/docker/docker@v28.3.3+incompatible/registry#GetAuthConfigKey
+// [registrytypes.IndexInfo]: https://pkg.go.dev/github.com/docker/docker@v28.3.3+incompatible/api/types/registry#IndexInfo
+func getAuthConfigKey(domainName string) string {
+	if domainName == "docker.io" || domainName == "index.docker.io" {
+		return authConfigKey
+	}
+	return domainName
+}
+
 // newRegistryClient returns a client for communicating with a Docker distribution
 // registry
 func newRegistryClient(dockerCLI command.Cli, allowInsecure bool) registryclient.RegistryClient {
@@ -51,14 +72,27 @@ func newRegistryClient(dockerCLI command.Cli, allowInsecure bool) registryclient
 		// manifestStoreProvider is used in tests to provide a dummy store.
 		return msp.RegistryClient(allowInsecure)
 	}
-	resolver := func(ctx context.Context, index *registry.IndexInfo) registry.AuthConfig {
-		return command.ResolveAuthConfig(dockerCLI.ConfigFile(), index)
+	cfg := dockerCLI.ConfigFile()
+	resolver := func(ctx context.Context, domainName string) registry.AuthConfig {
+		configKey := getAuthConfigKey(domainName)
+		a, _ := cfg.GetAuthConfig(configKey)
+		return registry.AuthConfig{
+			Username:      a.Username,
+			Password:      a.Password,
+			ServerAddress: a.ServerAddress,
+
+			// TODO(thaJeztah): Are these expected to be included?
+			Auth:          a.Auth,
+			IdentityToken: a.IdentityToken,
+			RegistryToken: a.RegistryToken,
+		}
 	}
+	// FIXME(thaJeztah): this should use the userAgent as configured on the dockerCLI.
 	return registryclient.NewRegistryClient(resolver, command.UserAgent(), allowInsecure)
 }
 
 // NewAnnotateCommand creates a new `docker manifest annotate` command
-func newAnnotateCommand(dockerCli command.Cli) *cobra.Command {
+func newAnnotateCommand(dockerCLI command.Cli) *cobra.Command {
 	var opts annotateOptions
 
 	cmd := &cobra.Command{
@@ -68,8 +102,9 @@ func newAnnotateCommand(dockerCli command.Cli) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.target = args[0]
 			opts.image = args[1]
-			return runManifestAnnotate(dockerCli, opts)
+			return runManifestAnnotate(dockerCLI, opts)
 		},
+		DisableFlagsInUseLine: true,
 	}
 
 	flags := cmd.Flags()
@@ -86,17 +121,17 @@ func newAnnotateCommand(dockerCli command.Cli) *cobra.Command {
 func runManifestAnnotate(dockerCLI command.Cli, opts annotateOptions) error {
 	targetRef, err := normalizeReference(opts.target)
 	if err != nil {
-		return errors.Wrapf(err, "annotate: error parsing name for manifest list %s", opts.target)
+		return fmt.Errorf("annotate: error parsing name for manifest list %s: %w", opts.target, err)
 	}
 	imgRef, err := normalizeReference(opts.image)
 	if err != nil {
-		return errors.Wrapf(err, "annotate: error parsing name for manifest %s", opts.image)
+		return fmt.Errorf("annotate: error parsing name for manifest %s: %w", opts.image, err)
 	}
 
 	manifestStore := newManifestStore(dockerCLI)
 	imageManifest, err := manifestStore.Get(targetRef, imgRef)
 	switch {
-	case store.IsNotFound(err):
+	case errdefs.IsNotFound(err):
 		return fmt.Errorf("manifest for image %s does not exist in %s", opts.image, opts.target)
 	case err != nil:
 		return err
@@ -123,7 +158,7 @@ func runManifestAnnotate(dockerCLI command.Cli, opts annotateOptions) error {
 	}
 
 	if !isValidOSArch(imageManifest.Descriptor.Platform.OS, imageManifest.Descriptor.Platform.Architecture) {
-		return errors.Errorf("manifest entry for image has unsupported os/arch combination: %s/%s", opts.os, opts.arch)
+		return fmt.Errorf("manifest entry for image has unsupported os/arch combination: %s/%s", opts.os, opts.arch)
 	}
 	return manifestStore.Save(targetRef, imgRef, imageManifest)
 }

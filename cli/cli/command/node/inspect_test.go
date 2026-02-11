@@ -8,8 +8,9 @@ import (
 
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/cli/internal/test/builders"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -18,8 +19,8 @@ func TestNodeInspectErrors(t *testing.T) {
 	testCases := []struct {
 		args            []string
 		flags           map[string]string
-		nodeInspectFunc func() (swarm.Node, []byte, error)
-		infoFunc        func() (system.Info, error)
+		nodeInspectFunc func() (client.NodeInspectResult, error)
+		infoFunc        func() (client.SystemInfoResult, error)
 		expectedError   string
 	}{
 		{
@@ -27,28 +28,32 @@ func TestNodeInspectErrors(t *testing.T) {
 		},
 		{
 			args: []string{"self"},
-			infoFunc: func() (system.Info, error) {
-				return system.Info{}, errors.New("error asking for node info")
+			infoFunc: func() (client.SystemInfoResult, error) {
+				return client.SystemInfoResult{}, errors.New("error asking for node info")
 			},
 			expectedError: "error asking for node info",
 		},
 		{
 			args: []string{"nodeID"},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return swarm.Node{}, []byte{}, errors.New("error inspecting the node")
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{}, errors.New("error inspecting the node")
 			},
-			infoFunc: func() (system.Info, error) {
-				return system.Info{}, errors.New("error asking for node info")
+			infoFunc: func() (client.SystemInfoResult, error) {
+				return client.SystemInfoResult{}, errors.New("error asking for node info")
 			},
 			expectedError: "error inspecting the node",
 		},
 		{
 			args: []string{"self"},
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return swarm.Node{}, []byte{}, errors.New("error inspecting the node")
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{}, errors.New("error inspecting the node")
 			},
-			infoFunc: func() (system.Info, error) {
-				return system.Info{Swarm: swarm.Info{NodeID: "abc"}}, nil
+			infoFunc: func() (client.SystemInfoResult, error) {
+				return client.SystemInfoResult{
+					Info: system.Info{
+						Swarm: swarm.Info{NodeID: "abc"},
+					},
+				}, nil
 			},
 			expectedError: "error inspecting the node",
 		},
@@ -57,8 +62,8 @@ func TestNodeInspectErrors(t *testing.T) {
 			flags: map[string]string{
 				"pretty": "true",
 			},
-			infoFunc: func() (system.Info, error) {
-				return system.Info{}, errors.New("error asking for node info")
+			infoFunc: func() (client.SystemInfoResult, error) {
+				return client.SystemInfoResult{}, errors.New("error asking for node info")
 			},
 			expectedError: "error asking for node info",
 		},
@@ -82,26 +87,30 @@ func TestNodeInspectErrors(t *testing.T) {
 func TestNodeInspectPretty(t *testing.T) {
 	testCases := []struct {
 		name            string
-		nodeInspectFunc func() (swarm.Node, []byte, error)
+		nodeInspectFunc func() (client.NodeInspectResult, error)
 	}{
 		{
 			name: "simple",
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.NodeLabels(map[string]string{
-					"lbl1": "value1",
-				})), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.NodeLabels(map[string]string{"lbl1": "value1"})),
+				}, nil
 			},
 		},
 		{
 			name: "manager",
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager()), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager()),
+				}, nil
 			},
 		},
 		{
 			name: "manager-leader",
-			nodeInspectFunc: func() (swarm.Node, []byte, error) {
-				return *builders.Node(builders.Manager(builders.Leader())), []byte{}, nil
+			nodeInspectFunc: func() (client.NodeInspectResult, error) {
+				return client.NodeInspectResult{
+					Node: *builders.Node(builders.Manager(builders.Leader())),
+				}, nil
 			},
 		},
 	}

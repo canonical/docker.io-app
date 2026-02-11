@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -7,14 +7,14 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	timetypes "github.com/docker/docker/api/types/time"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/daemon/logger"
-	logcache "github.com/docker/docker/daemon/logger/loggerutils/cache"
-	"github.com/docker/docker/errdefs"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/timestamp"
+	"github.com/moby/moby/v2/daemon/logger"
+	logcache "github.com/moby/moby/v2/daemon/logger/loggerutils/cache"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
@@ -24,7 +24,7 @@ import (
 //
 // if it returns nil, the config channel will be active and return log
 // messages until it runs out or the context is canceled.
-func (daemon *Daemon) ContainerLogs(ctx context.Context, containerName string, config *containertypes.LogsOptions) (messages <-chan *backend.LogMessage, isTTY bool, retErr error) {
+func (daemon *Daemon) ContainerLogs(ctx context.Context, containerName string, config *backend.ContainerLogsOptions) (messages <-chan *backend.LogMessage, isTTY bool, retErr error) {
 	ctx, span := tracing.StartSpan(ctx, "daemon.ContainerLogs")
 	defer func() {
 		span.SetStatus(retErr)
@@ -45,7 +45,7 @@ func (daemon *Daemon) ContainerLogs(ctx context.Context, containerName string, c
 		return nil, false, err
 	}
 
-	if ctr.RemovalInProgress || ctr.Dead {
+	if ctr.State.RemovalInProgress || ctr.State.Dead {
 		return nil, false, errdefs.Conflict(errors.New("can not get logs from container which is dead or marked for removal"))
 	}
 
@@ -79,7 +79,7 @@ func (daemon *Daemon) ContainerLogs(ctx context.Context, containerName string, c
 
 	var since time.Time
 	if config.Since != "" {
-		s, n, err := timetypes.ParseTimestamps(config.Since, 0)
+		s, n, err := timestamp.ParseTimestamps(config.Since, 0)
 		if err != nil {
 			return nil, false, err
 		}
@@ -88,7 +88,7 @@ func (daemon *Daemon) ContainerLogs(ctx context.Context, containerName string, c
 
 	var until time.Time
 	if config.Until != "" && config.Until != "0" {
-		s, n, err := timetypes.ParseTimestamps(config.Until, 0)
+		s, n, err := timestamp.ParseTimestamps(config.Until, 0)
 		if err != nil {
 			return nil, false, err
 		}

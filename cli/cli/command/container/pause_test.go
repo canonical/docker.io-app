@@ -8,20 +8,15 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestRunPause(t *testing.T) {
-	cli := test.NewFakeCli(
-		&fakeClient{
-			containerPauseFunc: func(ctx context.Context, container string) error {
-				return nil
-			},
-		},
-	)
+	cli := test.NewFakeCli(&fakeClient{})
 
-	cmd := NewPauseCommand(cli)
+	cmd := newPauseCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetArgs([]string{"container-id-1", "container-id-2"})
 
@@ -41,13 +36,13 @@ func TestRunPause(t *testing.T) {
 func TestRunPauseClientError(t *testing.T) {
 	cli := test.NewFakeCli(
 		&fakeClient{
-			containerPauseFunc: func(ctx context.Context, container string) error {
-				return fmt.Errorf("client error for container %s", container)
+			containerPauseFunc: func(ctx context.Context, container string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
+				return client.ContainerPauseResult{}, fmt.Errorf("client error for container %s", container)
 			},
 		},
 	)
 
-	cmd := NewPauseCommand(cli)
+	cmd := newPauseCommand(cli)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"container-id-1", "container-id-2"})

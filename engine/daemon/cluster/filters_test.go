@@ -1,9 +1,9 @@
-package cluster // import "github.com/docker/docker/daemon/cluster"
+package cluster
 
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/v2/daemon/internal/filters"
 )
 
 func TestNewListSecretsFilters(t *testing.T) {

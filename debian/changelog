@@ -1,18 +1,32 @@
-docker.io-app (28.2.2-0ubuntu1~24.04.1) noble; urgency=medium
+docker.io-app (29.1.3-0ubuntu1) resolute; urgency=medium
 
-  * Merge from questing to noble (LP: #2112523). Remaining changes:
-    - d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
-    - d/docker.io.postinst: notify when a reboot is required to reload the
-      AppArmor profile (LP #2065423)
-  * Dropped changes:
-    - d/control: build with golang 1.22 for consistency across the supported
-      release
-    - d/rules: add golang 1.22 to PATH
-  * New changes:
-    - d/control: build with golang 1.23
-    - d/rules: add golang 1.23 to PATH
+  * New upstream version 29.1.3
+  * d/manpages/*: update manpages for version 29.1.3
+  * d/docker.io.docs: update NOTICE files
 
- -- Athos Ribeiro <athos.ribeiro@canonical.com>  Wed, 10 Sep 2025 11:16:39 -0300
+ -- Athos Ribeiro <athos@ubuntu.com>  Tue, 06 Jan 2026 14:14:59 -0300
+
+docker.io-app (29.1.2-0ubuntu1) resolute; urgency=medium
+
+  * New upstream version 29.1.2
+  * d/watch: accept new upstream tarball format
+  * d/h/tini-upstream-version.sh: accept new upstream URL format
+  * d/get-orig-source.sh: accept new upstream paths
+  * d/manpages/*: update manpages for version 29.1.2
+  * d/extra/vendor: vendorize docker-trust dependencies
+  * d/copyright: update copyright data
+  * d/control: B-D on libnftables-dev
+  * d/s/include-binaries: allow vendorized code binary files
+  * d/docker.io.docs: update NOTICE files
+  * d/docker.io.install: install new docker-trust plugin
+  * d/docker.io.lintian-overrides: remove obsolete lintian overrides
+  * d/s/lintian-overrides: suppress non-relevant lintian warnings
+  * d/rules:
+    - Use moby/moby namespace
+    - Build docker-trust plugin
+  * d/t/docker-in-lxd: workaround cloud-init bug (LP: #2131809)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Fri, 12 Dec 2025 10:35:58 -0300
 
 docker.io-app (28.2.2-0ubuntu1) questing; urgency=medium
 
@@ -29,24 +43,6 @@ docker.io-app (27.5.1-0ubuntu4) questing; urgency=medium
   * d/control: conflicts/replaces podman-docker (LP: #2037905)
 
  -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 03 Jun 2025 13:35:31 -0300
-
-docker.io-app (27.5.1-0ubuntu3~24.04.2) noble-security; urgency=medium
-
-  * No-change rebuild to copy previous update to the security pocket.
-
- -- Hlib Korzhynskyy <hlib.korzhynskyy@canonical.com>  Mon, 02 Jun 2025 09:21:53 -0230
-
-docker.io-app (27.5.1-0ubuntu3~24.04.1) noble; urgency=medium
-
-  * Backport from plucky to noble (LP: #2085187)
-  * d/control: build with golang 1.22 for consistency across the supported
-    release
-  * d/rules: add golang 1.22 to PATH
-  * d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
-  * d/docker.io.postinst: notify when a reboot is required to reload the
-    AppArmor profile (LP #2065423).
-
- -- Athos Ribeiro <athos.ribeiro@canonical.com>  Tue, 01 Apr 2025 11:11:56 -0300
 
 docker.io-app (27.5.1-0ubuntu3) plucky; urgency=medium
 

@@ -3,21 +3,21 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/testutil"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
+	"github.com/moby/moby/v2/internal/testutil"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -27,12 +27,12 @@ type DockerCLIExecSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLIExecSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLIExecSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLIExecSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLIExecSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLIExecSuite) TestExec(c *testing.T) {
@@ -164,10 +164,18 @@ func (s *DockerCLIExecSuite) TestExecTTYCloseStdin(c *testing.T) {
 	stdinRw, err := cmd.StdinPipe()
 	assert.NilError(c, err)
 
-	stdinRw.Write([]byte("test"))
-	stdinRw.Close()
+	_, err = stdinRw.Write([]byte("test"))
+	assert.Check(c, err)
+	_ = stdinRw.Close()
 
-	out, _, err := runCommandWithOutput(cmd)
+	res := icmd.RunCmd(icmd.Cmd{
+		Command: cmd.Args,
+		Env:     cmd.Env,
+		Dir:     cmd.Dir,
+		Stdin:   cmd.Stdin,
+		Stdout:  cmd.Stdout,
+	})
+	out, err := res.Combined(), res.Error
 	assert.NilError(c, err, out)
 
 	out = cli.DockerCmd(c, "top", "exec_tty_stdin").Combined()
@@ -192,11 +200,17 @@ func (s *DockerCLIExecSuite) TestExecTTYWithoutStdin(c *testing.T) {
 		}
 
 		expected := "the input device is not a TTY"
-		if runtime.GOOS == "windows" {
-			expected += ".  If you are using mintty, try prefixing the command with 'winpty'"
-		}
-		if out, _, err := runCommandWithOutput(cmd); err == nil {
-			errChan <- fmt.Errorf("exec should have failed")
+
+		res := icmd.RunCmd(icmd.Cmd{
+			Command: cmd.Args,
+			Env:     cmd.Env,
+			Dir:     cmd.Dir,
+			Stdin:   cmd.Stdin,
+			Stdout:  cmd.Stdout,
+		})
+		out, err := res.Combined(), res.Error
+		if err == nil {
+			errChan <- errors.New("exec should have failed")
 			return
 		} else if !strings.Contains(out, expected) {
 			errChan <- fmt.Errorf("exec failed with error %q: expected %q", out, expected)
@@ -358,11 +372,11 @@ func (s *DockerCLIExecSuite) TestExecInspectID(c *testing.T) {
 	}
 
 	// But we should still be able to query the execID
-	apiClient, err := client.NewClientWithOpts(client.FromEnv)
+	apiClient, err := client.New(client.FromEnv)
 	assert.NilError(c, err)
 	defer apiClient.Close()
 
-	_, err = apiClient.ContainerExecInspect(testutil.GetContext(c), execID)
+	_, err = apiClient.ExecInspect(testutil.GetContext(c), execID, client.ExecInspectOptions{})
 	assert.NilError(c, err)
 
 	// Now delete the container and then an 'inspect' on the exec should
@@ -370,7 +384,7 @@ func (s *DockerCLIExecSuite) TestExecInspectID(c *testing.T) {
 	res := cli.DockerCmd(c, "rm", "-f", id)
 	assert.Equal(c, res.ExitCode, 0, "error removing container: %s", res.Combined())
 
-	_, err = apiClient.ContainerExecInspect(testutil.GetContext(c), execID)
+	_, err = apiClient.ExecInspect(testutil.GetContext(c), execID, client.ExecInspectOptions{})
 	assert.ErrorContains(c, err, "No such exec instance")
 }
 
@@ -477,7 +491,7 @@ func (s *DockerCLIExecSuite) TestExecWithImageUser(c *testing.T) {
 	// Not applicable on Windows
 	testRequires(c, DaemonIsLinux)
 	const name = "testbuilduser"
-	buildImageSuccessfully(c, name, build.WithDockerfile(`FROM busybox
+	cli.BuildCmd(c, name, build.WithDockerfile(`FROM busybox
 		RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 		USER dockerio`))
 	cli.DockerCmd(c, "run", "-d", "--name", "dockerioexec", name, "top")
@@ -521,7 +535,7 @@ func (s *DockerCLIExecSuite) TestExecStartFails(c *testing.T) {
 	assert.Assert(c, is.Contains(out, expectedMsg))
 }
 
-// Fix regression in https://github.com/docker/docker/pull/26461#issuecomment-250287297
+// Fix regression in https://github.com/moby/moby/pull/26461#issuecomment-250287297
 func (s *DockerCLIExecSuite) TestExecWindowsPathNotWiped(c *testing.T) {
 	testRequires(c, DaemonIsWindows)
 	out := cli.DockerCmd(c, "run", "-d", "--name", "testing", minimalBaseImage(), "powershell", "start-sleep", "60").Stdout()
@@ -530,13 +544,4 @@ func (s *DockerCLIExecSuite) TestExecWindowsPathNotWiped(c *testing.T) {
 	out = cli.DockerCmd(c, "exec", "testing", "powershell", "write-host", "$env:PATH").Stdout()
 	out = strings.ToLower(strings.Trim(out, "\r\n"))
 	assert.Assert(c, is.Contains(out, `windowspowershell\v1.0`))
-}
-
-func (s *DockerCLIExecSuite) TestExecEnvLinksHost(c *testing.T) {
-	testRequires(c, DaemonIsLinux)
-	runSleepingContainer(c, "-d", "--name", "foo")
-	runSleepingContainer(c, "-d", "--link", "foo:db", "--hostname", "myhost", "--name", "bar")
-	out := cli.DockerCmd(c, "exec", "bar", "env").Stdout()
-	assert.Check(c, is.Contains(out, "HOSTNAME=myhost"))
-	assert.Check(c, is.Contains(out, "DB_NAME=/bar/db"))
 }

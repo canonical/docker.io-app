@@ -6,7 +6,7 @@ set -e
 #
 # Requirements:
 # - The current directory should be a checkout of the docker source code
-#   (https://github.com/docker/docker). Whatever version is checked out
+#   (https://github.com/moby/moby). Whatever version is checked out
 #   will be built.
 # - The VERSION file, at the root of the repository, should exist, and
 #   will be used as Docker binary version and package version.
@@ -23,7 +23,7 @@ set -e
 
 set -o pipefail
 
-export DOCKER_PKG='github.com/docker/docker'
+export DOCKER_PKG='github.com/moby/moby'
 export SCRIPTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MAKEDIR="$SCRIPTDIR/make"
 export PKG_CONFIG=${PKG_CONFIG:-pkg-config}
@@ -40,6 +40,7 @@ DEFAULT_BUNDLES=(
 
 VERSION=${VERSION:-dev}
 case "$VERSION" in
+	refs/tags/docker-v*) VERSION=${VERSION#refs/tags/docker-v} ;;
 	refs/tags/v*) VERSION=${VERSION#refs/tags/v} ;;
 	refs/tags/*) VERSION=${VERSION#refs/tags/} ;;
 	refs/heads/*) VERSION=$(echo "${VERSION#refs/heads/}" | sed -r 's#/+#-#g') ;;

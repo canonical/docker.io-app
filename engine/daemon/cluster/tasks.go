@@ -1,20 +1,21 @@
-package cluster // import "github.com/docker/docker/daemon/cluster"
+package cluster
 
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/filters"
-	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/daemon/cluster/convert"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/convert"
+	"github.com/moby/moby/v2/daemon/internal/filters"
+	"github.com/moby/moby/v2/daemon/server/swarmbackend"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	"google.golang.org/grpc"
 )
 
 // GetTasks returns a list of tasks matching the filter options.
-func (c *Cluster) GetTasks(options types.TaskListOptions) ([]types.Task, error) {
+func (c *Cluster) GetTasks(options swarmbackend.TaskListOptions) ([]types.Task, error) {
 	var r *swarmapi.ListTasksResponse
 
-	err := c.lockedManagerAction(func(ctx context.Context, state nodeState) error {
+	err := c.lockedManagerAction(context.TODO(), func(ctx context.Context, state nodeState) error {
 		filterTransform := func(filter filters.Args) error {
 			if filter.Contains("service") {
 				serviceFilters := filter.Get("service")
@@ -76,7 +77,7 @@ func (c *Cluster) GetTasks(options types.TaskListOptions) ([]types.Task, error) 
 // GetTask returns a task by an ID.
 func (c *Cluster) GetTask(input string) (types.Task, error) {
 	var task *swarmapi.Task
-	err := c.lockedManagerAction(func(ctx context.Context, state nodeState) error {
+	err := c.lockedManagerAction(context.TODO(), func(ctx context.Context, state nodeState) error {
 		t, err := getTask(ctx, state.controlClient, input)
 		if err != nil {
 			return err

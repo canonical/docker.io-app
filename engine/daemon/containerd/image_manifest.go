@@ -11,8 +11,8 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
-	"github.com/docker/docker/errdefs"
 	"github.com/moby/buildkit/util/attestation"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -31,7 +31,7 @@ func (i *ImageService) walkImageManifests(ctx context.Context, img c8dimages.Ima
 	handleManifest := func(ctx context.Context, d ocispec.Descriptor) error {
 		platformImg, err := i.NewImageManifest(ctx, img, d)
 		if err != nil {
-			if err == errNotManifest {
+			if errors.Is(err, errNotManifest) {
 				return nil
 			}
 			return err
@@ -59,7 +59,7 @@ func (i *ImageService) walkReachableImageManifests(ctx context.Context, img c8di
 	handleManifest := func(ctx context.Context, d ocispec.Descriptor) error {
 		platformImg, err := i.NewImageManifest(ctx, img, d)
 		if err != nil {
-			if err == errNotManifest {
+			if errors.Is(err, errNotManifest) {
 				return nil
 			}
 			return err
@@ -232,7 +232,7 @@ func (im *ImageManifest) ImagePlatform(ctx context.Context) (ocispec.Platform, e
 
 // ReadConfig gets the image config and unmarshals it into the provided struct.
 // The provided struct should be a pointer to the config struct or its subset.
-func (im *ImageManifest) ReadConfig(ctx context.Context, outConfig interface{}) error {
+func (im *ImageManifest) ReadConfig(ctx context.Context, outConfig any) error {
 	configDesc, err := im.Config(ctx)
 	if err != nil {
 		return err

@@ -24,15 +24,16 @@ import (
 	"time"
 
 	"github.com/cloudflare/cfssl/helpers"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/creack/pty"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/integration-cli/checker"
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/integration-cli/daemon"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/testutil"
-	testdaemon "github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
+	"github.com/moby/moby/v2/integration-cli/checker"
+	"github.com/moby/moby/v2/integration-cli/cli"
+	"github.com/moby/moby/v2/integration-cli/cli/build"
+	"github.com/moby/moby/v2/integration-cli/daemon"
+	"github.com/moby/moby/v2/internal/testutil"
+	testdaemon "github.com/moby/moby/v2/internal/testutil/daemon"
 	"github.com/moby/sys/mount"
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
@@ -361,9 +362,10 @@ func (s *DockerDaemonSuite) TestDaemonExitOnFailure(c *testing.T) {
 }
 
 func (s *DockerDaemonSuite) TestDaemonBridgeNone(c *testing.T) {
+	ctx := testutil.GetContext(c)
 	// start with bridge none
 	d := s.d
-	d.StartWithBusybox(testutil.GetContext(c), c, "--bridge", "none")
+	d.StartWithBusybox(ctx, c, "--bridge", "none")
 	defer d.Restart(c)
 
 	// verify docker0 iface is not there
@@ -374,24 +376,24 @@ func (s *DockerDaemonSuite) TestDaemonBridgeNone(c *testing.T) {
 	})
 
 	// verify default "bridge" network is not there
-	out, err := d.Cmd("network", "inspect", "bridge")
-	assert.ErrorContains(c, err, "", `"bridge" network should not be present if daemon started with --bridge=none`)
-	assert.Assert(c, is.Contains(out, "No such network"))
+	apiClient := d.NewClientT(c)
+	_, err := apiClient.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
+	assert.ErrorType(c, err, cerrdefs.IsNotFound, `"bridge" network should not be present if daemon started with --bridge=none`)
 }
 
-func createInterface(c *testing.T, ifType string, ifName string, ipNet string) {
-	icmd.RunCommand("ip", "link", "add", "name", ifName, "type", ifType).Assert(c, icmd.Success)
-	icmd.RunCommand("ifconfig", ifName, ipNet, "up").Assert(c, icmd.Success)
+func createInterface(t *testing.T, ifType string, ifName string, ipNet string) {
+	icmd.RunCommand("ip", "link", "add", "name", ifName, "type", ifType).Assert(t, icmd.Success)
+	icmd.RunCommand("ifconfig", ifName, ipNet, "up").Assert(t, icmd.Success)
 }
 
-func deleteInterface(c *testing.T, ifName string) {
-	icmd.RunCommand("ip", "link", "delete", ifName).Assert(c, icmd.Success)
-	icmd.RunCommand("iptables", "-t", "nat", "--flush").Assert(c, icmd.Success)
-	icmd.RunCommand("iptables", "--flush").Assert(c, icmd.Success)
+func deleteInterface(t *testing.T, ifName string) {
+	icmd.RunCommand("ip", "link", "delete", ifName).Assert(t, icmd.Success)
+	icmd.RunCommand("iptables", "-t", "nat", "--flush").Assert(t, icmd.Success)
+	icmd.RunCommand("iptables", "--flush").Assert(t, icmd.Success)
 }
 
 func (s *DockerDaemonSuite) TestDaemonUlimitDefaults(c *testing.T) {
-	s.d.StartWithBusybox(testutil.GetContext(c), c, "--default-ulimit", "nofile=42:42", "--default-ulimit", "nproc=1024:1024")
+	s.d.StartWithBusybox(testutil.GetContext(c), c, "--default-ulimit", "nofile=50:50", "--default-ulimit", "nproc=1024:1024")
 
 	out, err := s.d.Cmd("run", "--ulimit", "nproc=2048", "--name=test", "busybox", "/bin/sh", "-c", "echo $(ulimit -n); echo $(ulimit -u)")
 	if err != nil {
@@ -405,15 +407,15 @@ func (s *DockerDaemonSuite) TestDaemonUlimitDefaults(c *testing.T) {
 	nofile := strings.TrimSpace(outArr[0])
 	nproc := strings.TrimSpace(outArr[1])
 
-	if nofile != "42" {
-		c.Fatalf("expected `ulimit -n` to be `42`, got: %s", nofile)
+	if nofile != "50" {
+		c.Fatalf("expected `ulimit -n` to be `50`, got: %s", nofile)
 	}
 	if nproc != "2048" {
 		c.Fatalf("expected `ulimit -u` to be 2048, got: %s", nproc)
 	}
 
 	// Now restart daemon with a new default
-	s.d.Restart(c, "--default-ulimit", "nofile=43")
+	s.d.Restart(c, "--default-ulimit", "nofile=50")
 
 	out, err = s.d.Cmd("start", "-a", "test")
 	if err != nil {
@@ -427,8 +429,8 @@ func (s *DockerDaemonSuite) TestDaemonUlimitDefaults(c *testing.T) {
 	nofile = strings.TrimSpace(outArr[0])
 	nproc = strings.TrimSpace(outArr[1])
 
-	if nofile != "43" {
-		c.Fatalf("expected `ulimit -n` to be `43`, got: %s", nofile)
+	if nofile != "50" {
+		c.Fatalf("expected `ulimit -n` to be `50`, got: %s", nofile)
 	}
 	if nproc != "2048" {
 		c.Fatalf("expected `ulimit -u` to be 2048, got: %s", nproc)
@@ -675,7 +677,7 @@ func (s *DockerDaemonSuite) TestHTTPSInfo(c *testing.T) {
 }
 
 // TestHTTPSRun connects via two-way authenticated HTTPS to the create, attach, start, and wait endpoints.
-// https://github.com/docker/docker/issues/19280
+// https://github.com/moby/moby/issues/19280
 func (s *DockerDaemonSuite) TestHTTPSRun(c *testing.T) {
 	const (
 		testDaemonHTTPSAddr = "tcp://localhost:4271"
@@ -713,8 +715,22 @@ func (s *DockerDaemonSuite) TestTLSVerify(c *testing.T) {
 // by using a rogue client certificate and checks that it fails with the expected error.
 func (s *DockerDaemonSuite) TestHTTPSInfoRogueCert(c *testing.T) {
 	const (
-		errBadCertificate   = "bad certificate"
-		testDaemonHTTPSAddr = "tcp://localhost:4271"
+		// Go 1.25 /  TLS 1.3 may produce a generic "handshake failure"
+		// whereas TLS 1.2 may produce a "bad certificate" TLS alert.
+		// See https://github.com/golang/go/issues/56371
+		//
+		// > https://tip.golang.org/doc/go1.12#tls_1_3
+		// >
+		// > In TLS 1.3 the client is the last one to speak in the handshake, so if
+		// > it causes an error to occur on the server, it will be returned on the
+		// > client by the first Read, not by Handshake. For example, that will be
+		// > the case if the server rejects the client certificate.
+		//
+		// https://github.com/golang/go/blob/go1.25.1/src/crypto/tls/alert.go#L71-L72
+		alertBadCertificate      = "bad certificate"   // go1.24 / TLS 1.2
+		alertHandshakeFailure    = "handshake failure" // go1.25 / TLS 1.3
+		alertCertificateRequired = "certificate required"
+		testDaemonHTTPSAddr      = "tcp://localhost:4271"
 	)
 
 	s.d.Start(c,
@@ -733,8 +749,11 @@ func (s *DockerDaemonSuite) TestHTTPSInfoRogueCert(c *testing.T) {
 		"info",
 	}
 	out, err := s.d.Cmd(args...)
-	if err == nil || !strings.Contains(out, errBadCertificate) {
-		c.Fatalf("Expected err: %s, got instead: %s and output: %s", errBadCertificate, err, out)
+	if err == nil {
+		c.Errorf("Expected an error, but got none; output: %s", out)
+	}
+	if !strings.Contains(out, alertHandshakeFailure) && !strings.Contains(out, alertBadCertificate) && !strings.Contains(out, alertCertificateRequired) {
+		c.Errorf("Expected %q, %q, or %q; output: %s", alertHandshakeFailure, alertBadCertificate, alertCertificateRequired, out)
 	}
 }
 
@@ -1033,6 +1052,8 @@ func (s *DockerDaemonSuite) TestBridgeIPIsExcludedFromAllocatorPool(c *testing.T
 	s.d.StartWithBusybox(testutil.GetContext(c), c, "--bip", bridgeRange)
 	defer s.d.Restart(c)
 
+	apiClient := s.d.NewClientT(c)
+
 	var cont int
 	for {
 		contName := fmt.Sprintf("container%d", cont)
@@ -1041,9 +1062,14 @@ func (s *DockerDaemonSuite) TestBridgeIPIsExcludedFromAllocatorPool(c *testing.T
 			// pool exhausted
 			break
 		}
-		ip, err := s.d.Cmd("inspect", "--format", "'{{.NetworkSettings.IPAddress}}'", contName)
-		assert.Assert(c, err == nil, ip)
 
+		res, err := apiClient.ContainerInspect(c.Context(), contName, client.ContainerInspectOptions{})
+		assert.NilError(c, err)
+
+		assert.Check(c, res.Container.NetworkSettings != nil)
+		assert.Check(c, res.Container.NetworkSettings.Networks["bridge"] != nil)
+		ip := res.Container.NetworkSettings.Networks["bridge"].IPAddress.String()
+		assert.Assert(c, err == nil, ip)
 		assert.Assert(c, ip != bridgeIP)
 		cont++
 	}
@@ -1086,7 +1112,7 @@ func (s *DockerDaemonSuite) TestDaemonNoSpaceLeftOnDeviceError(c *testing.T) {
 	defer s.d.Stop(c)
 
 	// pull a repository large enough to overfill the mounted filesystem
-	pullOut, err := s.d.Cmd("pull", "debian:bookworm-slim")
+	pullOut, err := s.d.Cmd("pull", "debian:trixie-slim")
 	assert.Check(c, err != nil)
 	assert.Check(c, is.Contains(pullOut, "no space left on device"))
 }
@@ -1379,7 +1405,7 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithUnpausedRunningContainer(t *tes
 
 	// Give time to containerd to process the command if we don't
 	// the resume event might be received after we do the inspect
-	poll.WaitOn(t, pollCheck(t, func(*testing.T) (interface{}, string) {
+	poll.WaitOn(t, pollCheck(t, func(*testing.T) (any, string) {
 		result := icmd.RunCommand("kill", "-0", strings.TrimSpace(pid))
 		return result.ExitCode, ""
 	}, checker.Equals(0)), poll.WithTimeout(defaultReconciliationTimeout))
@@ -1613,6 +1639,7 @@ func (s *DockerDaemonSuite) TestBuildOnDisabledBridgeNetworkDaemon(c *testing.T)
         FROM busybox
         RUN cat /etc/hosts`),
 		build.WithoutCache,
+		build.WithBuildkit(false), // FIXME(thaJeztah): doesn't work with BuildKit? 'ERROR: process "/bin/sh -c cat /etc/hosts" did not complete successfully: network bridge not found'
 	)
 	comment := fmt.Sprintf("Failed to build image. output %s, exitCode %d, err %v", result.Combined(), result.ExitCode, result.Error)
 	assert.Assert(c, result.Error == nil, comment)
@@ -1834,8 +1861,8 @@ func (s *DockerDaemonSuite) TestDaemonRestartSaveContainerExitCode(c *testing.T)
 	// process itself is PID1, the container does not fail on _startup_ (i.e., `docker-init` starting),
 	// but directly after. The exit code of the container is still 127, but the Error Message is not
 	// captured, so `.State.Error` is empty.
-	// See the discussion on https://github.com/docker/docker/pull/30227#issuecomment-274161426,
-	// and https://github.com/docker/docker/pull/26061#r78054578 for more information.
+	// See the discussion on https://github.com/moby/moby/pull/30227#issuecomment-274161426,
+	// and https://github.com/moby/moby/pull/26061#r78054578 for more information.
 	_, err := s.d.Cmd("run", "--name", containerName, "--init=false", "busybox", "toto")
 	assert.ErrorContains(c, err, "")
 
@@ -2129,35 +2156,35 @@ func (s *DockerDaemonSuite) TestShmSizeReload(c *testing.T) {
 	assert.Equal(c, strings.TrimSpace(out), fmt.Sprintf("%v", size))
 }
 
-func testDaemonStartIpcMode(c *testing.T, from, mode string, valid bool) {
-	d := daemon.New(c, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
-	c.Logf("Checking IpcMode %s set from %s\n", mode, from)
+func testDaemonStartIpcMode(t *testing.T, from, mode string, valid bool) {
+	d := daemon.New(t, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
+	t.Logf("Checking IpcMode %s set from %s\n", mode, from)
 	var serr error
 	switch from {
 	case "config":
 		f, err := os.CreateTemp("", "test-daemon-ipc-config")
-		assert.NilError(c, err)
+		assert.NilError(t, err)
 		defer os.Remove(f.Name())
 		config := `{"default-ipc-mode": "` + mode + `"}`
 		_, err = f.WriteString(config)
-		assert.NilError(c, f.Close())
-		assert.NilError(c, err)
+		assert.NilError(t, f.Close())
+		assert.NilError(t, err)
 
 		serr = d.StartWithError("--config-file", f.Name())
 	case "cli":
 		serr = d.StartWithError("--default-ipc-mode", mode)
 	default:
-		c.Fatalf("testDaemonStartIpcMode: invalid 'from' argument")
+		t.Fatalf("testDaemonStartIpcMode: invalid 'from' argument")
 	}
 	if serr == nil {
-		d.Stop(c)
+		d.Stop(t)
 	}
 
 	if valid {
-		assert.NilError(c, serr)
+		assert.NilError(t, serr)
 	} else {
-		assert.ErrorContains(c, serr, "")
-		icmd.RunCommand("grep", "-E", "IPC .* is (invalid|not supported)", d.LogFileName()).Assert(c, icmd.Success)
+		assert.ErrorContains(t, serr, "")
+		icmd.RunCommand("grep", "-E", "IPC .* is (invalid|not supported)", d.LogFileName()).Assert(t, icmd.Success)
 	}
 }
 
@@ -2198,7 +2225,7 @@ func (s *DockerDaemonSuite) TestFailedPluginRemove(c *testing.T) {
 	defer cancel()
 
 	name := "test-plugin-rm-fail"
-	out, err := apiClient.PluginInstall(ctx, name, types.PluginInstallOptions{
+	out, err := apiClient.PluginInstall(ctx, name, client.PluginInstallOptions{
 		Disabled:             true,
 		AcceptAllPermissions: true,
 		RemoteRef:            "cpuguy83/docker-logdriver-test",
@@ -2209,20 +2236,20 @@ func (s *DockerDaemonSuite) TestFailedPluginRemove(c *testing.T) {
 
 	ctx, cancel = context.WithTimeout(testutil.GetContext(c), 30*time.Second)
 	defer cancel()
-	p, _, err := apiClient.PluginInspectWithRaw(ctx, name)
+	res, err := apiClient.PluginInspect(ctx, name, client.PluginInspectOptions{})
 	assert.NilError(c, err)
 
 	// simulate a bad/partial removal by removing the plugin config.
-	configPath := filepath.Join(d.Root, "plugins", p.ID, "config.json")
+	configPath := filepath.Join(d.Root, "plugins", res.Plugin.ID, "config.json")
 	assert.NilError(c, os.Remove(configPath))
 
 	d.Restart(c)
 	ctx, cancel = context.WithTimeout(testutil.GetContext(c), 30*time.Second)
 	defer cancel()
-	_, err = apiClient.Ping(ctx)
+	_, err = apiClient.Ping(ctx, client.PingOptions{})
 	assert.NilError(c, err)
 
-	_, _, err = apiClient.PluginInspectWithRaw(ctx, name)
+	_, err = apiClient.PluginInspect(ctx, name, client.PluginInspectOptions{})
 	// plugin should be gone since the config.json is gone
 	assert.ErrorContains(c, err, "")
 }

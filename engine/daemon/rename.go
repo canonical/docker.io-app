@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"strings"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/network"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/libnetwork"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/libnetwork"
+	"github.com/moby/moby/v2/daemon/network"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
@@ -18,7 +18,9 @@ import (
 // to find the container. An error is returned if newName is already
 // reserved.
 func (daemon *Daemon) ContainerRename(oldName, newName string) (retErr error) {
-	if oldName == "" || newName == "" {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if strings.TrimPrefix(oldName, "/") == "" || strings.TrimPrefix(newName, "/") == "" {
 		return errdefs.InvalidParameter(errors.New("Neither old nor new names may be empty"))
 	}
 
@@ -82,7 +84,7 @@ func (daemon *Daemon) ContainerRename(oldName, newName string) (retErr error) {
 		return err
 	}
 
-	if !ctr.Running {
+	if !ctr.State.Running {
 		daemon.LogContainerEventWithAttributes(ctr, events.ActionRename, map[string]string{
 			"oldName": oldName,
 		})

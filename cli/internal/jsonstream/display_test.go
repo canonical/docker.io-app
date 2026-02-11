@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/docker/cli/cli/streams"
+	"github.com/moby/moby/api/types/jsonstream"
 	"gotest.tools/v3/assert"
 )
 
@@ -30,11 +31,9 @@ func TestDisplay(t *testing.T) {
 				return
 			default:
 				err := enc.Encode(JSONMessage{
-					Status:   "Downloading",
-					ID:       fmt.Sprintf("id-%d", i),
-					TimeNano: time.Now().UnixNano(),
-					Time:     time.Now().Unix(),
-					Progress: &JSONProgress{
+					Status: "Downloading",
+					ID:     fmt.Sprintf("id-%d", i),
+					Progress: &jsonstream.Progress{
 						Current: int64(i),
 						Total:   100,
 						Start:   0,

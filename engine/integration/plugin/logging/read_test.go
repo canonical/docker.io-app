@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	testContainer "github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	testContainer "github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
 )
@@ -30,11 +30,11 @@ func TestReadPluginNoRead(t *testing.T) {
 	d.StartWithBusybox(ctx, t, "--iptables=false", "--ip6tables=false")
 	defer d.Stop(t)
 
-	client, err := d.NewClient()
+	apiclient, err := d.NewClient()
 	assert.Assert(t, err)
-	createPlugin(ctx, t, client, "test", "discard", asLogDriver)
+	createPlugin(ctx, t, apiclient, "test", "discard", asLogDriver)
 
-	err = client.PluginEnable(ctx, "test", types.PluginEnableOptions{Timeout: 30})
+	_, err = apiclient.PluginEnable(ctx, "test", client.PluginEnableOptions{Timeout: 30})
 	assert.Check(t, err)
 	d.Stop(t)
 
@@ -54,21 +54,20 @@ func TestReadPluginNoRead(t *testing.T) {
 			ctx := testutil.StartSpan(ctx, t)
 			d.Start(t, append([]string{"--iptables=false", "--ip6tables=false"}, test.dOpts...)...)
 			defer d.Stop(t)
-			c, err := client.ContainerCreate(ctx,
-				cfg,
-				&container.HostConfig{LogConfig: container.LogConfig{Type: "test"}},
-				nil,
-				nil,
-				"",
-			)
+			c, err := apiclient.ContainerCreate(ctx, client.ContainerCreateOptions{
+				Config: cfg,
+				HostConfig: &container.HostConfig{
+					LogConfig: container.LogConfig{Type: "test"},
+				},
+			})
 			assert.Assert(t, err)
-			defer client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
+			defer apiclient.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
 
-			err = client.ContainerStart(ctx, c.ID, container.StartOptions{})
+			_, err = apiclient.ContainerStart(ctx, c.ID, client.ContainerStartOptions{})
 			assert.Assert(t, err)
 
-			poll.WaitOn(t, testContainer.IsStopped(ctx, client, c.ID))
-			logs, err := client.ContainerLogs(ctx, c.ID, container.LogsOptions{ShowStdout: true})
+			poll.WaitOn(t, testContainer.IsStopped(ctx, apiclient, c.ID))
+			logs, err := apiclient.ContainerLogs(ctx, c.ID, client.ContainerLogsOptions{ShowStdout: true})
 			if !test.logsSupported {
 				assert.Assert(t, err != nil)
 				return

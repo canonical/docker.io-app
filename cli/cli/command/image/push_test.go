@@ -3,11 +3,11 @@ package image
 import (
 	"errors"
 	"io"
-	"strings"
+	"net/http"
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 )
 
@@ -16,7 +16,7 @@ func TestNewPushCommandErrors(t *testing.T) {
 		name          string
 		args          []string
 		expectedError string
-		imagePushFunc func(ref string, options image.PushOptions) (io.ReadCloser, error)
+		imagePushFunc func(ref string, options client.ImagePushOptions) (client.ImagePushResponse, error)
 	}{
 		{
 			name:          "wrong-args",
@@ -31,16 +31,16 @@ func TestNewPushCommandErrors(t *testing.T) {
 		{
 			name:          "push-failed",
 			args:          []string{"image:repo"},
-			expectedError: "Failed to push",
-			imagePushFunc: func(ref string, options image.PushOptions) (io.ReadCloser, error) {
-				return io.NopCloser(strings.NewReader("")), errors.New("Failed to push")
+			expectedError: "failed to push",
+			imagePushFunc: func(ref string, options client.ImagePushOptions) (client.ImagePushResponse, error) {
+				return nil, errors.New("failed to push")
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{imagePushFunc: tc.imagePushFunc})
-			cmd := NewPushCommand(cli)
+			cmd := newPushCommand(cli)
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
@@ -66,14 +66,16 @@ func TestNewPushCommandSuccess(t *testing.T) {
 `,
 		},
 	}
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			cli := test.NewFakeCli(&fakeClient{
-				imagePushFunc: func(ref string, options image.PushOptions) (io.ReadCloser, error) {
-					return io.NopCloser(strings.NewReader("")), nil
+				imagePushFunc: func(ref string, options client.ImagePushOptions) (client.ImagePushResponse, error) {
+					// FIXME(thaJeztah): how to mock this?
+					return fakeStreamResult{ReadCloser: http.NoBody}, nil
 				},
 			})
-			cmd := NewPushCommand(cli)
+			cmd := newPushCommand(cli)
 			cmd.SetOut(cli.OutBuffer())
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)

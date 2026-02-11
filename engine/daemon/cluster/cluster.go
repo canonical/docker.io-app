@@ -1,4 +1,4 @@
-package cluster // import "github.com/docker/docker/daemon/cluster"
+package cluster
 
 //
 // ## Swarmkit integration
@@ -50,12 +50,12 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/network"
-	types "github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/daemon/cluster/controllers/plugin"
-	executorpkg "github.com/docker/docker/daemon/cluster/executor"
-	lncluster "github.com/docker/docker/libnetwork/cluster"
-	"github.com/docker/docker/pkg/stack"
+	"github.com/moby/moby/api/types/network"
+	types "github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/v2/daemon/cluster/controllers/plugin"
+	executorpkg "github.com/moby/moby/v2/daemon/cluster/executor"
+	"github.com/moby/moby/v2/daemon/internal/stack"
+	lncluster "github.com/moby/moby/v2/daemon/libnetwork/cluster"
 	swarmapi "github.com/moby/swarmkit/v2/api"
 	swarmnode "github.com/moby/swarmkit/v2/node"
 	"github.com/pkg/errors"
@@ -354,7 +354,7 @@ func (c *Cluster) errNoManager(st nodeState) error {
 		if errors.Is(st.err, errSwarmLocked) {
 			return errSwarmLocked
 		}
-		if st.err == errSwarmCertificatesExpired {
+		if errors.Is(st.err, errSwarmCertificatesExpired) {
 			return errSwarmCertificatesExpired
 		}
 		return errors.WithStack(notAvailableError(`This node is not a swarm manager. Use "docker swarm init" or "docker swarm join" to connect this node to swarm and try again.`))
@@ -426,13 +426,13 @@ func managerStats(client swarmapi.ControlClient, currentNodeID string) (current 
 }
 
 func detectLockedError(err error) error {
-	if err == swarmnode.ErrInvalidUnlockKey {
+	if errors.Is(err, swarmnode.ErrInvalidUnlockKey) {
 		return errors.WithStack(errSwarmLocked)
 	}
 	return err
 }
 
-func (c *Cluster) lockedManagerAction(fn func(ctx context.Context, state nodeState) error) error {
+func (c *Cluster) lockedManagerAction(ctx context.Context, fn func(ctx context.Context, state nodeState) error) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -441,7 +441,6 @@ func (c *Cluster) lockedManagerAction(fn func(ctx context.Context, state nodeSta
 		return c.errNoManager(state)
 	}
 
-	ctx := context.TODO()
 	ctx, cancel := context.WithTimeout(ctx, swarmRequestTimeout)
 	defer cancel()
 

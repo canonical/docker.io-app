@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -11,13 +11,13 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/container/stream"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/pools"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/stream"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
+	"github.com/moby/moby/v2/pkg/pools"
 	"github.com/moby/sys/signal"
 	"github.com/moby/term"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -57,13 +57,13 @@ func (daemon *Daemon) getExecConfig(name string) (*container.ExecConfig, error) 
 	if ctr == nil {
 		return nil, containerNotFound(name)
 	}
-	if !ctr.IsRunning() {
+	if !ctr.State.IsRunning() {
 		return nil, errNotRunning(ctr.ID)
 	}
-	if ctr.IsPaused() {
+	if ctr.State.IsPaused() {
 		return nil, errExecPaused(ctr.ID)
 	}
-	if ctr.IsRestarting() {
+	if ctr.State.IsRestarting() {
 		return nil, errContainerIsRestarting(ctr.ID)
 	}
 	return ec, nil
@@ -80,20 +80,20 @@ func (daemon *Daemon) getActiveContainer(name string) (*container.Container, err
 		return nil, err
 	}
 
-	if !ctr.IsRunning() {
+	if !ctr.State.IsRunning() {
 		return nil, errNotRunning(ctr.ID)
 	}
-	if ctr.IsPaused() {
+	if ctr.State.IsPaused() {
 		return nil, errExecPaused(name)
 	}
-	if ctr.IsRestarting() {
+	if ctr.State.IsRestarting() {
 		return nil, errContainerIsRestarting(ctr.ID)
 	}
 	return ctr, nil
 }
 
 // ContainerExecCreate sets up an exec in a running container.
-func (daemon *Daemon) ContainerExecCreate(name string, options *containertypes.ExecOptions) (string, error) {
+func (daemon *Daemon) ContainerExecCreate(name string, options *containertypes.ExecCreateRequest) (string, error) {
 	cntr, err := daemon.getActiveContainer(name)
 	if err != nil {
 		return "", err
@@ -141,10 +141,10 @@ func (daemon *Daemon) ContainerExecCreate(name string, options *containertypes.E
 		return "", err
 	}
 	execConfig.Env = container.ReplaceOrAppendEnvValues(cntr.CreateDaemonEnvironment(options.Tty, linkedEnv), options.Env)
-	if len(execConfig.User) == 0 {
+	if execConfig.User == "" {
 		execConfig.User = cntr.Config.User
 	}
-	if len(execConfig.WorkingDir) == 0 {
+	if execConfig.WorkingDir == "" {
 		execConfig.WorkingDir = cntr.Config.WorkingDir
 	}
 
@@ -319,7 +319,7 @@ func (daemon *Daemon) ContainerExecStart(ctx context.Context, name string, optio
 	case <-ctx.Done():
 		logger := log.G(ctx).WithFields(log.Fields{
 			"container": ec.Container.ID,
-			"exeec":     ec.ID,
+			"execID":    ec.ID,
 		})
 		logger.Debug("Sending KILL signal to container process")
 		sigCtx, cancelFunc := context.WithTimeout(context.Background(), 30*time.Second)

@@ -4,11 +4,10 @@ import (
 	"os"
 	"testing"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/integration/internal/container"
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/daemon"
-
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/daemon"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/skip"
 )
@@ -45,12 +44,12 @@ func TestCgroupDriverSystemdMemoryLimit(t *testing.T) {
 	ctrID := container.Create(ctx, t, c, func(ctr *container.TestContainerConfig) {
 		ctr.HostConfig.Resources.Memory = mem
 	})
-	defer c.ContainerRemove(ctx, ctrID, containertypes.RemoveOptions{Force: true})
+	defer c.ContainerRemove(ctx, ctrID, client.ContainerRemoveOptions{Force: true})
 
-	err := c.ContainerStart(ctx, ctrID, containertypes.StartOptions{})
+	_, err := c.ContainerStart(ctx, ctrID, client.ContainerStartOptions{})
 	assert.NilError(t, err)
 
-	s, err := c.ContainerInspect(ctx, ctrID)
+	s, err := c.ContainerInspect(ctx, ctrID, client.ContainerInspectOptions{})
 	assert.NilError(t, err)
-	assert.Equal(t, s.HostConfig.Memory, mem)
+	assert.Equal(t, s.Container.HostConfig.Memory, mem)
 }

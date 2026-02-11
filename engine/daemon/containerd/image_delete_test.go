@@ -1,23 +1,22 @@
 package containerd
 
 import (
-	"context"
 	"testing"
 
 	c8dimages "github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/metadata"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/log/logtest"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/container"
-	daemonevents "github.com/docker/docker/daemon/events"
-	dimages "github.com/docker/docker/daemon/images"
+	"github.com/moby/moby/v2/daemon/container"
+	daemonevents "github.com/moby/moby/v2/daemon/events"
+	dimages "github.com/moby/moby/v2/daemon/images"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestImageDelete(t *testing.T) {
-	ctx := namespaces.WithNamespace(context.TODO(), "testing")
+	ctx := namespaces.WithNamespace(t.Context(), "testing")
 
 	for _, tc := range []struct {
 		ref       string
@@ -235,7 +234,7 @@ func TestImageDelete(t *testing.T) {
 				}
 			}
 
-			_, err := service.ImageDelete(ctx, tc.ref, image.RemoveOptions{})
+			_, err := service.ImageDelete(ctx, tc.ref, imagebackend.RemoveOptions{})
 			if tc.err == nil {
 				assert.NilError(t, err)
 			} else {

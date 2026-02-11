@@ -3,8 +3,8 @@ package containerd
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -12,8 +12,8 @@ import (
 // regression test for https://github.com/moby/moby/issues/45904
 func TestContainerConfigToDockerImageConfig(t *testing.T) {
 	ociCFG := containerConfigToDockerOCIImageConfig(&container.Config{
-		ExposedPorts: nat.PortSet{
-			"80/tcp": struct{}{},
+		ExposedPorts: network.PortSet{
+			network.MustParsePort("80/tcp"): struct{}{},
 		},
 	})
 

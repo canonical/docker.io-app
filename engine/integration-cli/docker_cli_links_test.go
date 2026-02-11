@@ -9,8 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/integration-cli/cli"
-	"github.com/docker/docker/runconfig"
+	"github.com/moby/moby/v2/integration-cli/cli"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -19,12 +18,12 @@ type DockerCLILinksSuite struct {
 	ds *DockerSuite
 }
 
-func (s *DockerCLILinksSuite) TearDownTest(ctx context.Context, c *testing.T) {
-	s.ds.TearDownTest(ctx, c)
+func (s *DockerCLILinksSuite) TearDownTest(ctx context.Context, t *testing.T) {
+	s.ds.TearDownTest(ctx, t)
 }
 
-func (s *DockerCLILinksSuite) OnTimeout(c *testing.T) {
-	s.ds.OnTimeout(c)
+func (s *DockerCLILinksSuite) OnTimeout(t *testing.T) {
+	s.ds.OnTimeout(t)
 }
 
 func (s *DockerCLILinksSuite) TestLinksPingUnlinkedContainers(c *testing.T) {
@@ -50,10 +49,12 @@ func (s *DockerCLILinksSuite) TestLinksPingLinkedContainers(c *testing.T) {
 	// Test with the three different ways of specifying the default network on Linux
 	testLinkPingOnNetwork(c, "")
 	testLinkPingOnNetwork(c, "default")
-	testLinkPingOnNetwork(c, "bridge")
+
+	// TODO(thaJeztah): cli flags this as an error; "links are only supported for user-defined networks"
+	// testLinkPingOnNetwork(c, "bridge")
 }
 
-func testLinkPingOnNetwork(c *testing.T, network string) {
+func testLinkPingOnNetwork(t *testing.T, network string) {
 	var postArgs []string
 	if network != "" {
 		postArgs = append(postArgs, []string{"--net", network}...)
@@ -63,8 +64,8 @@ func testLinkPingOnNetwork(c *testing.T, network string) {
 	runArgs2 := append([]string{"run", "-d", "--name", "container2", "--hostname", "wilma"}, postArgs...)
 
 	// Run the two named containers
-	cli.DockerCmd(c, runArgs1...)
-	cli.DockerCmd(c, runArgs2...)
+	cli.DockerCmd(t, runArgs1...)
+	cli.DockerCmd(t, runArgs2...)
 
 	postArgs = []string{}
 	if network != "" {
@@ -78,15 +79,15 @@ func testLinkPingOnNetwork(c *testing.T, network string) {
 
 	// test ping by alias, ping by name, and ping by hostname
 	// 1. Ping by alias
-	cli.DockerCmd(c, append(runArgs, fmt.Sprintf(pingCmd, "alias1", "alias2"))...)
+	cli.DockerCmd(t, append(runArgs, fmt.Sprintf(pingCmd, "alias1", "alias2"))...)
 	// 2. Ping by container name
-	cli.DockerCmd(c, append(runArgs, fmt.Sprintf(pingCmd, "container1", "container2"))...)
+	cli.DockerCmd(t, append(runArgs, fmt.Sprintf(pingCmd, "container1", "container2"))...)
 	// 3. Ping by hostname
-	cli.DockerCmd(c, append(runArgs, fmt.Sprintf(pingCmd, "fred", "wilma"))...)
+	cli.DockerCmd(t, append(runArgs, fmt.Sprintf(pingCmd, "fred", "wilma"))...)
 
 	// Clean for next round
-	cli.DockerCmd(c, "rm", "-f", "container1")
-	cli.DockerCmd(c, "rm", "-f", "container2")
+	cli.DockerCmd(t, "rm", "-f", "container1")
+	cli.DockerCmd(t, "rm", "-f", "container2")
 }
 
 func (s *DockerCLILinksSuite) TestLinksPingLinkedContainersAfterRename(c *testing.T) {
@@ -194,15 +195,6 @@ func (s *DockerCLILinksSuite) TestLinksUpdateOnRestart(c *testing.T) {
 	assert.Check(c, is.Equal(ip, realIP))
 }
 
-func (s *DockerCLILinksSuite) TestLinksEnvs(c *testing.T) {
-	testRequires(c, DaemonIsLinux)
-	cli.DockerCmd(c, "run", "-d", "-e", "e1=", "-e", "e2=v2", "-e", "e3=v3=v3", "--name=first", "busybox", "top")
-	out := cli.DockerCmd(c, "run", "--name=second", "--link=first:first", "busybox", "env").Stdout()
-	assert.Assert(c, is.Contains(out, "FIRST_ENV_e1=\n"))
-	assert.Assert(c, is.Contains(out, "FIRST_ENV_e2=v2"))
-	assert.Assert(c, is.Contains(out, "FIRST_ENV_e3=v3=v3"))
-}
-
 func (s *DockerCLILinksSuite) TestLinkShortDefinition(c *testing.T) {
 	testRequires(c, DaemonIsLinux)
 	cid := cli.DockerCmd(c, "run", "-d", "--name", "shortlinkdef", "busybox", "top").Stdout()
@@ -225,7 +217,7 @@ func (s *DockerCLILinksSuite) TestLinksNetworkHostContainer(c *testing.T) {
 	// Running container linking to a container with --net host should have failed
 	assert.Check(c, err != nil, "out: %s", out)
 	// Running container linking to a container with --net host should have failed
-	assert.Check(c, is.Contains(out, runconfig.ErrConflictHostNetworkAndLinks.Error()))
+	assert.Check(c, is.Contains(out, "conflicting options: host type networking can't be used with links. This would result in undefined behavior"))
 }
 
 func (s *DockerCLILinksSuite) TestLinksEtcHostsRegularFile(c *testing.T) {

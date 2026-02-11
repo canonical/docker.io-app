@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/api/types/plugin"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/fs"
 	"gotest.tools/v3/icmd"
@@ -22,17 +22,23 @@ import (
 var plugins embed.FS
 
 // SetupPlugin builds a plugin and creates a temporary
-// directory with the plugin's config.json and rootfs.
-func SetupPlugin(t *testing.T, ctx context.Context) *fs.Dir {
+// directory with the plugin's config.json and rootfs,
+// which will be removed in [t.Cleanup]. It returns
+// the location of the temporary directory.
+func SetupPlugin(t *testing.T, ctx context.Context) (pluginDir string) {
 	t.Helper()
 
-	p := &types.PluginConfig{
-		Linux: types.PluginConfigLinux{
+	p := &plugin.Config{
+		Linux: plugin.LinuxConfig{
 			Capabilities: []string{"CAP_SYS_ADMIN"},
 		},
-		Interface: types.PluginConfigInterface{
+		Interface: plugin.Interface{
 			Socket: "basic.sock",
-			Types:  []types.PluginInterfaceType{{Capability: "docker.dummy/1.0"}},
+			Types: []plugin.CapabilityID{{
+				Capability: "dummy",
+				Prefix:     "docker",
+				Version:    "1.0",
+			}},
 		},
 		Entrypoint: []string{"/basic"},
 	}
@@ -48,7 +54,7 @@ func SetupPlugin(t *testing.T, ctx context.Context) *fs.Dir {
 	)
 
 	icmd.RunCommand("/bin/cp", binPath, dir.Join("rootfs", p.Entrypoint[0])).Assert(t, icmd.Success)
-	return dir
+	return dir.Path()
 }
 
 // buildPlugin uses Go to build a plugin from one of the source files in the plugins directory.

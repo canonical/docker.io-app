@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package formatter
 
@@ -11,14 +11,13 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/volume"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
 
 func TestVolumeContext(t *testing.T) {
-	volumeName := stringid.GenerateRandomID()
+	volumeName := test.RandomID()
 
 	var ctx volumeContext
 	cases := []struct {
@@ -125,7 +124,7 @@ foobar_bar
 		},
 	}
 
-	volumes := []*volume.Volume{
+	volumes := []volume.Volume{
 		{Name: "foobar_baz", Driver: "foo"},
 		{Name: "foobar_bar", Driver: "bar"},
 	}
@@ -145,7 +144,7 @@ foobar_bar
 }
 
 func TestVolumeContextWriteJSON(t *testing.T) {
-	volumes := []*volume.Volume{
+	volumes := []volume.Volume{
 		{Driver: "foo", Name: "foobar_baz"},
 		{Driver: "bar", Name: "foobar_bar"},
 	}
@@ -168,7 +167,7 @@ func TestVolumeContextWriteJSON(t *testing.T) {
 }
 
 func TestVolumeContextWriteJSONField(t *testing.T) {
-	volumes := []*volume.Volume{
+	volumes := []volume.Volume{
 		{Driver: "foo", Name: "foobar_baz"},
 		{Driver: "bar", Name: "foobar_bar"},
 	}

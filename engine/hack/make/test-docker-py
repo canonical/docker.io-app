@@ -4,33 +4,38 @@ set -e
 source hack/make/.integration-test-helpers
 
 # The commit or tag to use for testing
-# TODO(thaJeztah): remove VERSION build-arg once https://github.com/docker/docker-py/pull/3267 is merged and released.
-: "${DOCKER_PY_COMMIT:=7.1.0}"
+: "${DOCKER_PY_COMMIT:=df3f8e2abc5a03de482e37214dddef9e0cee1bb1}" # master (v7.2.0-dev)
 
 # custom options to pass py.test
 #
 # This option can be used to temporarily skip flaky tests (using the `--deselect`
 # flag) until they are fixed upstream. For example:
 # --deselect=tests/integration/api_container_test.py::AttachContainerTest::test_attach_no_stream
-# TODO re-enable test_attach_no_stream after https://github.com/docker/docker-py/issues/2513 is resolved
-# TODO re-enable test_run_container_reading_socket_ws. It's reported in https://github.com/docker/docker-py/issues/1478, and we're getting that error in our tests.
-# TODO re-enable test_run_with_networking_config once this issue is fixed: https://github.com/moby/moby/pull/46853#issuecomment-1864679942.
-: "${PY_TEST_OPTIONS:=--junitxml=${DEST}/junit-report.xml --deselect=tests/integration/api_container_test.py::AttachContainerTest::test_attach_no_stream --deselect=tests/integration/api_container_test.py::AttachContainerTest::test_run_container_reading_socket_ws --deselect=tests/integration/models_containers_test.py::ContainerCollectionTest::test_run_with_networking_config}"
+: "${PY_TEST_OPTIONS:=--junitxml=${DEST}/junit-report.xml}"
 
 # build --squash is not supported with containerd integration.
-if [ -n "$TEST_INTEGRATION_USE_SNAPSHOTTER" ]; then
+if [ -z "$TEST_INTEGRATION_USE_GRAPHDRIVER" ]; then
 	PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_build_test.py::BuildTest::test_build_squash"
 fi
 
-# TODO(thaJeztah) re-enable after https://github.com/docker/docker-py/pull/3336 is in the DOCKER_PY_COMMIT release.
-PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_build_test.py::BuildTest::test_build_container_with_target"
+# TODO re-enable test_attach_no_stream after https://github.com/docker/docker-py/issues/2513 is resolved
+PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_container_test.py::AttachContainerTest::test_attach_no_stream"
 
-# TODO(vvoland): re-enable after https://github.com/docker/docker-py/pull/3203 is included in the DOCKER_PY_COMMIT release.
-PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_image_test.py::CommitTest::test_commit"
-PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_image_test.py::CommitTest::test_commit_with_changes"
+# TODO re-enable test_run_container_reading_socket_ws. It's reported in https://github.com/docker/docker-py/issues/1478, and we're getting that error in our tests.
+PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/api_container_test.py::AttachContainerTest::test_run_container_reading_socket_ws"
 
-# TODO(laurazard): re-enable after https://github.com/docker/docker-py/pull/3290 is included in the DOCKER_PY_COMMIT release.
-PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/models_containers_test.py::ContainerTest::test_exec_run_failed"
+# TODO re-enable test_run_with_networking_config once this issue is fixed: https://github.com/moby/moby/pull/46853#issuecomment-1864679942.
+PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/models_containers_test.py::ContainerCollectionTest::test_run_with_networking_config"
+
+# Legacy links are deprecated since a long time, and starting with v29.0, the Engine won't set legacy links env vars
+# automatically in linking containers. Thus, this test is expected to fail — skip it. See https://github.com/moby/moby/pull/50719
+PY_TEST_OPTIONS="${PY_TEST_OPTIONS} --deselect=tests/integration/api_container_test.py::CreateContainerTest::test_create_with_links"
+
+# The NetworkSettings.MacAddress field has been deprecated since Docker 1.9, and starting with v29.0, the Engine won't
+# include it in API respoonses. Thus, this test is expected to fail — skip it.
+# See https://github.com/moby/moby/pull/50846 and https://github.com/moby/moby/pull/50957
+PY_TEST_OPTIONS="${PY_TEST_OPTIONS} --deselect=tests/integration/api_container_test.py::CreateContainerTest::test_create_with_mac_address"
+
 (
 	bundle .integration-daemon-start
 
@@ -62,9 +67,8 @@ PY_TEST_OPTIONS="$PY_TEST_OPTIONS --deselect=tests/integration/models_containers
 			[ -n "${TESTDEBUG}" ] && set -x
 			[ -z "${TESTDEBUG}" ] && build_opts="--quiet"
 			[ -f /.dockerenv ] || build_opts="${build_opts} --network=host"
-			# TODO(thaJeztah): remove VERSION build-arg once https://github.com/docker/docker-py/pull/3267 is merged and released.
 			# shellcheck disable=SC2086
-			exec docker build ${build_opts} -t "${docker_py_image}" --build-arg VERSION="${DOCKER_PY_COMMIT}" -f tests/Dockerfile "https://github.com/docker/docker-py.git#${DOCKER_PY_COMMIT}"
+			exec docker build ${build_opts} -t "${docker_py_image}" -f tests/Dockerfile "https://github.com/docker/docker-py.git#${DOCKER_PY_COMMIT}"
 		)
 	fi
 

@@ -1,6 +1,6 @@
 // Package splunk provides the log driver for forwarding server logs to
 // Splunk HTTP Event Collector endpoint.
-package splunk // import "github.com/docker/docker/daemon/logger/splunk"
+package splunk
 
 import (
 	"bytes"
@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/pkg/pools"
 	"github.com/google/uuid"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
+	"github.com/moby/moby/v2/pkg/pools"
 )
 
 const (
@@ -119,16 +119,16 @@ type splunkLoggerRaw struct {
 }
 
 type splunkMessage struct {
-	Event      interface{} `json:"event"`
-	Time       string      `json:"time"`
-	Host       string      `json:"host"`
-	Source     string      `json:"source,omitempty"`
-	SourceType string      `json:"sourcetype,omitempty"`
-	Index      string      `json:"index,omitempty"`
+	Event      any    `json:"event"`
+	Time       string `json:"time"`
+	Host       string `json:"host"`
+	Source     string `json:"source,omitempty"`
+	SourceType string `json:"sourcetype,omitempty"`
+	Index      string `json:"index,omitempty"`
 }
 
 type splunkMessageEvent struct {
-	Line   interface{}       `json:"line"`
+	Line   any               `json:"line"`
 	Source string            `json:"source"`
 	Tag    string            `json:"tag,omitempty"`
 	Attrs  map[string]string `json:"attrs,omitempty"`
@@ -603,7 +603,7 @@ func parseURL(info logger.Info) (*url.URL, error) {
 }
 
 func verifySplunkConnection(l *splunkLogger) error {
-	req, err := http.NewRequest(http.MethodOptions, l.url, nil)
+	req, err := http.NewRequest(http.MethodOptions, l.url, http.NoBody)
 	if err != nil {
 		return err
 	}

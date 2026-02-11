@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/golden"
 )
@@ -19,7 +19,7 @@ func TestNewHistoryCommandErrors(t *testing.T) {
 		name             string
 		args             []string
 		expectedError    string
-		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error)
+		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) (client.ImageHistoryResult, error)
 	}{
 		{
 			name:          "wrong-args",
@@ -30,8 +30,8 @@ func TestNewHistoryCommandErrors(t *testing.T) {
 			name:          "client-error",
 			args:          []string{"image:tag"},
 			expectedError: "something went wrong",
-			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
-				return []image.HistoryResponseItem{{}}, errors.New("something went wrong")
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) (client.ImageHistoryResult, error) {
+				return client.ImageHistoryResult{}, errors.New("something went wrong")
 			},
 		},
 		{
@@ -42,7 +42,7 @@ func TestNewHistoryCommandErrors(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := NewHistoryCommand(test.NewFakeCli(&fakeClient{imageHistoryFunc: tc.imageHistoryFunc}))
+			cmd := newHistoryCommand(test.NewFakeCli(&fakeClient{imageHistoryFunc: tc.imageHistoryFunc}))
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
 			cmd.SetArgs(tc.args)
@@ -55,17 +55,19 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 	testCases := []struct {
 		name             string
 		args             []string
-		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error)
+		imageHistoryFunc func(img string, options ...client.ImageHistoryOption) (client.ImageHistoryResult, error)
 	}{
 		{
 			name: "simple",
 			args: []string{"image:tag"},
-			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
-				return []image.HistoryResponseItem{{
-					ID:      "1234567890123456789",
-					Created: time.Now().Unix(),
-					Comment: "none",
-				}}, nil
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) (client.ImageHistoryResult, error) {
+				return client.ImageHistoryResult{
+					Items: []image.HistoryResponseItem{{
+						ID:      "1234567890123456789",
+						Created: time.Now().Unix(),
+						Comment: "none",
+					}},
+				}, nil
 			},
 		},
 		{
@@ -75,36 +77,42 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 		{
 			name: "non-human",
 			args: []string{"--human=false", "image:tag"},
-			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
-				return []image.HistoryResponseItem{{
-					ID:        "abcdef",
-					Created:   time.Date(2017, 1, 1, 12, 0, 3, 0, time.UTC).Unix(),
-					CreatedBy: "rose",
-					Comment:   "new history item!",
-				}}, nil
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) (client.ImageHistoryResult, error) {
+				return client.ImageHistoryResult{
+					Items: []image.HistoryResponseItem{{
+						ID:        "abcdef",
+						Created:   time.Date(2017, 1, 1, 12, 0, 3, 0, time.UTC).Unix(),
+						CreatedBy: "rose",
+						Comment:   "new history item!",
+					}},
+				}, nil
 			},
 		},
 		{
 			name: "quiet-no-trunc",
 			args: []string{"--quiet", "--no-trunc", "image:tag"},
-			imageHistoryFunc: func(string, ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
-				return []image.HistoryResponseItem{{
-					ID:      "1234567890123456789",
-					Created: time.Now().Unix(),
-				}}, nil
+			imageHistoryFunc: func(string, ...client.ImageHistoryOption) (client.ImageHistoryResult, error) {
+				return client.ImageHistoryResult{
+					Items: []image.HistoryResponseItem{{
+						ID:      "1234567890123456789",
+						Created: time.Now().Unix(),
+					}},
+				}, nil
 			},
 		},
 		{
 			name: "platform",
 			args: []string{"--platform", "linux/amd64", "image:tag"},
-			imageHistoryFunc: func(img string, options ...client.ImageHistoryOption) ([]image.HistoryResponseItem, error) {
+			imageHistoryFunc: func(img string, options ...client.ImageHistoryOption) (client.ImageHistoryResult, error) {
 				// FIXME(thaJeztah): need to find appropriate way to test the result of "ImageHistoryWithPlatform" being applied
 				assert.Check(t, len(options) > 0) // can be 1 or two depending on whether a terminal is attached :/
 				// assert.Check(t, is.Contains(options, client.ImageHistoryWithPlatform(ocispec.Platform{OS: "linux", Architecture: "amd64"})))
-				return []image.HistoryResponseItem{{
-					ID:      "1234567890123456789",
-					Created: time.Now().Unix(),
-				}}, nil
+				return client.ImageHistoryResult{
+					Items: []image.HistoryResponseItem{{
+						ID:      "1234567890123456789",
+						Created: time.Now().Unix(),
+					}},
+				}, nil
 			},
 		},
 	}
@@ -114,7 +122,7 @@ func TestNewHistoryCommandSuccess(t *testing.T) {
 			// printed in the current timezone
 			t.Setenv("TZ", "UTC")
 			cli := test.NewFakeCli(&fakeClient{imageHistoryFunc: tc.imageHistoryFunc})
-			cmd := NewHistoryCommand(cli)
+			cmd := newHistoryCommand(cli)
 			cmd.SetOut(io.Discard)
 			cmd.SetArgs(tc.args)
 			err := cmd.Execute()

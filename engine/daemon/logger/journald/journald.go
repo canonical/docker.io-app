@@ -1,8 +1,9 @@
 //go:build linux
 
-package journald // import "github.com/docker/docker/daemon/logger/journald"
+package journald
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -11,9 +12,9 @@ import (
 
 	"github.com/coreos/go-systemd/v22/journal"
 
-	"github.com/docker/docker/daemon/logger"
-	"github.com/docker/docker/daemon/logger/loggerutils"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/v2/daemon/internal/stringid"
+	"github.com/moby/moby/v2/daemon/logger"
+	"github.com/moby/moby/v2/daemon/logger/loggerutils"
 )
 
 const name = "journald"
@@ -100,7 +101,7 @@ func sanitizeKeyMod(s string) string {
 // the context.
 func New(info logger.Info) (logger.Logger, error) {
 	if !journal.Enabled() {
-		return nil, fmt.Errorf("journald is not enabled on this host")
+		return nil, errors.New("journald is not enabled on this host")
 	}
 
 	return newJournald(info)

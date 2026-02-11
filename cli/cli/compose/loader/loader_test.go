@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package loader
 
@@ -333,7 +333,7 @@ func TestInvalidTopLevelObjectType(t *testing.T) {
 
 func TestNonStringKeys(t *testing.T) {
 	// FIXME(thaJeztah): opkg.in/yaml.v3, which always unmarshals to a map[string]any, so we cannot produce a customized error for invalid types.
-	t.Skip("not supported by gopkg.in/yaml.v3, which always unmarshals to a map[string]any")
+	t.Skip("not supported by go.yaml.in/yaml/v3, which always unmarshals to a map[string]any")
 	_, err := loadYAML(`
 version: "3"
 123:

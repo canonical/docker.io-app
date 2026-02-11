@@ -1,4 +1,4 @@
-package images // import "github.com/docker/docker/daemon/images"
+package images
 
 import (
 	"context"
@@ -13,9 +13,9 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/image"
+	"github.com/moby/moby/v2/daemon/internal/image"
+	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -158,7 +158,7 @@ func (i *ImageService) manifestMatchesPlatform(ctx context.Context, img *image.I
 }
 
 // GetImage returns an image corresponding to the image referred to by refOrID.
-func (i *ImageService) GetImage(ctx context.Context, refOrID string, options backend.GetImageOpts) (retImg *image.Image, retErr error) {
+func (i *ImageService) GetImage(ctx context.Context, refOrID string, options imagebackend.GetImageOpts) (retImg *image.Image, retErr error) {
 	defer func() {
 		if retErr != nil || retImg == nil || options.Platform == nil {
 			return

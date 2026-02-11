@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/config"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/containerfs"
-	"github.com/docker/docker/internal/metrics"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/internal/containerfs"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 )
@@ -37,11 +36,11 @@ func (daemon *Daemon) containerRm(cfg *config.Config, name string, opts *backend
 	}
 
 	// Container state RemovalInProgress should be used to avoid races.
-	if inProgress := ctr.SetRemovalInProgress(); inProgress {
+	if inProgress := ctr.State.SetRemovalInProgress(); inProgress {
 		err := fmt.Errorf("removal of container %s is already in progress", name)
 		return errdefs.Conflict(err)
 	}
-	defer ctr.ResetRemovalInProgress()
+	defer ctr.State.ResetRemovalInProgress()
 
 	// check if container wasn't deregistered by previous rm since Get
 	if c := daemon.containers.Get(ctr.ID); c == nil {
@@ -66,7 +65,7 @@ func (daemon *Daemon) rmLink(cfg *config.Config, ctr *container.Container, name 
 	}
 	parent, n := path.Split(name)
 	if parent == "/" {
-		return fmt.Errorf("Conflict, cannot remove the default link name of the container")
+		return errors.New("Conflict, cannot remove the default link name of the container")
 	}
 
 	parent = strings.TrimSuffix(parent, "/")
@@ -88,12 +87,12 @@ func (daemon *Daemon) rmLink(cfg *config.Config, ctr *container.Container, name 
 // cleanupContainer unregisters a container from the daemon, stops stats
 // collection and cleanly removes contents and metadata from the filesystem.
 func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.ContainerRmConfig) error {
-	if ctr.IsRunning() {
+	if ctr.State.IsRunning() {
 		if !config.ForceRemove {
-			if ctr.Paused {
+			if ctr.State.Paused {
 				return errdefs.Conflict(errors.New("container is paused and must be unpaused first"))
 			} else {
-				return errdefs.Conflict(fmt.Errorf("container is %s: stop the container before removing or force remove", ctr.StateString()))
+				return errdefs.Conflict(fmt.Errorf("container is %s: stop the container before removing or force remove", ctr.State.State()))
 			}
 		}
 		if err := daemon.Kill(ctr); err != nil && !isNotRunning(err) {
@@ -117,13 +116,13 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 	// If you arrived here and know the answer, you earned yourself a picture
 	// of a cute animal of your own choosing.
 	stopTimeout := 3
-	if err := daemon.containerStop(context.TODO(), ctr, containertypes.StopOptions{Timeout: &stopTimeout}); err != nil {
+	if err := daemon.containerStop(context.TODO(), ctr, backend.ContainerStopOptions{Timeout: &stopTimeout}); err != nil {
 		return err
 	}
 
 	// Mark container dead. We don't want anybody to be restarting it.
 	ctr.Lock()
-	ctr.Dead = true
+	ctr.State.Dead = true
 
 	// Copy RWLayer for releasing and clear the reference while holding the container lock.
 	rwLayer := ctr.RWLayer
@@ -145,7 +144,7 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 			ctr.Lock()
 			ctr.RWLayer = rwLayer
 			ctr.Unlock()
-			ctr.SetRemovalError(err)
+			ctr.State.SetRemovalError(err)
 			return err
 		}
 	}
@@ -161,7 +160,7 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 	ctr.Unlock()
 	if err != nil {
 		err = errors.Wrap(err, "unable to remove filesystem")
-		ctr.SetRemovalError(err)
+		ctr.State.SetRemovalError(err)
 		return err
 	}
 
@@ -175,7 +174,7 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 	for _, name := range linkNames {
 		daemon.releaseName(name)
 	}
-	ctr.SetRemoved()
+	ctr.State.SetRemoved()
 	metrics.StateCtr.Delete(ctr.ID)
 
 	daemon.LogContainerEvent(ctr, events.ActionDestroy)

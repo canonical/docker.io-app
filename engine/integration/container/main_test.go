@@ -1,12 +1,12 @@
-package container // import "github.com/docker/docker/integration/container"
+package container
 
 import (
 	"context"
 	"os"
 	"testing"
 
-	"github.com/docker/docker/testutil"
-	"github.com/docker/docker/testutil/environment"
+	"github.com/moby/moby/v2/internal/testutil"
+	"github.com/moby/moby/v2/internal/testutil/environment"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 )

@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"github.com/docker/cli/cli/command/formatter"
-	registrytypes "github.com/docker/docker/api/types/registry"
+	registrytypes "github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
@@ -157,12 +158,12 @@ func TestSearchContextWrite(t *testing.T) {
 		},
 		{
 			doc:      "Table format",
-			format:   NewSearchFormat("table"),
+			format:   newFormat("table"),
 			expected: string(golden.Get(t, "search-context-write-table.golden")),
 		},
 		{
 			doc:    "Table format, single column",
-			format: NewSearchFormat("table {{.Name}}"),
+			format: newFormat("table {{.Name}}"),
 			expected: `NAME
 result1
 result2
@@ -170,29 +171,31 @@ result2
 		},
 		{
 			doc:    "Custom format, single field",
-			format: NewSearchFormat("{{.Name}}"),
+			format: newFormat("{{.Name}}"),
 			expected: `result1
 result2
 `,
 		},
 		{
 			doc:    "Custom Format, two columns",
-			format: NewSearchFormat("{{.Name}} {{.StarCount}}"),
+			format: newFormat("{{.Name}} {{.StarCount}}"),
 			expected: `result1 5000
 result2 5
 `,
 		},
 	}
 
-	results := []registrytypes.SearchResult{
-		{Name: "result1", Description: "Official build", StarCount: 5000, IsOfficial: true},
-		{Name: "result2", Description: "Not official", StarCount: 5},
+	results := client.ImageSearchResult{
+		Items: []registrytypes.SearchResult{
+			{Name: "result1", Description: "Official build", StarCount: 5000, IsOfficial: true},
+			{Name: "result2", Description: "Not official", StarCount: 5},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.doc, func(t *testing.T) {
 			var out bytes.Buffer
-			err := SearchWrite(formatter.Context{Format: tc.format, Output: &out}, results)
+			err := formatWrite(formatter.Context{Format: tc.format, Output: &out}, results)
 			if tc.expectedErr != "" {
 				assert.Check(t, is.Error(err, tc.expectedErr))
 			} else {

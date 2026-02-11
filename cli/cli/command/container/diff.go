@@ -7,44 +7,35 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/completion"
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/pkg/errors"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
-type diffOptions struct {
-	container string
-}
-
-// NewDiffCommand creates a new cobra.Command for `docker diff`
-func NewDiffCommand(dockerCli command.Cli) *cobra.Command {
-	var opts diffOptions
-
+// newDiffCommand creates a new cobra.Command for `docker diff`
+func newDiffCommand(dockerCLI command.Cli) *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff CONTAINER",
 		Short: "Inspect changes to files or directories on a container's filesystem",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.container = args[0]
-			return runDiff(cmd.Context(), dockerCli, &opts)
+			return runDiff(cmd.Context(), dockerCLI, args[0])
 		},
 		Annotations: map[string]string{
 			"aliases": "docker container diff, docker diff",
 		},
-		ValidArgsFunction: completion.ContainerNames(dockerCli, false),
+		ValidArgsFunction:     completion.ContainerNames(dockerCLI, false),
+		DisableFlagsInUseLine: true,
 	}
 }
 
-func runDiff(ctx context.Context, dockerCli command.Cli, opts *diffOptions) error {
-	if opts.container == "" {
-		return errors.New("Container name cannot be empty")
-	}
-	changes, err := dockerCli.Client().ContainerDiff(ctx, opts.container)
+func runDiff(ctx context.Context, dockerCLI command.Cli, containerID string) error {
+	res, err := dockerCLI.Client().ContainerDiff(ctx, containerID, client.ContainerDiffOptions{})
 	if err != nil {
 		return err
 	}
 	diffCtx := formatter.Context{
-		Output: dockerCli.Out(),
-		Format: NewDiffFormat("{{.Type}} {{.Path}}"),
+		Output: dockerCLI.Out(),
+		Format: newDiffFormat("{{.Type}} {{.Path}}"),
 	}
-	return DiffFormatWrite(diffCtx, changes)
+	return diffFormatWrite(diffCtx, res)
 }

@@ -8,7 +8,8 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/config/configfile"
 	configtypes "github.com/docker/cli/cli/config/types"
-	"github.com/docker/docker/api/types/registry"
+	"github.com/moby/moby/api/pkg/authconfig"
+	"github.com/moby/moby/api/types/registry"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -58,14 +59,23 @@ func TestGetDefaultAuthConfig(t *testing.T) {
 		},
 	}
 	cfg := configfile.New("filename")
-	for _, authconfig := range testAuthConfigs {
-		assert.Check(t, cfg.GetCredentialsStore(authconfig.ServerAddress).Store(configtypes.AuthConfig(authconfig)))
+	for _, authConfig := range testAuthConfigs {
+		assert.Check(t, cfg.GetCredentialsStore(authConfig.ServerAddress).Store(configtypes.AuthConfig{
+			Username:      authConfig.Username,
+			Password:      authConfig.Password,
+			ServerAddress: authConfig.ServerAddress,
+
+			// TODO(thaJeztah): Are these expected to be included?
+			Auth:          authConfig.Auth,
+			IdentityToken: authConfig.IdentityToken,
+			RegistryToken: authConfig.RegistryToken,
+		}))
 	}
 	for _, tc := range testCases {
 		serverAddress := tc.inputServerAddress
-		authconfig, err := command.GetDefaultAuthConfig(cfg, tc.checkCredStore, serverAddress, serverAddress == "https://index.docker.io/v1/")
+		authCfg, err := command.GetDefaultAuthConfig(cfg, tc.checkCredStore, serverAddress, serverAddress == "https://index.docker.io/v1/")
 		assert.NilError(t, err)
-		assert.Check(t, is.DeepEqual(tc.expectedAuthConfig, authconfig))
+		assert.Check(t, is.DeepEqual(tc.expectedAuthConfig, authCfg))
 	}
 }
 
@@ -78,8 +88,8 @@ func TestGetDefaultAuthConfig_HelperError(t *testing.T) {
 		ServerAddress: serverAddress,
 	}
 	const isDefaultRegistry = false // registry is not "https://index.docker.io/v1/"
-	authconfig, err := command.GetDefaultAuthConfig(cfg, true, serverAddress, isDefaultRegistry)
-	assert.Check(t, is.DeepEqual(expectedAuthConfig, authconfig))
+	authCfg, err := command.GetDefaultAuthConfig(cfg, true, serverAddress, isDefaultRegistry)
+	assert.Check(t, is.DeepEqual(expectedAuthConfig, authCfg))
 	assert.Check(t, is.ErrorContains(err, "docker-credential-fake-does-not-exist"))
 }
 
@@ -185,9 +195,9 @@ func TestRetrieveAuthTokenFromImage(t *testing.T) {
 				imageRef := path.Join(tc.prefix, remoteRef)
 				actual, err := command.RetrieveAuthTokenFromImage(&cfg, imageRef)
 				assert.NilError(t, err)
-				ac, err := registry.DecodeAuthConfig(actual)
+				expectedAuthCfg, err := authconfig.Encode(tc.expectedAuthCfg)
 				assert.NilError(t, err)
-				assert.Check(t, is.DeepEqual(*ac, tc.expectedAuthCfg))
+				assert.Equal(t, actual, expectedAuthCfg)
 			}
 		})
 	}

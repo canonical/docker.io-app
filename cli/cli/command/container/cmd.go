@@ -3,43 +3,73 @@ package container
 import (
 	"github.com/docker/cli/cli"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/internal/commands"
 	"github.com/spf13/cobra"
 )
 
-// NewContainerCommand returns a cobra command for `container` subcommands
-func NewContainerCommand(dockerCli command.Cli) *cobra.Command {
+func init() {
+	commands.Register(newRunCommand)
+	commands.Register(newExecCommand)
+	commands.Register(newPsCommand)
+	commands.Register(newContainerCommand)
+	commands.RegisterLegacy(newAttachCommand)
+	commands.RegisterLegacy(newCommitCommand)
+	commands.RegisterLegacy(newCopyCommand)
+	commands.RegisterLegacy(newCreateCommand)
+	commands.RegisterLegacy(newDiffCommand)
+	commands.RegisterLegacy(newExportCommand)
+	commands.RegisterLegacy(newKillCommand)
+	commands.RegisterLegacy(newLogsCommand)
+	commands.RegisterLegacy(newPauseCommand)
+	commands.RegisterLegacy(newPortCommand)
+	commands.RegisterLegacy(newRenameCommand)
+	commands.RegisterLegacy(newRestartCommand)
+	commands.RegisterLegacy(newRmCommand)
+	commands.RegisterLegacy(newStartCommand)
+	commands.RegisterLegacy(newStatsCommand)
+	commands.RegisterLegacy(newStopCommand)
+	commands.RegisterLegacy(newTopCommand)
+	commands.RegisterLegacy(newUnpauseCommand)
+	commands.RegisterLegacy(newUpdateCommand)
+	commands.RegisterLegacy(newWaitCommand)
+}
+
+// newContainerCommand returns a cobra command for `container` subcommands
+func newContainerCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "container",
 		Short: "Manage containers",
 		Args:  cli.NoArgs,
-		RunE:  command.ShowHelp(dockerCli.Err()),
+		RunE:  command.ShowHelp(dockerCLI.Err()),
+
+		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(
-		NewAttachCommand(dockerCli),
-		NewCommitCommand(dockerCli),
-		NewCopyCommand(dockerCli),
-		NewCreateCommand(dockerCli),
-		NewDiffCommand(dockerCli),
-		NewExecCommand(dockerCli),
-		NewExportCommand(dockerCli),
-		NewKillCommand(dockerCli),
-		NewLogsCommand(dockerCli),
-		NewPauseCommand(dockerCli),
-		NewPortCommand(dockerCli),
-		NewRenameCommand(dockerCli),
-		NewRestartCommand(dockerCli),
-		NewRmCommand(dockerCli),
-		NewRunCommand(dockerCli),
-		NewStartCommand(dockerCli),
-		NewStatsCommand(dockerCli),
-		NewStopCommand(dockerCli),
-		NewTopCommand(dockerCli),
-		NewUnpauseCommand(dockerCli),
-		NewUpdateCommand(dockerCli),
-		NewWaitCommand(dockerCli),
-		newListCommand(dockerCli),
-		newInspectCommand(dockerCli),
-		NewPruneCommand(dockerCli),
+		newAttachCommand(dockerCLI),
+		newCommitCommand(dockerCLI),
+		newCopyCommand(dockerCLI),
+		newCreateCommand(dockerCLI),
+		newDiffCommand(dockerCLI),
+		newExecCommand(dockerCLI),
+		newExportCommand(dockerCLI),
+		newKillCommand(dockerCLI),
+		newLogsCommand(dockerCLI),
+		newPauseCommand(dockerCLI),
+		newPortCommand(dockerCLI),
+		newRenameCommand(dockerCLI),
+		newRestartCommand(dockerCLI),
+		newRemoveCommand(dockerCLI),
+		newRunCommand(dockerCLI),
+		newStartCommand(dockerCLI),
+		newStatsCommand(dockerCLI),
+		newStopCommand(dockerCLI),
+		newTopCommand(dockerCLI),
+		newUnpauseCommand(dockerCLI),
+		newUpdateCommand(dockerCLI),
+		newWaitCommand(dockerCLI),
+		newListCommand(dockerCLI),
+		newInspectCommand(dockerCLI),
+		newPruneCommand(dockerCLI),
 	)
 	return cmd
 }

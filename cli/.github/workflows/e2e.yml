@@ -37,14 +37,14 @@ jobs:
           - alpine
           - debian
         engine-version:
-          - 28  # latest
-          - 27  # latest - 1
-          - 26  # github actions default
-          - 23  # mirantis lts
+          - rc  # latest rc
+          - 29  # latest
+          - 28  # latest - 1
+          - 25  # mirantis lts
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       -
         name: Update daemon.json
         run: |

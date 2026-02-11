@@ -1,12 +1,12 @@
-package system // import "github.com/docker/docker/integration/system"
+package system
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/integration/internal/requirement"
-	registrypkg "github.com/docker/docker/registry"
+	"github.com/moby/moby/client"
+	registrypkg "github.com/moby/moby/v2/daemon/pkg/registry"
+	"github.com/moby/moby/v2/integration/internal/requirement"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/skip"
@@ -19,7 +19,7 @@ func TestLoginFailsWithBadCredentials(t *testing.T) {
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
-	_, err := apiClient.RegistryLogin(ctx, registry.AuthConfig{
+	_, err := apiClient.RegistryLogin(ctx, client.RegistryLoginOptions{
 		Username: "no-user",
 		Password: "no-password",
 	})

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/checkpoint"
+	"github.com/moby/moby/client"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -16,7 +16,7 @@ import (
 func TestCheckpointCreateErrors(t *testing.T) {
 	testCases := []struct {
 		args                 []string
-		checkpointCreateFunc func(container string, options checkpoint.CreateOptions) error
+		checkpointCreateFunc func(container string, options client.CheckpointCreateOptions) (client.CheckpointCreateResult, error)
 		expectedError        string
 	}{
 		{
@@ -29,8 +29,8 @@ func TestCheckpointCreateErrors(t *testing.T) {
 		},
 		{
 			args: []string{"foo", "bar"},
-			checkpointCreateFunc: func(container string, options checkpoint.CreateOptions) error {
-				return errors.New("error creating checkpoint for container foo")
+			checkpointCreateFunc: func(container string, options client.CheckpointCreateOptions) (client.CheckpointCreateResult, error) {
+				return client.CheckpointCreateResult{}, errors.New("error creating checkpoint for container foo")
 			},
 			expectedError: "error creating checkpoint for container foo",
 		},
@@ -59,12 +59,12 @@ func TestCheckpointCreateWithOptions(t *testing.T) {
 		leaveRunning := strconv.FormatBool(tc)
 		t.Run("leave-running="+leaveRunning, func(t *testing.T) {
 			var actualContainerName string
-			var actualOptions checkpoint.CreateOptions
+			var actualOptions client.CheckpointCreateOptions
 			cli := test.NewFakeCli(&fakeClient{
-				checkpointCreateFunc: func(container string, options checkpoint.CreateOptions) error {
+				checkpointCreateFunc: func(container string, options client.CheckpointCreateOptions) (client.CheckpointCreateResult, error) {
 					actualContainerName = container
 					actualOptions = options
-					return nil
+					return client.CheckpointCreateResult{}, nil
 				},
 			})
 			cmd := newCreateCommand(cli)
@@ -75,7 +75,7 @@ func TestCheckpointCreateWithOptions(t *testing.T) {
 			assert.Check(t, cmd.Flags().Set("checkpoint-dir", checkpointDir))
 			assert.NilError(t, cmd.Execute())
 			assert.Check(t, is.Equal(actualContainerName, containerName))
-			expected := checkpoint.CreateOptions{
+			expected := client.CheckpointCreateOptions{
 				CheckpointID:  checkpointName,
 				CheckpointDir: checkpointDir,
 				Exit:          !tc,

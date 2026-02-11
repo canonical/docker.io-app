@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.23
+//go:build go1.24
 
 package formatter
 
@@ -7,13 +7,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/cli/internal/test"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/api/types/container"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -21,7 +21,7 @@ import (
 )
 
 func TestContainerPsContext(t *testing.T) {
-	containerID := stringid.GenerateRandomID()
+	containerID := test.RandomID()
 	unix := time.Now().Add(-65 * time.Second).Unix()
 
 	var ctx ContainerContext
@@ -34,7 +34,7 @@ func TestContainerPsContext(t *testing.T) {
 		{
 			container: container.Summary{ID: containerID},
 			trunc:     true,
-			expValue:  stringid.TruncateID(containerID),
+			expValue:  TruncateID(containerID),
 			call:      ctx.ID,
 		},
 		{
@@ -55,14 +55,51 @@ func TestContainerPsContext(t *testing.T) {
 			call:      ctx.Image,
 		},
 		{
-			container: container.Summary{Image: "verylongimagename"},
+			container: container.Summary{Image: "ubuntu:latest"},
 			trunc:     true,
-			expValue:  "verylongimagename",
+			expValue:  "ubuntu:latest",
 			call:      ctx.Image,
 		},
 		{
-			container: container.Summary{Image: "verylongimagename"},
-			expValue:  "verylongimagename",
+			container: container.Summary{Image: "docker.io/library/ubuntu"},
+			trunc:     true,
+			expValue:  "ubuntu",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "docker.io/library/ubuntu:latest"},
+			trunc:     true,
+			expValue:  "ubuntu:latest",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "ubuntu:latest@sha256:a5a665ff33eced1e0803148700880edab4269067ed77e27737a708d0d293fbf5"},
+			trunc:     true,
+			expValue:  "ubuntu:latest",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "ubuntu@sha256:a5a665ff33eced1e0803148700880edab4269067ed77e27737a708d0d293fbf5"},
+			trunc:     true,
+			expValue:  "ubuntu",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "docker.io/library/ubuntu@sha256:a5a665ff33eced1e0803148700880edab4269067ed77e27737a708d0d293fbf5"},
+			trunc:     true,
+			expValue:  "ubuntu",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "docker.io/library/ubuntu:latest@sha256:a5a665ff33eced1e0803148700880edab4269067ed77e27737a708d0d293fbf5"},
+			trunc:     true,
+			expValue:  "ubuntu:latest",
+			call:      ctx.Image,
+		},
+		{
+			container: container.Summary{Image: "verylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagename"},
+			trunc:     true,
+			expValue:  "verylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagenameverylongimagename",
 			call:      ctx.Image,
 		},
 		{
@@ -101,7 +138,7 @@ func TestContainerPsContext(t *testing.T) {
 			call:      ctx.CreatedAt,
 		},
 		{
-			container: container.Summary{Ports: []container.Port{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}}},
+			container: container.Summary{Ports: []container.PortSummary{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}}},
 			trunc:     true,
 			expValue:  "8080/tcp",
 			call:      ctx.Ports,
@@ -115,7 +152,7 @@ func TestContainerPsContext(t *testing.T) {
 		{
 			container: container.Summary{State: container.StateRunning},
 			trunc:     true,
-			expValue:  container.StateRunning,
+			expValue:  string(container.StateRunning),
 			call:      ctx.State,
 		},
 		{
@@ -550,7 +587,7 @@ func TestContainerBackCompat(t *testing.T) {
 		ImageManifestDescriptor: nil,
 		Command:                 "/bin/sh",
 		Created:                 createdAtTime.UTC().Unix(),
-		Ports:                   []container.Port{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}},
+		Ports:                   []container.PortSummary{{PrivatePort: 8080, PublicPort: 8080, Type: "tcp"}},
 		SizeRw:                  123,
 		SizeRootFs:              12345,
 		Labels:                  map[string]string{"label1": "value1", "label2": "value2"},
@@ -597,14 +634,14 @@ func TestContainerBackCompat(t *testing.T) {
 }
 
 type ports struct {
-	ports    []container.Port
+	ports    []container.PortSummary
 	expected string
 }
 
 func TestDisplayablePorts(t *testing.T) {
 	cases := []ports{
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9988,
 					Type:        "tcp",
@@ -613,7 +650,7 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9988,
 					Type:        "udp",
@@ -622,9 +659,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "0.0.0.0",
+					IP:          netip.MustParseAddr("0.0.0.0"),
 					PrivatePort: 9988,
 					Type:        "tcp",
 				},
@@ -632,9 +669,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "0.0.0.0:0->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "::",
+					IP:          netip.MustParseAddr("::"),
 					PrivatePort: 9988,
 					Type:        "tcp",
 				},
@@ -642,7 +679,7 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "[::]:0->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9988,
 					PublicPort:  8899,
@@ -652,9 +689,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "4.3.2.1",
+					IP:          netip.MustParseAddr("4.3.2.1"),
 					PrivatePort: 9988,
 					PublicPort:  8899,
 					Type:        "tcp",
@@ -663,9 +700,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "4.3.2.1:8899->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PrivatePort: 9988,
 					PublicPort:  8899,
 					Type:        "tcp",
@@ -674,9 +711,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "[::1]:8899->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "4.3.2.1",
+					IP:          netip.MustParseAddr("4.3.2.1"),
 					PrivatePort: 9988,
 					PublicPort:  9988,
 					Type:        "tcp",
@@ -685,9 +722,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "4.3.2.1:9988->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PrivatePort: 9988,
 					PublicPort:  9988,
 					Type:        "tcp",
@@ -696,7 +733,7 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "[::1]:9988->9988/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9988,
 					Type:        "udp",
@@ -708,14 +745,14 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/udp, 9988/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PublicPort:  9998,
 					PrivatePort: 9998,
 					Type:        "udp",
 				}, {
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PublicPort:  9999,
 					PrivatePort: 9999,
 					Type:        "udp",
@@ -724,14 +761,14 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "1.2.3.4:9998-9999->9998-9999/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PublicPort:  9998,
 					PrivatePort: 9998,
 					Type:        "udp",
 				}, {
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PublicPort:  9999,
 					PrivatePort: 9999,
 					Type:        "udp",
@@ -740,14 +777,14 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "[::1]:9998-9999->9998-9999/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PublicPort:  8887,
 					PrivatePort: 9998,
 					Type:        "udp",
 				}, {
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PublicPort:  8888,
 					PrivatePort: 9999,
 					Type:        "udp",
@@ -756,14 +793,14 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "1.2.3.4:8887->9998/udp, 1.2.3.4:8888->9999/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PublicPort:  8887,
 					PrivatePort: 9998,
 					Type:        "udp",
 				}, {
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PublicPort:  8888,
 					PrivatePort: 9999,
 					Type:        "udp",
@@ -772,7 +809,7 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "[::1]:8887->9998/udp, [::1]:8888->9999/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9998,
 					Type:        "udp",
@@ -784,9 +821,9 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9998-9999/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PrivatePort: 6677,
 					PublicPort:  7766,
 					Type:        "tcp",
@@ -799,24 +836,24 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/udp, 1.2.3.4:7766->6677/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PrivatePort: 9988,
 					PublicPort:  8899,
 					Type:        "udp",
 				}, {
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PrivatePort: 9988,
 					PublicPort:  8899,
 					Type:        "tcp",
 				}, {
-					IP:          "4.3.2.1",
+					IP:          netip.MustParseAddr("4.3.2.1"),
 					PrivatePort: 2233,
 					PublicPort:  3322,
 					Type:        "tcp",
 				}, {
-					IP:          "::1",
+					IP:          netip.MustParseAddr("::1"),
 					PrivatePort: 2233,
 					PublicPort:  3322,
 					Type:        "tcp",
@@ -825,18 +862,18 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "4.3.2.1:3322->2233/tcp, [::1]:3322->2233/tcp, 1.2.3.4:8899->9988/tcp, 1.2.3.4:8899->9988/udp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 9988,
 					PublicPort:  8899,
 					Type:        "udp",
 				}, {
-					IP:          "1.2.3.4",
+					IP:          netip.MustParseAddr("1.2.3.4"),
 					PrivatePort: 6677,
 					PublicPort:  7766,
 					Type:        "tcp",
 				}, {
-					IP:          "4.3.2.1",
+					IP:          netip.MustParseAddr("4.3.2.1"),
 					PrivatePort: 2233,
 					PublicPort:  3322,
 					Type:        "tcp",
@@ -845,7 +882,7 @@ func TestDisplayablePorts(t *testing.T) {
 			expected: "9988/udp, 4.3.2.1:3322->2233/tcp, 1.2.3.4:7766->6677/tcp",
 		},
 		{
-			ports: []container.Port{
+			ports: []container.PortSummary{
 				{
 					PrivatePort: 80,
 					Type:        "tcp",
@@ -859,42 +896,42 @@ func TestDisplayablePorts(t *testing.T) {
 					PrivatePort: 1024,
 					Type:        "udp",
 				}, {
-					IP:          "1.1.1.1",
+					IP:          netip.MustParseAddr("1.1.1.1"),
 					PublicPort:  80,
 					PrivatePort: 1024,
 					Type:        "tcp",
 				}, {
-					IP:          "1.1.1.1",
-					PublicPort:  80,
-					PrivatePort: 1024,
-					Type:        "udp",
-				}, {
-					IP:          "1.1.1.1",
-					PublicPort:  1024,
-					PrivatePort: 80,
-					Type:        "tcp",
-				}, {
-					IP:          "1.1.1.1",
-					PublicPort:  1024,
-					PrivatePort: 80,
-					Type:        "udp",
-				}, {
-					IP:          "2.1.1.1",
-					PublicPort:  80,
-					PrivatePort: 1024,
-					Type:        "tcp",
-				}, {
-					IP:          "2.1.1.1",
+					IP:          netip.MustParseAddr("1.1.1.1"),
 					PublicPort:  80,
 					PrivatePort: 1024,
 					Type:        "udp",
 				}, {
-					IP:          "2.1.1.1",
+					IP:          netip.MustParseAddr("1.1.1.1"),
 					PublicPort:  1024,
 					PrivatePort: 80,
 					Type:        "tcp",
 				}, {
-					IP:          "2.1.1.1",
+					IP:          netip.MustParseAddr("1.1.1.1"),
+					PublicPort:  1024,
+					PrivatePort: 80,
+					Type:        "udp",
+				}, {
+					IP:          netip.MustParseAddr("2.1.1.1"),
+					PublicPort:  80,
+					PrivatePort: 1024,
+					Type:        "tcp",
+				}, {
+					IP:          netip.MustParseAddr("2.1.1.1"),
+					PublicPort:  80,
+					PrivatePort: 1024,
+					Type:        "udp",
+				}, {
+					IP:          netip.MustParseAddr("2.1.1.1"),
+					PublicPort:  1024,
+					PrivatePort: 80,
+					Type:        "tcp",
+				}, {
+					IP:          netip.MustParseAddr("2.1.1.1"),
 					PublicPort:  1024,
 					PrivatePort: 80,
 					Type:        "udp",

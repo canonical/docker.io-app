@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
-	"github.com/docker/docker/api/types/backend"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/builder/dockerfile"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/internal/metrics"
+	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/builder/dockerfile"
+	"github.com/moby/moby/v2/daemon/internal/metrics"
+	"github.com/moby/moby/v2/daemon/server/backend"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/pkg/errors"
 )
 
@@ -132,21 +132,23 @@ func (daemon *Daemon) CreateImageFromContainer(ctx context.Context, name string,
 	}
 
 	// It is not possible to commit a running container on Windows
-	if isWindows && container.IsRunning() {
+	if isWindows && container.State.IsRunning() {
 		return "", errors.Errorf("%+v does not support commit of a running container", runtime.GOOS)
 	}
 
-	if container.IsDead() {
+	if container.State.IsDead() {
 		return "", errdefs.Conflict(fmt.Errorf("You cannot commit container %s which is Dead", container.ID))
 	}
 
-	if container.IsRemovalInProgress() {
+	if container.State.IsRemovalInProgress() {
 		return "", errdefs.Conflict(fmt.Errorf("You cannot commit container %s which is being removed", container.ID))
 	}
 
-	if c.Pause && !container.IsPaused() {
-		daemon.containerPause(container)
-		defer daemon.containerUnpause(container)
+	if !c.NoPause && !container.State.IsPaused() {
+		_ = daemon.containerPause(container)
+		defer func() {
+			_ = daemon.containerUnpause(container)
+		}()
 	}
 
 	if c.Config == nil {

@@ -1,13 +1,13 @@
-package daemon // import "github.com/docker/docker/daemon"
+package daemon
 
 import (
 	"testing"
 	"time"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	eventtypes "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/events"
+	containertypes "github.com/moby/moby/api/types/container"
+	eventtypes "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/v2/daemon/container"
+	"github.com/moby/moby/v2/daemon/events"
 )
 
 func TestLogContainerEventCopyLabels(t *testing.T) {
@@ -70,7 +70,7 @@ func TestLogContainerEventWithAttributes(t *testing.T) {
 	})
 }
 
-func validateTestAttributes(t *testing.T, l chan interface{}, expectedAttributesToTest map[string]string) {
+func validateTestAttributes(t *testing.T, l chan any, expectedAttributesToTest map[string]string) {
 	select {
 	case ev := <-l:
 		event, ok := ev.(eventtypes.Message)
