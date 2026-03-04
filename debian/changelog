@@ -1,14 +1,10 @@
-docker.io-app (29.1.3-0ubuntu1~24.04.1) noble; urgency=medium
+docker.io-app (29.1.3-0ubuntu2) resolute; urgency=medium
 
-  * Merge from resolute to noble (LP: #2127661). Remaining changes:
-    - d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
-    - d/docker.io.postinst: notify when a reboot is required to reload the
-      AppArmor profile (LP #2065423)
-  * Dropped changes:
-    - d/control: build with golang 1.23
-    - d/rules: add golang 1.23 to PATH
+  * d/p/loosen-tini-cmake-req.patch: loosen minimum cmake
+    compatible version to fix FTBFS issue with cmake 4
+  * d/t/docker-in-lxd: drop workaround for cloud-init bug (LP #2131809)
 
- -- Athos Ribeiro <athos@ubuntu.com>  Wed, 11 Feb 2026 08:21:17 -0300
+ -- Athos Ribeiro <athos@ubuntu.com>  Tue, 03 Mar 2026 14:20:49 -0300
 
 docker.io-app (29.1.3-0ubuntu1) resolute; urgency=medium
 
