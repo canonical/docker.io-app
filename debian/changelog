@@ -1,3 +1,9 @@
+docker.io-app (29.1.3-0ubuntu2~25.10.1) questing; urgency=medium
+
+  * Backport from resolute to questing (LP: #2127661)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Wed, 04 Mar 2026 08:20:07 -0300
+
 docker.io-app (29.1.3-0ubuntu2) resolute; urgency=medium
 
   * d/p/loosen-tini-cmake-req.patch: loosen minimum cmake
