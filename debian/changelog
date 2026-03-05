@@ -1,3 +1,9 @@
+docker.io-app (29.1.3-0ubuntu3~25.10.1) questing; urgency=medium
+
+  * Backport from resolute to questing (LP: #2127661)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Thu, 05 Mar 2026 14:56:15 -0300
+
 docker.io-app (29.1.3-0ubuntu3) resolute; urgency=medium
 
   * d/t/docker-in-lxd:
