@@ -107,11 +107,13 @@ fi
 # Follow the official tutorial on how to run docker inside lxd containers
 # https://ubuntu.com/tutorials/how-to-run-docker-inside-lxd-containers
 lxc storage create docker-storage btrfs
-lxc storage volume create docker-storage docker-vol
+lxc storage volume create docker-storage containerd-vol
 lxc launch ubuntu-daily:${suite}/${arch} docker -c security.nesting=true -c security.syscalls.intercept.mknod=true -c security.syscalls.intercept.setxattr=true
-lxc storage volume attach docker-storage docker-vol docker /var/lib/docker
+lxc storage volume attach docker-storage containerd-vol docker /var/lib/containerd
 
 defer 'lxc delete --force docker'
+defer 'lxc storage volume delete docker-storage containerd-vol'
+defer 'lxc storage delete docker-storage'
 
 # autopkgtest will have done some complicated things to ensure that "apt
 # install docker.io" installs the version that should be tested in the
