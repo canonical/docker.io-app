@@ -112,6 +112,8 @@ lxc launch ubuntu-daily:${suite}/${arch} docker -c security.nesting=true -c secu
 lxc storage volume attach docker-storage docker-vol docker /var/lib/docker
 
 defer 'lxc delete --force docker'
+defer 'lxc storage volume delete docker-storage docker-vol'
+defer 'lxc storage delete docker-storage'
 
 # autopkgtest will have done some complicated things to ensure that "apt
 # install docker.io" installs the version that should be tested in the
