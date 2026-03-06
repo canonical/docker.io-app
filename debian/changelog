@@ -1,3 +1,16 @@
+docker.io-app (29.1.3-0ubuntu3~22.04.1) jammy; urgency=medium
+
+  * Merge from resolute to jammy (LP: #2127661). Remaining changes:
+    - d/t/basic-smoke:
+      + Target bullseye for debootstrap image generation (LP #2124109)
+      + Change the MIRROR URL to use archive.d.o since oldoldstable is not
+        available for ppc64el and s390x through ftp.d.o
+  * Dropped changes:
+    - d/control: b-d on golang-1.23-go instead of golang-1.24-go
+    - d/rules: add Go 1.23 to $PATH
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Fri, 06 Mar 2026 08:37:07 -0300
+
 docker.io-app (29.1.3-0ubuntu3) resolute; urgency=medium
 
   * d/t/docker-in-lxd:
