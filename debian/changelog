@@ -46,7 +46,7 @@ docker.io-app (29.1.2-0ubuntu1) resolute; urgency=medium
   * d/rules:
     - Use moby/moby namespace
     - Build docker-trust plugin
-  * d/t/docker-in-lxd: workaround cloud-init bug (LP: #2131809)
+  * d/t/docker-in-lxd: workaround cloud-init bug (LP #2131809)
 
  -- Athos Ribeiro <athos@ubuntu.com>  Fri, 12 Dec 2025 10:35:58 -0300
 
