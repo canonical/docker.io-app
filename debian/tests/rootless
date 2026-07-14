@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# Tests the docker rootless install and uninstall flow
+# Exits 3 if rootful docker worked on the non-root user
+# Exits 4 if the context is not the auto-set "rootless"
+# Exits 5 if the security options do not include "rootless"
+# Exits 6 if rootless docker did NOT work on the root user
+# Exits 7 if the dockerd-rootless-setuptool.sh installation fails
+# Exits 8 if the dockerd-rootless-setuptool.sh *uninstallation* fails
+# Exits 9 if rootful docker worked on the non-root user after an uninstall
+# Exits 10 if the systemd unit persists after an uninstall
+# Exits 11 if rootful docker did NOT work on root user after uninstall
+
+run_test() {
+  # Verify that, before rootless, docker fails (as it is on root)
+  if ! docker ps 2>&1 | grep 'permission denied'; then
+      echo "ERROR: Rootful docker worked on non-root user BEFORE install"
+      exit 3;
+  fi
+
+  # Install docker rootless
+  if ! /usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh install; then
+      echo "ERROR: Docker rootless installation failed"
+      exit 7
+  fi
+
+  # Check if docker runs and has context rootless
+  if [ "$(docker context show)" != "rootless" ]; then
+      echo "ERROR: Active Docker context is not rootless"
+      exit 4
+  fi
+
+  # Check if the security options include rootless
+  if ! docker info --format '{{json .SecurityOptions}}' | grep -q rootless; then
+      echo "ERROR: Docker daemon is not running in rootless mode"
+      exit 5
+  fi
+
+  # Verify that after rootless, docker works
+  if docker ps 2>&1 | grep 'permission denied'; then
+      echo "ERROR: Rootless docker did not work on non-root user"
+      exit 6
+  fi
+
+  # Uninstall docker rootless
+  if ! /usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh uninstall; then
+      echo "ERROR: Docker rootless uninstallation failed"
+      exit 8
+  fi
+
+  # Verify that, after rootless is gone, docker fails (as it is on root)
+  if ! docker ps 2>&1 | grep 'permission denied'; then
+      echo "ERROR: Rootful docker worked on non-root user AFTER uninstall"
+      exit 9
+  fi
+
+  # Check that the systemd user unit is gone
+  if test -e "~/.config/systemd/user/docker.service"; then
+      echo "ERROR: systemd user unit is not gone after uninstall"
+      exit 10
+  fi
+
+  # Verify that root*ful* docker works after uninstall
+  if ! sudo docker ps 2>&1; then
+      echo "ERROR: root*ful* docker failed after uninstall"
+      exit 11
+  fi
+}
+
+
+# Make sure the test is being run as a non-root user
+# we don't explicitly require root and drop, but just in case
+# infrastructure runs all tests as root, we explicitly check both cases
+if [ "$(whoami)" == "root" ]; then
+  NON_ROOT_USER="$AUTOPKGTEST_NORMAL_USER"
+
+  if [ -z "$NON_ROOT_USER" ]; then
+    NON_ROOT_USER="docker-test-user"
+    echo "No standard user found. Creating $NON_ROOT_USER..."
+    useradd -m -s /bin/bash "$NON_ROOT_USER"
+  fi
+  exec sudo -i -u "$NON_ROOT_USER" "$0" "$@"
+else
+  run_test
+fi
