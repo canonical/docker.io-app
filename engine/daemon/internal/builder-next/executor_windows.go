@@ -9,51 +9,42 @@ import (
 	"github.com/containerd/log"
 	"github.com/moby/buildkit/executor"
 	"github.com/moby/buildkit/executor/containerdexecutor"
-	"github.com/moby/buildkit/executor/oci"
-	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/network"
-	"github.com/moby/moby/v2/daemon/libnetwork"
-	"github.com/moby/sys/user"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"google.golang.org/grpc"
 )
 
 const networkName = "nat"
 
-func newExecutor(
-	root string,
-	_ string,
-	net *libnetwork.Controller,
-	dns *oci.DNSConfig,
-	_ bool,
-	_ user.IdentityMapping,
-	_ string,
-	cdiManager *cdidevices.Manager,
-	containerdAddr string,
-	containerdNamespace string,
-	hypervIsolation bool,
-) (executor.Executor, error) {
-	netRoot := filepath.Join(root, "net")
+func newExecutor(opts executorOpts) (executor.Executor, network.ProxyProvider, error) {
+	netRoot := filepath.Join(opts.root, "net")
 	np := map[pb.NetMode]network.Provider{
-		pb.NetMode_UNSET: &bridgeProvider{Controller: net, Root: netRoot},
+		pb.NetMode_UNSET: &bridgeProvider{Controller: opts.networkController, Root: netRoot},
 		pb.NetMode_NONE:  network.NewNoneProvider(),
 	}
 
-	opt := ctd.WithDefaultNamespace(containerdNamespace)
-	client, err := ctd.New(containerdAddr, opt)
+	ctdOpts := []ctd.Opt{ctd.WithDefaultNamespace(opts.containerdNamespace)}
+	if opts.containerdDialer != nil {
+		// Embedded containerd: connect over the in-memory pipe.
+		ctdOpts = append(ctdOpts, ctd.WithExtraDialOpts([]grpc.DialOption{
+			grpc.WithContextDialer(opts.containerdDialer),
+		}))
+	}
+	client, err := ctd.New(opts.containerdAddr, ctdOpts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	executorOpts := containerdexecutor.ExecutorOptions{
+	return containerdexecutor.New(containerdexecutor.ExecutorOptions{
 		Client:           client,
-		Root:             root,
-		DNSConfig:        dns,
-		CDIManager:       cdiManager,
+		Root:             opts.root,
+		DNSConfig:        opts.dnsConfig,
+		CDIManager:       opts.cdiManager,
 		NetworkProviders: np,
-		HyperVIsolation:  hypervIsolation,
-	}
-	return containerdexecutor.New(executorOpts), nil
+		ProxyProvider:    opts.proxyProvider,
+		HyperVIsolation:  opts.hypervIsolation,
+	}), opts.proxyProvider, nil
 }
 
 func (iface *lnInterface) Set(s *specs.Spec) error {

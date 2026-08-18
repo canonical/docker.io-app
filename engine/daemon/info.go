@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/containerd/containerd/v2/pkg/tracing"
@@ -16,6 +17,7 @@ import (
 	"github.com/moby/moby/v2/daemon/config"
 	"github.com/moby/moby/v2/daemon/internal/filedescriptors"
 	"github.com/moby/moby/v2/daemon/internal/metrics"
+	"github.com/moby/moby/v2/daemon/internal/mod"
 	"github.com/moby/moby/v2/daemon/internal/platform"
 	"github.com/moby/moby/v2/daemon/logger"
 	"github.com/moby/moby/v2/daemon/pkg/registry"
@@ -42,7 +44,10 @@ func doWithTrace[T any](ctx context.Context, name string, f func() T) T {
 func (daemon *Daemon) SystemInfo(ctx context.Context) (*system.Info, error) {
 	defer metrics.StartTimer(metrics.HostInfoFunctions.WithValues("system_info"))()
 
-	sysInfo := daemon.RawSysInfo()
+	sysInfo, err := daemon.RawSysInfo()
+	if err != nil {
+		return nil, err
+	}
 	cfg := daemon.config()
 
 	v := &system.Info{
@@ -72,6 +77,7 @@ func (daemon *Daemon) SystemInfo(ctx context.Context) (*system.Info, error) {
 		LiveRestoreEnabled: cfg.LiveRestoreEnabled,
 		Isolation:          daemon.defaultIsolation,
 		CDISpecDirs:        promoteNil(cfg.CDISpecDirs),
+		NRI:                daemon.nri.GetInfo(),
 	}
 
 	daemon.fillContainerStates(v)
@@ -94,6 +100,18 @@ func (daemon *Daemon) SystemInfo(ctx context.Context) (*system.Info, error) {
 	return v, nil
 }
 
+const (
+	moduleName           = "github.com/moby/moby/v2"
+	defaultModuleVersion = "v2.0.0+unknown"
+)
+
+var moduleVersion = sync.OnceValue(func() string {
+	if v := mod.Version(moduleName); v != "" {
+		return v
+	}
+	return defaultModuleVersion
+})
+
 // SystemVersion returns version information about the daemon.
 //
 // The only error this should return is due to context cancellation/deadline.
@@ -107,6 +125,14 @@ func (daemon *Daemon) SystemVersion(ctx context.Context) (system.VersionResponse
 	cfg := daemon.config()
 
 	v := system.VersionResponse{
+		Platform: system.PlatformInfo{
+			Name: dockerversion.PlatformName,
+		},
+		Version:       dockerversion.Version,
+		APIVersion:    config.MaxAPIVersion,
+		MinAPIVersion: cfg.MinAPIVersion,
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
 		Components: []system.ComponentVersion{
 			{
 				Name:    "Engine",
@@ -120,25 +146,26 @@ func (daemon *Daemon) SystemVersion(ctx context.Context) (system.VersionResponse
 					"Arch":          runtime.GOARCH,
 					"BuildTime":     dockerversion.BuildTime,
 					"KernelVersion": kernelVer,
+					"Module":        moduleName,
+					"ModuleVersion": moduleVersion(),
 					"Experimental":  strconv.FormatBool(cfg.Experimental),
 				},
 			},
 		},
 
-		// Populate deprecated fields for older clients
-		Version:       dockerversion.Version,
+		// Populate deprecated fields for older clients.
+		//
+		// These fields were (soft) deprecated in API v1.35 in favor of the
+		// per-component build-info, but kept for backward-compatibility, see:
+		//
+		// - https://github.com/moby/moby/pull/35705
+		// - https://github.com/moby/moby/pull/51359
 		GitCommit:     dockerversion.GitCommit,
-		APIVersion:    config.MaxAPIVersion,
-		MinAPIVersion: cfg.MinAPIVersion,
 		GoVersion:     runtime.Version(),
-		Os:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		BuildTime:     dockerversion.BuildTime,
 		KernelVersion: kernelVer,
 		Experimental:  cfg.Experimental,
+		BuildTime:     dockerversion.BuildTime,
 	}
-
-	v.Platform.Name = dockerversion.PlatformName
 
 	if err := daemon.fillPlatformVersion(ctx, &v, cfg); err != nil {
 		return v, err
@@ -149,16 +176,6 @@ func (daemon *Daemon) SystemVersion(ctx context.Context) (system.VersionResponse
 func (daemon *Daemon) fillDriverInfo(v *system.Info) {
 	v.Driver = daemon.imageService.StorageDriver()
 	v.DriverStatus = daemon.imageService.LayerStoreStatus()
-
-	const warnMsg = `
-WARNING: The %s storage-driver is deprecated, and will be removed in a future release.
-         Refer to the documentation for more information: https://docs.docker.com/go/storage-driver/`
-
-	switch v.Driver {
-	case "overlay":
-		v.Warnings = append(v.Warnings, fmt.Sprintf(warnMsg, v.Driver))
-	}
-
 	fillDriverWarnings(v)
 }
 
@@ -234,6 +251,9 @@ func (daemon *Daemon) fillDebugInfo(ctx context.Context, v *system.Info) {
 // fillContainerdInfo provides information about the containerd configuration
 // for debugging purposes.
 func (daemon *Daemon) fillContainerdInfo(v *system.Info, cfg *config.Config) {
+	if cfg.Features["embedded-containerd"] {
+		v.Warnings = append(v.Warnings, "WARNING: Running with experimental embedded-containerd mode. This feature may change or be removed in a future release.")
+	}
 	if cfg.ContainerdAddr == "" {
 		return
 	}

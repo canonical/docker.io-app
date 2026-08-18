@@ -24,6 +24,7 @@ import (
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
 	"github.com/moby/moby/client/pkg/stringid"
 	"github.com/moby/moby/v2/daemon/container"
 	"github.com/moby/moby/v2/internal/testutil/request"
@@ -54,6 +55,13 @@ const (
 )
 
 var errDaemonNotStarted = errors.New("daemon not started")
+
+// containerdEmbeddedFromEnv reports whether test daemons should run containerd
+// in-process, via the embedded-containerd feature. It is controlled by
+// TEST_INTEGRATION_CONTAINERD_EMBEDDED.
+func containerdEmbeddedFromEnv() bool {
+	return os.Getenv("TEST_INTEGRATION_CONTAINERD_EMBEDDED") != ""
+}
 
 // SockRoot holds the path of the default docker integration daemon socket
 var SockRoot = filepath.Join(os.TempDir(), "docker-integration")
@@ -87,6 +95,7 @@ type Daemon struct {
 	args                       []string
 	extraEnv                   []string
 	containerdSocket           string
+	containerdEmbedded         bool
 	usernsRemap                string
 	rootlessUser               *user.User
 	rootlessXDGRuntimeDir      string
@@ -141,12 +150,13 @@ func NewDaemon(workingDir string, ops ...Option) (*Daemon, error) {
 		storageDriver: storageDriver,
 		userlandProxy: userlandProxy,
 		// dxr stands for docker-execroot (shortened for avoiding unix(7) path length limitation)
-		execRoot:         filepath.Join(os.TempDir(), "dxr", id),
-		dockerdBinary:    defaultDockerdBinary,
-		swarmListenAddr:  defaultSwarmListenAddr,
-		SwarmPort:        DefaultSwarmPort,
-		log:              nopLog{},
-		containerdSocket: defaultContainerdSocket,
+		execRoot:           filepath.Join(os.TempDir(), "dxr", id),
+		dockerdBinary:      defaultDockerdBinary,
+		swarmListenAddr:    defaultSwarmListenAddr,
+		SwarmPort:          DefaultSwarmPort,
+		log:                nopLog{},
+		containerdSocket:   defaultContainerdSocket,
+		containerdEmbedded: containerdEmbeddedFromEnv(),
 	}
 
 	for _, op := range ops {
@@ -218,7 +228,7 @@ func New(t testing.TB, ops ...Option) *Daemon {
 		dest = os.Getenv("DEST")
 	}
 	assert.Assert(t, dest != "", "Please set the DOCKER_INTEGRATION_DAEMON_DEST or the DEST environment variable")
-	dest = filepath.Join(dest, t.Name())
+	dest = filepath.Join(dest, sanitizedTestName(t))
 
 	if os.Getenv("DOCKER_ROOTLESS") != "" {
 		if os.Getenv("DOCKER_REMAP_ROOT") != "" {
@@ -240,6 +250,53 @@ func New(t testing.TB, ops ...Option) *Daemon {
 	}
 
 	return d
+}
+
+// sanitizedTestName removes special characters (like double or single quotes)
+// from name to prevent creating filesystem paths that can cause
+// errors when parsing through scripts.
+//
+// Test-names (t.Name()) for sub-tests allow free-form names to be used,
+// for example:
+//
+//	t.Run("engine restart shouldn't kill alive containers", func(t *testing.T) {
+//
+// Which would result in the quote (') to be included in the filename,
+// which is valid, but can cause issues when processing with shell scripts;
+//
+//	find bundles -path '*/root/*overlay2' -prune -o -type f \( -name '*-report.json' -o -name '*.log' -o -name '*.out' -o -name '*.prof' -o -name '*-report.xml' \) -print | xargs sudo tar -czf /tmp/reports.tar.gz
+//	[...]
+//	xargs: unmatched single quote; by default quotes are special to xargs unless you use the -0 option
+//
+// sanitizedTestName replaces special characters with an underscore to prevent
+// such issues.
+func sanitizedTestName(t testing.TB) string {
+	t.Helper()
+	parts := strings.Split(t.Name(), "/")
+	for i := range parts {
+		parts[i] = sanitizePathComponent(parts[i])
+	}
+	return filepath.Join(parts...)
+}
+
+func sanitizePathComponent(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+
+	out := strings.TrimLeft(strings.TrimSpace(b.String()), "-")
+	if out == "" {
+		return "_"
+	}
+	return out
 }
 
 // BinaryPath returns the binary and its arguments.
@@ -297,7 +354,7 @@ func (d *Daemon) NewClientT(t testing.TB, extraOpts ...client.Opt) *client.Clien
 
 	c, err := d.NewClient(extraOpts...)
 	assert.NilError(t, err, "[%s] could not create daemon client", d.id)
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
@@ -489,7 +546,9 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 		"--containerd-namespace", d.id,
 		"--containerd-plugins-namespace", d.id+"p",
 	)
-	if d.containerdSocket != "" {
+	if d.containerdEmbedded {
+		d.args = append(d.args, "--feature", "embedded-containerd")
+	} else if d.containerdSocket != "" {
 		d.args = append(d.args, "--containerd", d.containerdSocket)
 	}
 
@@ -571,20 +630,20 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 		close(wait)
 	}()
 
-	clientConfig, err := d.getClientConfig()
+	clientCfg, err := d.getClientConfig()
 	if err != nil {
 		return err
 	}
-	client := &http.Client{
-		Transport: clientConfig.transport,
+	httpClient := &http.Client{
+		Transport: clientCfg.transport,
 	}
 
 	req, err := http.NewRequest(http.MethodGet, "/_ping", http.NoBody)
 	if err != nil {
 		return errors.Wrapf(err, "[%s] could not create new request", d.id)
 	}
-	req.URL.Host = clientConfig.addr
-	req.URL.Scheme = clientConfig.scheme
+	req.URL.Host = clientCfg.addr
+	req.URL.Scheme = clientCfg.scheme
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -602,7 +661,7 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 			rctx, rcancel := context.WithTimeout(context.TODO(), 2*time.Second)
 			defer rcancel()
 
-			resp, err := client.Do(req.WithContext(rctx))
+			resp, err := httpClient.Do(req.WithContext(rctx))
 			if err != nil {
 				if i > 2 { // don't log the first couple, this ends up just being noise
 					d.log.Logf("[%s] error pinging daemon on start: %v", d.id, err)
@@ -615,7 +674,7 @@ func (d *Daemon) StartWithLogFile(out *os.File, providedArgs ...string) error {
 				continue
 			}
 
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				d.log.Logf("[%s] received status != 200 OK: %s\n", d.id, resp.Status)
 			}
@@ -644,7 +703,7 @@ func (d *Daemon) Kill() error {
 	}
 
 	defer func() {
-		d.logFile.Close()
+		_ = d.logFile.Close()
 		d.cmd = nil
 	}()
 
@@ -764,7 +823,7 @@ out2:
 				d.log.Logf("[%s] tried to interrupt daemon for %d times, now try to kill it", d.id, i)
 				break out2
 			}
-			d.log.Logf("[%d] attempt #%d/5: daemon is still running with pid %d", i, d.cmd.Process.Pid)
+			d.log.Logf("[%s] attempt #%d/5: daemon is still running with pid %d", d.id, i, d.cmd.Process.Pid)
 			if err := d.cmd.Process.Signal(os.Interrupt); err != nil {
 				return errors.Wrapf(err, "[%s] attempt #%d/5 could not send signal", d.id, i)
 			}
@@ -886,8 +945,9 @@ func (d *Daemon) LoadImage(ctx context.Context, t testing.TB, img string) {
 
 	resp, err := c.ImageLoad(ctx, reader, client.ImageLoadWithQuiet(true))
 	assert.NilError(t, err, "[%s] failed to load %s", d.id, img)
-	_, _ = io.Copy(io.Discard, resp)
-	_ = resp.Close()
+	defer func() { _ = resp.Close() }()
+
+	assert.NilError(t, jsonmessage.DisplayStream(resp, io.Discard), "[%s] failed to read load response for %s", d.id, img)
 }
 
 func (d *Daemon) getClientConfig() (*clientConfig, error) {
@@ -1062,7 +1122,7 @@ func cleanupRaftDir(t testing.TB, d *Daemon) {
 // artifacts.
 //
 // We currently do not include container logs in the bundles, so this also
-// removes the "containers" sub-directory.
+// removes the "containers" subdirectory.
 func cleanupDaemonStorage(t testing.TB, d *Daemon) {
 	t.Helper()
 	dirs := []string{

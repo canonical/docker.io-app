@@ -95,7 +95,7 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 				return errdefs.Conflict(fmt.Errorf("container is %s: stop the container before removing or force remove", ctr.State.State()))
 			}
 		}
-		if err := daemon.Kill(ctr); err != nil && !isNotRunning(err) {
+		if err := daemon.kill(context.TODO(), ctr); err != nil && !isNotRunning(err) {
 			return fmt.Errorf("could not kill container: %w", err)
 		}
 	}
@@ -165,7 +165,9 @@ func (daemon *Daemon) cleanupContainer(ctr *container.Container, config backend.
 	}
 
 	linkNames := daemon.linkIndex.delete(ctr)
-	selinux.ReleaseLabel(ctr.ProcessLabel)
+	if ctr.ProcessLabel != "" {
+		selinux.ReleaseLabel(ctr.ProcessLabel)
+	}
 	daemon.containers.Delete(ctr.ID)
 	daemon.containersReplica.Delete(ctr)
 	if err := daemon.removeMountPoints(ctr, config.RemoveVolume); err != nil {

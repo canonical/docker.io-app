@@ -108,6 +108,14 @@ init() {
 		XDG_RUNTIME_DIR_CREATED=1
 	fi
 
+	: "${CONTAINERD_ROOTLESS_ROOTLESSKIT_STATE_DIR:=$XDG_RUNTIME_DIR/containerd-rootless}"
+	if [ -e "$CONTAINERD_ROOTLESS_ROOTLESSKIT_STATE_DIR" ]; then
+		# https://github.com/moby/moby/issues/52171
+		# Hard requirement, not bypassable with --force
+		ERROR "dockerd-rootless.sh conflicts with containerd-rootless.sh. Stop containerd-rootless.sh if it's running, and remove $CONTAINERD_ROOTLESS_ROOTLESSKIT_STATE_DIR if it still exists."
+		exit 1
+	fi
+
 	instructions=""
 	# instruction: uidmap dependency check
 	if ! command -v newuidmap > /dev/null 2>&1; then
@@ -290,7 +298,6 @@ init() {
 	# TODO: support printing non-essential but recommended instructions:
 	# - sysctl: "net.ipv4.ping_group_range"
 	# - sysctl: "net.ipv4.ip_unprivileged_port_start"
-	# - external binary: slirp4netns
 	# - external binary: fuse-overlayfs
 }
 
@@ -305,7 +312,12 @@ cmd_entrypoint_check() {
 cmd_entrypoint_nsenter() {
 	# No need to call init()
 	pid=$(cat "$XDG_RUNTIME_DIR/dockerd-rootless/child_pid")
-	exec nsenter --no-fork --wd="$(pwd)" --preserve-credentials -m -n -U -t "$pid" -- "$@"
+	n=""
+	# If RootlessKit is running with `--detach-netns` mode, we do NOT enter the detached netns here
+	if [ ! -e "$XDG_RUNTIME_DIR/dockerd-rootless/netns" ]; then
+		n="-n"
+	fi
+	exec nsenter --no-fork --wd="$(pwd)" --preserve-credentials -m $n -U -t "$pid" -- "$@"
 }
 
 show_systemd_error() {

@@ -78,10 +78,7 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 			return
 		default:
 			// Work out how much more data we are okay with reading this time.
-			upto := n + readSize
-			if upto > cap(buf) {
-				upto = cap(buf)
-			}
+			upto := min(n+readSize, cap(buf))
 			// Try to read that data.
 			if upto > n {
 				read, err := src.Read(buf[n:upto])
@@ -128,6 +125,7 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 
 					if logErr := c.dst.Log(msg); logErr != nil {
 						logDriverError(c.dst.Name(), string(msg.Line), logErr)
+						PutMessage(msg)
 					}
 				}
 				p += q + 1
@@ -160,6 +158,7 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 
 					if logErr := c.dst.Log(msg); logErr != nil {
 						logDriverError(c.dst.Name(), string(msg.Line), logErr)
+						PutMessage(msg)
 					}
 					p = 0
 					n = 0

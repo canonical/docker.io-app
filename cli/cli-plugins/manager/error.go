@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package manager
 
@@ -28,7 +28,7 @@ func (e *pluginError) Unwrap() error {
 	return e.cause
 }
 
-// MarshalText marshalls the pluginError into a textual form.
+// MarshalText marshals the pluginError into a textual form.
 func (e *pluginError) MarshalText() (text []byte, err error) {
 	return []byte(e.cause.Error()), nil
 }

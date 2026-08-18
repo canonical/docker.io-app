@@ -4,7 +4,7 @@ package nftabler
 
 import (
 	"context"
-	"os/exec"
+	"fmt"
 
 	"github.com/containerd/log"
 	"github.com/moby/moby/v2/daemon/libnetwork/drivers/bridge/internal/firewaller"
@@ -16,19 +16,22 @@ import (
 // after switching to a different Firewaller implementation.
 func Cleanup(ctx context.Context, config firewaller.Config) {
 	if config.IPv4 {
-		if err := exec.Command("nft", "delete", "table", string(nftables.IPv4), dockerTable).Run(); err != nil {
-			log.G(ctx).WithError(err).Info("Deleting nftables IPv4 rules")
-		} else {
-			log.G(ctx).Info("Deleted nftables IPv4 rules")
-		}
+		tryCleanup(ctx, nftables.IPv4, "IPv4")
 	}
 	if config.IPv6 {
-		if err := exec.Command("nft", "delete", "table", string(nftables.IPv6), dockerTable).Run(); err != nil {
-			log.G(ctx).WithError(err).Info("Deleting nftables IPv6 rules")
-		} else {
-			log.G(ctx).Info("Deleted nftables IPv6 rules")
-		}
+		tryCleanup(ctx, nftables.IPv6, "IPv6")
 	}
+}
+
+func tryCleanup(ctx context.Context, family nftables.Family, label string) {
+	err := nftables.RunCmd(ctx, fmt.Appendf(nil, "delete table %s %s", family, dockerTable))
+	if err != nil {
+		// May not exist ("Error: Could not process rule: No such file or directory")
+		log.G(ctx).WithError(err).Info("Deleting nftables " + label + " rules")
+		return
+	}
+
+	log.G(ctx).Info("Deleted nftables " + label + " rules")
 }
 
 func (nft *Nftabler) SetFirewallCleaner(fc firewaller.FirewallCleaner) {

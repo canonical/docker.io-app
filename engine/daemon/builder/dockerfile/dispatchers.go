@@ -79,12 +79,13 @@ func dispatchLabel(ctx context.Context, d dispatchRequest, c *instructions.Label
 	if d.state.runConfig.Labels == nil {
 		d.state.runConfig.Labels = make(map[string]string)
 	}
-	commitStr := "LABEL"
+	var commitStr strings.Builder
+	commitStr.WriteString("LABEL")
 	for _, v := range c.Labels {
 		d.state.runConfig.Labels[v.Key] = v.Value
-		commitStr += " " + v.String()
+		commitStr.WriteString(" " + v.String())
 	}
-	return d.builder.commit(ctx, d.state, commitStr)
+	return d.builder.commit(ctx, d.state, commitStr.String())
 }
 
 // ADD foo /path
@@ -470,11 +471,11 @@ func dispatchHealthcheck(ctx context.Context, d dispatchRequest, c *instructions
 	if runConfig.Healthcheck != nil {
 		oldCmd := runConfig.Healthcheck.Test
 		if len(oldCmd) > 0 && oldCmd[0] != "NONE" {
-			fmt.Fprintf(d.builder.Stdout, "Note: overriding previous HEALTHCHECK: %v\n", oldCmd)
+			fmt.Fprintf(d.builder.Stdout, "Note: overriding previous HEALTHCHECK: %+v\n", oldCmd)
 		}
 	}
 	runConfig.Healthcheck = c.Health
-	return d.builder.commit(ctx, d.state, fmt.Sprintf("HEALTHCHECK %q", runConfig.Healthcheck))
+	return d.builder.commit(ctx, d.state, fmt.Sprintf("HEALTHCHECK %+v", runConfig.Healthcheck))
 }
 
 // ENTRYPOINT /usr/sbin/nginx
@@ -628,7 +629,7 @@ func parsePortSpec(rawPort string) ([]network.PortMap, error) {
 	count := endPort - startPort + 1
 	ports := make([]network.PortMap, 0, count)
 
-	for i := uint16(0); i < count; i++ {
+	for i := range count {
 		hPort := ""
 		if hostPort != "" {
 			hPort = strconv.Itoa(int(startHostPort + i))

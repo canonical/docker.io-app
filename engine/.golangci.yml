@@ -2,9 +2,7 @@ version: "2"
 
 run:
   # prevent golangci-lint from deducting the go version to lint for through go.mod,
-  # which causes it to fallback to go1.17 semantics.
-  go: "1.25.5"
-  concurrency: 2
+  go: "1.26.5"
   # Only supported with go modules enabled (build flag -mod=vendor only valid when using modules)
   # modules-download-mode: vendor
 
@@ -28,7 +26,8 @@ linters:
     - fatcontext                # Detects nested contexts in loops and function literals.
     - forbidigo
     - gocheckcompilerdirectives # Detects invalid go compiler directive comments (//go:).
-    - gocritic                  # Detects for bugs, performance and style issues.
+    - gocritic                  # Detects bugs, performance and style issues.
+    - godoclint                 # Detects issues in godoc.
     - gosec                     # Detects security problems.
     - govet
     - iface                     # Detects incorrect use of interfaces. Currently only used for "identical" interfaces in the same package.
@@ -40,6 +39,7 @@ linters:
     - nakedret                  # Detects uses of naked returns.
     - nilnesserr                # Detects returning nil errors. It combines the features of nilness and nilerr,
     - nosprintfhostport         # Detects misuse of Sprintf to construct a host with port in a URL.
+    - perfsprint                # Detects if fmt.Sprintf can be replaced with a faster alternative.
     - reassign                  # Detects reassigning a top-level variable in another package.
     - revive                    # Metalinter; drop-in replacement for golint.
     - spancheck                 # Detects mistakes with OpenTelemetry/Census spans.
@@ -175,6 +175,7 @@ linters:
         - G306 # G306: Expect WriteFile permissions to be 0600 or less (too restrictive; also flags "0o644" permissions)
         - G307 # G307: Deferring unsafe method "*os.File" on type "Close" (also EXC0008); (TODO: evaluate these and fix where needed: G307: Deferring unsafe method "*os.File" on type "Close")
         - G504 # G504: Blocklisted import net/http/cgi: Go versions < 1.6.3 are vulnerable to Httpoxy attack: (CVE-2016-5386); (only affects go < 1.6.3)
+        - G602 # G602: slice index out of range (TODO: too many false positives; see https://github.com/securego/gosec/issues/1406)
 
     govet:
       enable-all: true
@@ -288,23 +289,36 @@ linters:
         linters:
           - errcheck
 
+      - text: "G101: Potential hardcoded credentials"
+        path: _test\.go
+        linters:
+          - gosec
+
+      - text: "G120: Parsing form data without limiting request body size can allow memory exhaustion"
+        path: _test\.go
+        linters:
+          - gosec
+
       - text: "G404: Use of weak random number generator"
         path: _test\.go
         linters:
           - gosec
 
-        # Suppress golint complaining about generated types in api/types/
-      - text: "type name will be used as (container|volume)\\.(Container|Volume).* by other packages, and that stutters; consider calling this"
-        path: "api/types/(volume|container)/"
+      - text: "^G402: " # Look for bad TLS connection settings
+        path: '^client/'
+        source: "cmpopts\\.Ignore"
         linters:
-          - revive
+          - gosec
 
         # FIXME: ignoring unused assigns to ctx for now; too many hits in libnetwork/xxx functions that setup traces
       - text: "assigned to ctx, but never used afterwards"
+        path: '^daemon/'
+        source: "ctx[, ].*=.*\\(ctx[,)]"
         linters:
           - wastedassign
 
       - text: "ineffectual assignment to ctx"
+        path: '^daemon/'
         source: "ctx[, ].*=.*\\(ctx[,)]"
         linters:
           - ineffassign
@@ -329,25 +343,20 @@ linters:
         linters:
           - govet
       - text: 'use of `regexp.MustCompile` forbidden'
-        path: _test\.go
+        path: '(_test\.go|^daemon/internal/lazyregexp|^integration/internal/testutils|^daemon/libnetwork/cmd/networkdb-test/dbclient)'
         linters:
           - forbidigo
-      - text: 'use of `regexp.MustCompile` forbidden'
-        path: "daemon/internal/lazyregexp"
+
+      # These interfaces in the client module are identical by design to allow future expansion.
+      - text: "^identical: interface '(ContainerExportResult|ContainerLogsResult|ImagePullResponse|ImagePushResponse|ImageImportResult|ImageLoadResult|ImageSaveResult|ServiceLogsResult|TaskLogsResult)'"
+        path: '^client/'
         linters:
-          - forbidigo
-      - text: 'use of `regexp.MustCompile` forbidden'
-        path: "internal/testutils"
+          - iface
+
+      # TODO(thaJeztah): remove once https://github.com/leighmcculloch/gocheckcompilerdirectives/issues/7 is fixed.
+      - text: "compiler directive unrecognized: //go:fix"
         linters:
-          - forbidigo
-      - text: 'use of `regexp.MustCompile` forbidden'
-        path: "libnetwork/cmd/networkdb-test/dbclient"
-        linters:
-          - forbidigo
-      - text: 'use of `regexp.MustCompile` forbidden'
-        path: "registry/"
-        linters:
-          - forbidigo
+          - gocheckcompilerdirectives
 
     # Log a warning if an exclusion rule is unused.
     # Default: false

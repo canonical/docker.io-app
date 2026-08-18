@@ -31,6 +31,7 @@ type NamedContext struct {
 	bc               *Client
 	name             string
 	nameWithPlatform string
+	sharedKey        string
 	opt              ContextOpt
 }
 
@@ -41,12 +42,14 @@ func (bc *Client) namedContext(name string, nameWithPlatform string, opt Context
 	if !ok {
 		return nil, nil
 	}
+	sharedKey := opts["sharedkey:localdir:"+nameWithPlatform]
 
 	return &NamedContext{
 		input:            v,
 		bc:               bc,
 		name:             name,
 		nameWithPlatform: nameWithPlatform,
+		sharedKey:        sharedKey,
 		opt:              opt,
 	}, nil
 }
@@ -148,14 +151,14 @@ func (nc *NamedContext) load(ctx context.Context, count int) (*llb.State, *docke
 		return st, nil, nil
 	case "http", "https":
 		st, ok, err := DetectGitContext(nc.input, nil)
-		if !ok {
-			httpst := llb.HTTP(nc.input, llb.WithCustomName("[context "+nc.nameWithPlatform+"] "+nc.input))
-			st = &httpst
+		if ok {
+			if err != nil {
+				return nil, nil, err
+			}
+			return st, nil, nil
 		}
-		if err != nil {
-			return nil, nil, err
-		}
-		return st, nil, nil
+		httpst := llb.HTTP(nc.input, llb.Filename("context"), llb.WithCustomName("[context "+nc.nameWithPlatform+"] "+nc.input))
+		return &httpst, nil, nil
 	case "oci-layout":
 		refSpec := strings.TrimPrefix(vv[1], "//")
 		ref, err := reference.Parse(refSpec)
@@ -265,6 +268,7 @@ func (nc *NamedContext) load(ctx context.Context, count int) (*llb.State, *docke
 			name:             vv[1],
 			nameWithPlatform: nc.nameWithPlatform,
 			sessionID:        sessionID,
+			sharedKey:        nc.sharedKey,
 			excludes:         excludes,
 			extraOpts:        opt.AsyncLocalOpts,
 		}
@@ -310,6 +314,7 @@ type asyncLocalOutput struct {
 	name             string
 	nameWithPlatform string
 	sessionID        string
+	sharedKey        string
 	excludes         []string
 	extraOpts        func() []llb.LocalOption
 	once             sync.Once
@@ -330,10 +335,11 @@ func (a *asyncLocalOutput) do() {
 	if a.extraOpts != nil {
 		extraOpts = a.extraOpts()
 	}
+	sharedKey := "context:" + a.nameWithPlatform + "-" + a.sharedKey
 	opts := append([]llb.LocalOption{
 		llb.WithCustomName("[context " + a.nameWithPlatform + "] load from client"),
 		llb.SessionID(a.sessionID),
-		llb.SharedKeyHint("context:" + a.nameWithPlatform),
+		llb.SharedKeyHint(sharedKey),
 		llb.ExcludePatterns(a.excludes),
 	}, extraOpts...)
 

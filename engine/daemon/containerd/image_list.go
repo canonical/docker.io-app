@@ -3,6 +3,8 @@ package containerd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"path"
 	"runtime"
 	"sort"
 	"strings"
@@ -37,7 +39,7 @@ type configLabels struct {
 
 	Config struct {
 		Labels map[string]string `json:"Labels,omitempty"`
-	} `json:"config,omitempty"`
+	} `json:"config"`
 }
 
 var acceptedImageFilterTags = map[string]bool{
@@ -58,6 +60,12 @@ func (r byCreated) Len() int           { return len(r) }
 func (r byCreated) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r byCreated) Less(i, j int) bool { return r[i].Created < r[j].Created }
 
+// sharedSizeData groups chainIDs and content descriptors for a single image.
+type sharedSizeData struct {
+	chainIDs []digest.Digest
+	content  []ocispec.Descriptor
+}
+
 // Images returns a filtered list of images.
 //
 // TODO(thaJeztah): verify behavior of `RepoDigests` and `RepoTags` for images without (untagged) or multiple tags; see https://github.com/moby/moby/issues/43861
@@ -75,21 +83,6 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 	imgs, err := i.images.List(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	// TODO(thaJeztah): do we need to take multiple snapshotters into account? See https://github.com/moby/moby/issues/45273
-	snapshotter := i.snapshotterService(i.snapshotter)
-	sizeCache := make(map[digest.Digest]int64)
-	snapshotSizeFn := func(d digest.Digest) (int64, error) {
-		if s, ok := sizeCache[d]; ok {
-			return s, nil
-		}
-		usage, err := snapshotter.Usage(ctx, d.String())
-		if err != nil {
-			return 0, err
-		}
-		sizeCache[d] = usage.Size
-		return usage.Size, nil
 	}
 
 	uniqueImages := map[digest.Digest]c8dimages.Image{}
@@ -114,7 +107,7 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 	}
 
 	// TODO: Allow platform override?
-	platformMatcher := matchAnyWithPreference(platforms.Default(), nil)
+	platformMatcher := matchAnyWithPreference(i.hostPlatformMatcher(), nil)
 
 	for _, img := range imgs {
 		isDangling := isDanglingImage(img)
@@ -150,13 +143,15 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 	eg.SetLimit(runtime.NumCPU() * 2)
 
 	var (
-		summaries = make([]imagetypes.Summary, 0, len(imgs))
-		root      []*[]digest.Digest
-		layers    map[digest.Digest]int
+		summaries  = make([]imagetypes.Summary, 0, len(imgs))
+		sharedData []sharedSizeData
+		layers     map[digest.Digest]int
+		blobs      map[digest.Digest]int
 	)
 	if opts.SharedSize {
-		root = make([]*[]digest.Digest, 0, len(imgs))
+		sharedData = make([]sharedSizeData, 0, len(imgs))
 		layers = make(map[digest.Digest]int)
+		blobs = make(map[digest.Digest]int)
 	}
 
 	for _, img := range uniqueImages {
@@ -170,16 +165,28 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 				return nil
 			}
 
-			if !opts.Manifests {
+			if !opts.Manifests && !opts.Identity {
 				image.Manifests = nil
 			}
 			resultsMut.Lock()
 			summaries = append(summaries, *image)
 
 			if opts.SharedSize {
-				root = append(root, &multiSummary.AllChainIDs)
+				sharedData = append(sharedData, sharedSizeData{
+					chainIDs: multiSummary.AllChainIDs,
+					content:  multiSummary.content,
+				})
 				for _, id := range multiSummary.AllChainIDs {
 					layers[id] = layers[id] + 1
+				}
+
+				seen := map[digest.Digest]struct{}{}
+				for _, desc := range multiSummary.content {
+					if _, ok := seen[desc.Digest]; ok {
+						continue
+					}
+					seen[desc.Digest] = struct{}{}
+					blobs[desc.Digest]++
 				}
 			}
 			resultsMut.Unlock()
@@ -192,8 +199,24 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 	}
 
 	if opts.SharedSize {
-		for n, chainIDs := range root {
-			sharedSize, err := computeSharedSize(*chainIDs, layers, snapshotSizeFn)
+		// TODO(thaJeztah): do we need to take multiple snapshotters into account? See https://github.com/moby/moby/issues/45273
+		snapshotter := i.snapshotterService(i.snapshotter)
+		sizeCache := make(map[digest.Digest]int64)
+		for n, data := range sharedData {
+			sharedSize, err := computeSharedSize(data, layers, blobs, func(d digest.Digest) (int64, error) {
+				if s, ok := sizeCache[d]; ok {
+					return s, nil
+				}
+				usage, err := snapshotter.Usage(ctx, d.String())
+				if err != nil {
+					if cerrdefs.IsNotFound(err) {
+						return 0, nil
+					}
+					return 0, err
+				}
+				sizeCache[d] = usage.Size
+				return usage.Size, nil
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -227,6 +250,15 @@ type multiPlatformSummary struct {
 
 	// BestPlatform is the platform of the best image.
 	BestPlatform ocispec.Platform
+
+	manifestIdentityRefs map[digest.Digest]manifestIdentityRef
+
+	content []ocispec.Descriptor
+}
+
+type manifestIdentityRef struct {
+	manifest *ImageManifest
+	platform ocispec.Platform
 }
 
 func (i *ImageService) multiPlatformSummary(ctx context.Context, img c8dimages.Image, platformMatcher platforms.MatchComparer) (*multiPlatformSummary, error) {
@@ -260,6 +292,7 @@ func (i *ImageService) multiPlatformSummary(ctx context.Context, img c8dimages.I
 		var contentSize int64
 		if err := i.walkPresentChildren(ctx, target, func(ctx context.Context, desc ocispec.Descriptor) error {
 			contentSize += desc.Size
+			summary.content = append(summary.content, desc)
 			return nil
 		}); err == nil {
 			mfstSummary.Size.Content = contentSize
@@ -341,6 +374,16 @@ func (i *ImageService) multiPlatformSummary(ctx context.Context, img c8dimages.I
 		}
 
 		platform := mfstSummary.ImageData.Platform
+		if available {
+			if summary.manifestIdentityRefs == nil {
+				summary.manifestIdentityRefs = map[digest.Digest]manifestIdentityRef{}
+			}
+			summary.manifestIdentityRefs[target.Digest] = manifestIdentityRef{
+				manifest: img,
+				platform: platform,
+			}
+		}
+
 		// Filter out platforms that don't match the requested platform.  Do it
 		// after the size, container count and chainIDs are summed up to have
 		// the single combined entry still represent the whole multi-platform
@@ -381,6 +424,9 @@ func (i *ImageService) imageSummary(ctx context.Context, img c8dimages.Image, pl
 	if err != nil {
 		return nil, nil, err
 	}
+	if opts.Identity {
+		i.populateManifestIdentitiesFromCache(ctx, img.Target, summary)
+	}
 
 	best := summary.Best
 	if best == nil {
@@ -401,7 +447,7 @@ func (i *ImageService) imageSummary(ctx context.Context, img c8dimages.Image, pl
 		}, summary, nil
 	}
 
-	image, err := i.singlePlatformImage(ctx, i.content, tagsByDigest[best.RealTarget.Digest], best)
+	image, err := i.singlePlatformImage(ctx, tagsByDigest[best.RealTarget.Digest], best)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -413,7 +459,44 @@ func (i *ImageService) imageSummary(ctx context.Context, img c8dimages.Image, pl
 	return image, summary, nil
 }
 
-func (i *ImageService) singlePlatformImage(ctx context.Context, contentStore content.Store, repoTags []string, imageManifest *ImageManifest) (*imagetypes.Summary, error) {
+func (i *ImageService) populateManifestIdentitiesFromCache(ctx context.Context, imageDesc ocispec.Descriptor, summary *multiPlatformSummary) {
+	if summary == nil {
+		return
+	}
+	for idx := range summary.Manifests {
+		mfst := &summary.Manifests[idx]
+		if mfst.Kind != imagetypes.ManifestKindImage || !mfst.Available {
+			continue
+		}
+		if mfst.ImageData == nil {
+			continue
+		}
+		ref, ok := summary.manifestIdentityRefs[mfst.Descriptor.Digest]
+		if !ok || ref.manifest == nil {
+			continue
+		}
+		idt, err := i.imageIdentityFromCache(ctx, imageDesc, &multiPlatformSummary{
+			Best:         ref.manifest,
+			BestPlatform: ref.platform,
+		})
+		if err != nil {
+			logger := log.G(ctx).WithError(err).WithFields(log.Fields{
+				"image":    imageDesc.Digest,
+				"manifest": mfst.Descriptor.Digest,
+				"platform": platforms.FormatAll(ref.platform),
+			})
+			if cerrdefs.IsNotFound(err) {
+				logger.Debug("skipping manifest Identity property: manifest content not found")
+				continue
+			}
+			logger.Warn("failed to determine manifest Identity property")
+			continue
+		}
+		mfst.ImageData.Identity = idt
+	}
+}
+
+func (i *ImageService) singlePlatformImage(ctx context.Context, repoTags []string, imageManifest *ImageManifest) (*imagetypes.Summary, error) {
 	var repoDigests []string
 	rawImg := imageManifest.Metadata()
 	target := rawImg.Target.Digest
@@ -543,22 +626,17 @@ func (i *ImageService) setupFilters(ctx context.Context, imageFilters filters.Ar
 		return nil, err
 	}
 
+	now := time.Now()
 	err = imageFilters.WalkValues("until", func(value string) error {
-		ts, err := timestamp.GetTimestamp(value, time.Now())
+		until, err := timestamp.Parse(value, now)
 		if err != nil {
-			return err
+			return errdefs.InvalidParameter(fmt.Errorf("invalid value for 'until' filter: %w", err))
 		}
-		seconds, nanoseconds, err := timestamp.ParseTimestamps(ts, 0)
-		if err != nil {
-			return err
-		}
-		until := time.Unix(seconds, nanoseconds)
 
 		fltrs = append(fltrs, func(image c8dimages.Image) bool {
-			created := image.CreatedAt
-			return created.Before(until)
+			return image.CreatedAt.Before(until)
 		})
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -588,13 +666,26 @@ func (i *ImageService) setupFilters(ctx context.Context, imageFilters filters.Ar
 			if err != nil {
 				return false
 			}
+			// Match the filter pattern against both the familiar and
+			// canonical forms of the image reference (with and
+			// without tag), so that e.g. "alpine" and
+			// "docker.io/library/alpine" (and their glob variants)
+			// both match.
+			targets := []string{
+				reference.FamiliarString(ref),
+				reference.FamiliarName(ref),
+				reference.TagNameOnly(ref).String(),
+				ref.Name(),
+			}
 			for _, value := range refs {
-				found, err := reference.FamiliarMatch(value, ref)
-				if err != nil {
-					return false
-				}
-				if found {
-					return found
+				for _, target := range targets {
+					matched, err := path.Match(value, target)
+					if err != nil {
+						return false
+					}
+					if matched {
+						return true
+					}
 				}
 			}
 			return false
@@ -634,8 +725,8 @@ func setupLabelFilter(ctx context.Context, store content.Store, fltrs filters.Ar
 			negate := strings.HasSuffix(fltrName, "!")
 
 			// If filter value is key!=value then flip the above.
-			if strings.HasSuffix(k, "!") {
-				k = strings.TrimSuffix(k, "!")
+			if before, ok := strings.CutSuffix(k, "!"); ok {
+				k = before
 				negate = !negate
 			}
 
@@ -659,6 +750,14 @@ func setupLabelFilter(ctx context.Context, store content.Store, fltrs filters.Ar
 		errFoundConfig := errors.New("success, found matching config")
 
 		err := c8dimages.Dispatch(ctx, presentChildrenHandler(store, c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) (subdescs []ocispec.Descriptor, _ error) {
+			if c8dimages.IsManifestType(desc.MediaType) {
+				// BuildKit attestation manifests carry a config with no user
+				// labels, which would cause negated label filters
+				// (label!=key=value) to spuriously match. Skip the whole subtree.
+				if _, has := desc.Annotations[attestation.DockerAnnotationReferenceType]; has {
+					return nil, c8dimages.ErrSkipDesc
+				}
+			}
 			if !c8dimages.IsConfigType(desc.MediaType) {
 				return nil, nil
 			}
@@ -690,6 +789,9 @@ func setupLabelFilter(ctx context.Context, store content.Store, fltrs filters.Ar
 					continue
 				} else if !exists {
 					// We are checking value and label doesn't exist.
+					if check.negate {
+						continue
+					}
 					return nil, nil
 				}
 
@@ -718,9 +820,9 @@ func setupLabelFilter(ctx context.Context, store content.Store, fltrs filters.Ar
 	}, nil
 }
 
-func computeSharedSize(chainIDs []digest.Digest, layers map[digest.Digest]int, sizeFn func(d digest.Digest) (int64, error)) (int64, error) {
+func computeSharedSize(data sharedSizeData, layers map[digest.Digest]int, blobs map[digest.Digest]int, sizeFn func(d digest.Digest) (int64, error)) (int64, error) {
 	var sharedSize int64
-	for _, chainID := range chainIDs {
+	for _, chainID := range data.chainIDs {
 		if layers[chainID] == 1 {
 			continue
 		}
@@ -735,6 +837,21 @@ func computeSharedSize(chainIDs []digest.Digest, layers map[digest.Digest]int, s
 		}
 		sharedSize += size
 	}
+
+	seen := map[digest.Digest]struct{}{}
+	for _, desc := range data.content {
+		if blobs[desc.Digest] == 1 {
+			continue
+		}
+
+		if _, ok := seen[desc.Digest]; ok {
+			continue
+		}
+
+		seen[desc.Digest] = struct{}{}
+		sharedSize += desc.Size
+	}
+
 	return sharedSize, nil
 }
 

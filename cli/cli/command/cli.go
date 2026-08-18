@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package command
 
@@ -60,6 +60,7 @@ type Cli interface {
 type DockerCli struct {
 	configFile         *configfile.ConfigFile
 	options            *cliflags.ClientOptions
+	clientOpts         []client.Opt
 	in                 *streams.In
 	out                *streams.Out
 	err                *streams.Out
@@ -72,7 +73,6 @@ type DockerCli struct {
 	dockerEndpoint     docker.Endpoint
 	contextStoreConfig *store.Config
 	initTimeout        time.Duration
-	userAgent          string
 	res                telemetryResource
 
 	// baseCtx is the base context used for internal operations. In the future
@@ -533,8 +533,7 @@ func (cli *DockerCli) initialize() error {
 			return
 		}
 		if cli.client == nil {
-			ops := []client.Opt{client.WithUserAgent(cli.userAgent)}
-			if cli.client, cli.initErr = newAPIClientFromEndpoint(cli.dockerEndpoint, cli.configFile, ops...); cli.initErr != nil {
+			if cli.client, cli.initErr = newAPIClientFromEndpoint(cli.dockerEndpoint, cli.configFile, cli.clientOpts...); cli.initErr != nil {
 				return
 			}
 		}
@@ -567,11 +566,12 @@ type ServerInfo struct {
 // It applies by default the standard streams, and the content trust from
 // environment.
 func NewDockerCli(ops ...CLIOption) (*DockerCli, error) {
-	defaultOps := []CLIOption{
+	defaultOps := make([]CLIOption, 0, 3+len(ops))
+	defaultOps = append(defaultOps,
 		WithDefaultContextStoreConfig(),
 		WithStandardStreams(),
 		WithUserAgent(UserAgent()),
-	}
+	)
 	ops = append(defaultOps, ops...)
 
 	cli := &DockerCli{baseCtx: context.Background()}

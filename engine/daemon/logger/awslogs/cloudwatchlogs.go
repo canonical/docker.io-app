@@ -39,10 +39,9 @@ const (
 	logStreamKey           = "awslogs-stream"
 	logCreateGroupKey      = "awslogs-create-group"
 	logCreateStreamKey     = "awslogs-create-stream"
-	tagKey                 = "tag"
 	datetimeFormatKey      = "awslogs-datetime-format"
 	multilinePatternKey    = "awslogs-multiline-pattern"
-	credentialsEndpointKey = "awslogs-credentials-endpoint" //nolint:gosec // G101: Potential hardcoded credentials
+	credentialsEndpointKey = "awslogs-credentials-endpoint" // #nosec G101 -- Potential hardcoded credentials
 	forceFlushIntervalKey  = "awslogs-force-flush-interval-seconds"
 	maxBufferedEventsKey   = "awslogs-max-buffered-events"
 	logFormatKey           = "awslogs-format"
@@ -62,7 +61,7 @@ const (
 	// this replacement happens.
 	maximumBytesPerEvent = 262144 - perEventBytes
 
-	credentialsEndpoint = "http://169.254.170.2" //nolint:gosec // G101: Potential hardcoded credentials
+	credentialsEndpoint = "http://169.254.170.2" // #nosec G101 -- Potential hardcoded credentials
 
 	// See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html
 	logsFormatHeader = "x-amzn-logs-format"
@@ -111,16 +110,6 @@ type wrappedEvent struct {
 	insertOrder   int
 }
 type byTimestamp []wrappedEvent
-
-// init registers the awslogs driver
-func init() {
-	if err := logger.RegisterLogDriver(name, New); err != nil {
-		panic(err)
-	}
-	if err := logger.RegisterLogOptValidator(name, ValidateLogOpt); err != nil {
-		panic(err)
-	}
-}
 
 // eventBatch holds the events that are batched for submission and the
 // associated data about it.
@@ -739,13 +728,14 @@ func (l *logStream) putLogEvents(events []types.InputLogEvent, sequenceToken *st
 func ValidateLogOpt(cfg map[string]string) error {
 	for key := range cfg {
 		switch key {
+		case logger.AttrLogTag:
+			continue
 		case logGroupKey:
 		case logStreamKey:
 		case logCreateGroupKey:
 		case logCreateStreamKey:
 		case regionKey:
 		case endpointKey:
-		case tagKey:
 		case datetimeFormatKey:
 		case multilinePatternKey:
 		case credentialsEndpointKey:

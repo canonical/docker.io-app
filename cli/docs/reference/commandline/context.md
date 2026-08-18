@@ -15,7 +15,7 @@ Manage contexts
 | [`rm`](context_rm.md)           | Remove one or more contexts                                       |
 | [`show`](context_show.md)       | Print the name of the current context                             |
 | [`update`](context_update.md)   | Update a context                                                  |
-| [`use`](context_use.md)         | Set the current docker context                                    |
+| [`use`](context_use.md)         | Set the default docker context                                    |
 
 
 

@@ -38,7 +38,7 @@ jobs:
     steps:
       -
         name: Run
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         with:
           targets: ${{ matrix.target }}
 
@@ -48,7 +48,9 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       -
         name: Generate
         shell: 'script --return --quiet --command "bash {0}"'
@@ -74,9 +76,36 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       -
         name: Run
         shell: 'script --return --quiet --command "bash {0}"'
         run: |
           make -f docker.Makefile ${{ matrix.target }}
+
+  validate-gocompat:
+    runs-on: ubuntu-24.04
+    env:
+      GOPATH: ${{ github.workspace }}
+      GO111MODULE: off
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src/github.com/docker/cli
+          persist-credentials: false
+      -
+        name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      -
+        name: Run gocompat check
+        shell: 'script --return --quiet --command "bash {0}"'
+        working-directory: ${{ github.workspace }}/src/github.com/docker/cli
+        run: |
+          make -C ./internal/gocompat verify
