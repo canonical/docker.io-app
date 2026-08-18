@@ -16,6 +16,7 @@ import (
 	"github.com/cpuguy83/tar2go"
 	"github.com/moby/go-archive/compression"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/moby/moby/v2/integration/internal/build"
 	"github.com/moby/moby/v2/integration/internal/container"
 	iimage "github.com/moby/moby/v2/integration/internal/image"
@@ -90,6 +91,8 @@ func TestSaveCheckTimes(t *testing.T) {
 
 // Regression test for https://github.com/moby/moby/issues/47065
 func TestSaveOCI(t *testing.T) {
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.44"), "OCI layout support was introduced in v25")
+
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
@@ -232,19 +235,25 @@ func TestSaveAndLoadPlatform(t *testing.T) {
 			containerdStoreOnly: true,
 			pullPlatforms: []ocispec.Platform{
 				{OS: "linux", Architecture: "amd64"},
+				{OS: "linux", Architecture: "ppc64le"},
 				{OS: "linux", Architecture: "riscv64"},
+				{OS: "linux", Architecture: "s390x"},
 				{OS: "linux", Architecture: "arm64", Variant: "v8"},
 			},
 			savePlatforms: nil,
 			loadPlatforms: nil,
 			expectedSavedPlatforms: []ocispec.Platform{
 				{OS: "linux", Architecture: "amd64"},
+				{OS: "linux", Architecture: "ppc64le"},
 				{OS: "linux", Architecture: "riscv64"},
+				{OS: "linux", Architecture: "s390x"},
 				{OS: "linux", Architecture: "arm64", Variant: "v8"},
 			},
 			expectedLoadedPlatforms: []ocispec.Platform{
 				{OS: "linux", Architecture: "amd64"},
+				{OS: "linux", Architecture: "ppc64le"},
 				{OS: "linux", Architecture: "riscv64"},
+				{OS: "linux", Architecture: "s390x"},
 				{OS: "linux", Architecture: "arm64", Variant: "v8"},
 			},
 		},
@@ -480,7 +489,7 @@ func TestSaveDirectoryPermissions(t *testing.T) {
 RUN adduser -D user && mkdir -p /opt/a/b && chown -R user:user /opt/a
 RUN touch /opt/a/b/c && chown user:user /opt/a/b/c`
 
-	imgID := build.Do(ctx, t, apiClient, fakecontext.New(t, t.TempDir(), fakecontext.WithDockerfile(dockerfile)))
+	imgID := build.Do(ctx, t, apiClient, fakecontext.New(t, t.TempDir(), fakecontext.WithDockerfile(dockerfile)), client.ImageBuildOptions{})
 
 	rdr, err := apiClient.ImageSave(ctx, []string{imgID})
 	assert.NilError(t, err)

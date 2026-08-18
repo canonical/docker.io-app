@@ -28,7 +28,6 @@ WARNING! This will remove anonymous local volumes not used by at least one conta
 Are you sure you want to continue? [y/N] y
 Deleted Volumes:
 07c7bdf3e34ab76d921894c2b834f073721fccfbbcba792aa7648e3a7a664c2e
-my-named-vol
 
 Total reclaimed space: 36 B
 ```
@@ -40,7 +39,19 @@ Use the `--all` flag to prune both unused anonymous and named volumes.
 ### <a name="filter"></a> Filtering (--filter)
 
 The filtering flag (`--filter`) format is of "key=value". If there is more
-than one filter, then pass multiple flags (e.g., `--filter "foo=bar" --filter "bif=baz"`)
+than one filter, then pass multiple flags (e.g., `--filter "foo=bar" --filter "bif=baz"`).
+
+When multiple filters are provided, they are combined as follows:
+
+- Multiple filters with **different keys** are combined using AND logic.
+  A volume must satisfy all filter conditions to be pruned.
+- Multiple filters with the **same key** are combined using OR logic.
+  A volume is pruned if it matches any of the values for that key.
+
+For example, `--filter "label=foo" --filter "label=bar"` prunes volumes that
+have **either** the `foo` **or** `bar` label, while
+`--filter "label=foo" --filter "label!=bar"` prunes volumes that have the
+`foo` label **and** do not have the `bar` label.
 
 The currently supported filters are:
 

@@ -94,6 +94,7 @@ func TestDaemonConfigValidation(t *testing.T) {
 	tests := []struct {
 		name        string
 		args        []string
+		envs        []string
 		expectedOut string
 	}{
 		{
@@ -121,12 +122,20 @@ func TestDaemonConfigValidation(t *testing.T) {
 			args:        append(params, filepath.Join(testdata, "valid-config-1.json")),
 			expectedOut: validOut,
 		},
+		{
+			name:        "unmet system requirements",
+			envs:        []string{"TEST_SYSTEM_REQUIREMENTS_FAILURE=1"},
+			expectedOut: failedOut,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_ = testutil.StartSpan(ctx, t)
 			cmd := exec.Command(dockerBinary, tc.args...)
+			if tc.envs != nil {
+				cmd.Env = append(cmd.Env, tc.envs...)
+			}
 			out, err := cmd.CombinedOutput()
 			assert.Check(t, is.Contains(string(out), tc.expectedOut))
 			if tc.expectedOut == failedOut {
@@ -499,7 +508,7 @@ func testLiveRestoreAutoRemove(t *testing.T) {
 		return d, finishContainer, cID
 	}
 
-	t.Run("engine restart shouldnt kill alive containers", func(t *testing.T) {
+	t.Run("engine restart should not kill alive containers", func(t *testing.T) {
 		d, finishContainer, cID := run(t)
 
 		d.Restart(t, "--live-restore", "--iptables=false", "--ip6tables=false")

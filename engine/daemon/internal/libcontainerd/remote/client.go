@@ -449,7 +449,7 @@ func (t *task) CreateCheckpoint(ctx context.Context, checkpointDir string, exit 
 	var cpDesc *ocispec.Descriptor
 	for _, m := range index.Manifests {
 		if m.MediaType == c8dimages.MediaTypeContainerd1Checkpoint {
-			cpDesc = &m //nolint:gosec
+			cpDesc = &m
 			break
 		}
 	}
@@ -685,9 +685,9 @@ func (c *client) processEventStream(ctx context.Context, ns string) {
 			case *apievents.TaskDelete:
 				c.logger.WithFields(log.Fields{
 					"topic":     ev.Topic,
-					"type":      reflect.TypeOf(t),
+					"type":      reflect.TypeFor[*apievents.TaskDelete](),
 					"container": t.ContainerID,
-				}).Info("ignoring event")
+				}).Info("received task-delete event from containerd")
 			default:
 				c.logger.WithFields(log.Fields{
 					"topic": ev.Topic,

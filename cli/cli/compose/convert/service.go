@@ -1,11 +1,16 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.25
+
 package convert
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -80,8 +85,7 @@ func Service(
 		return swarm.ServiceSpec{}, err
 	}
 
-	restartPolicy, err := convertRestartPolicy(
-		service.Restart, service.Deploy.RestartPolicy)
+	restartPolicy, err := convertRestartPolicy(service.Restart, service.Deploy.RestartPolicy)
 	if err != nil {
 		return swarm.ServiceSpec{}, err
 	}
@@ -174,7 +178,11 @@ func Service(
 }
 
 func getPlacementPreference(preferences []composetypes.PlacementPreferences) []swarm.PlacementPreference {
-	result := []swarm.PlacementPreference{}
+	if len(preferences) == 0 {
+		return nil
+	}
+
+	result := make([]swarm.PlacementPreference, 0, len(preferences))
 	for _, preference := range preferences {
 		spreadDescriptor := preference.Spread
 		result = append(result, swarm.PlacementPreference{
@@ -198,7 +206,7 @@ func convertServiceNetworks(
 		}
 	}
 
-	nets := []swarm.NetworkAttachmentConfig{}
+	nets := make([]swarm.NetworkAttachmentConfig, 0, len(networks))
 	for networkName, nw := range networks {
 		networkConfig, ok := networkConfigs[networkName]
 		if !ok && networkName != defaultNetwork {
@@ -241,8 +249,6 @@ func convertServiceSecrets(
 	secrets []composetypes.ServiceSecretConfig,
 	secretSpecs map[string]composetypes.SecretConfig,
 ) ([]*swarm.SecretReference, error) {
-	refs := []*swarm.SecretReference{}
-
 	lookup := func(key string) (composetypes.FileObjectConfig, error) {
 		secretSpec, exists := secretSpecs[key]
 		if !exists {
@@ -250,6 +256,8 @@ func convertServiceSecrets(
 		}
 		return composetypes.FileObjectConfig(secretSpec), nil
 	}
+
+	refs := make([]*swarm.SecretReference, 0, len(secrets))
 	for _, secret := range secrets {
 		obj, err := convertFileObject(namespace, composetypes.FileReferenceConfig(secret), lookup)
 		if err != nil {
@@ -463,37 +471,58 @@ func convertHealthcheck(healthcheck *composetypes.HealthCheckConfig) (*container
 	}, nil
 }
 
-func convertRestartPolicy(restart string, source *composetypes.RestartPolicy) (*swarm.RestartPolicy, error) {
-	// TODO: log if restart is being ignored
-	if source == nil {
-		policy, err := opts.ParseRestartPolicy(restart)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case policy.IsNone():
-			return nil, nil
-		case policy.IsAlways(), policy.IsUnlessStopped():
-			return &swarm.RestartPolicy{
-				Condition: swarm.RestartPolicyConditionAny,
-			}, nil
-		case policy.IsOnFailure():
-			attempts := uint64(policy.MaximumRetryCount)
-			return &swarm.RestartPolicy{
-				Condition:   swarm.RestartPolicyConditionOnFailure,
-				MaxAttempts: &attempts,
-			}, nil
-		default:
-			return nil, fmt.Errorf("unknown restart policy: %s", restart)
-		}
+// convertRestartPolicy converts the service's restart-policy. It prefers
+// service.deploy.restart_policy, but falls back to parsing the legacy
+// service.restart if service.deploy.restart_policy is not set.
+func convertRestartPolicy(restart string, restartPolicy *composetypes.RestartPolicy) (*swarm.RestartPolicy, error) {
+	// Use service.deploy.restart_policy, if set.
+	if restartPolicy != nil {
+		// TODO: log or error if both "service.restart" and "service.deploy.restartpolicy" are set.
+		return &swarm.RestartPolicy{
+			Condition:   swarm.RestartPolicyCondition(restartPolicy.Condition),
+			Delay:       composetypes.ConvertDurationPtr(restartPolicy.Delay),
+			MaxAttempts: restartPolicy.MaxAttempts,
+			Window:      composetypes.ConvertDurationPtr(restartPolicy.Window),
+		}, nil
+	}
+	if restart == "" {
+		return nil, nil
 	}
 
-	return &swarm.RestartPolicy{
-		Condition:   swarm.RestartPolicyCondition(source.Condition),
-		Delay:       composetypes.ConvertDurationPtr(source.Delay),
-		MaxAttempts: source.MaxAttempts,
-		Window:      composetypes.ConvertDurationPtr(source.Window),
-	}, nil
+	// Fall back to the legacy service.restart restart-policy.
+	policy, err := opts.ParseRestartPolicy(restart)
+	if err != nil {
+		return nil, err
+	}
+	if policy.MaximumRetryCount < 0 {
+		return nil, errors.New("invalid restart policy: maximum retry count cannot be negative")
+	}
+	uint64Ptr := func(i int) *uint64 {
+		if i <= 0 {
+			return nil
+		}
+		p := uint64(i)
+		return &p
+	}
+
+	switch policy.Name {
+	case container.RestartPolicyDisabled, "":
+		return nil, nil
+	case container.RestartPolicyAlways, container.RestartPolicyUnlessStopped:
+		return &swarm.RestartPolicy{
+			Condition:   swarm.RestartPolicyConditionAny,
+			MaxAttempts: uint64Ptr(policy.MaximumRetryCount),
+		}, nil
+	case container.RestartPolicyOnFailure:
+		return &swarm.RestartPolicy{
+			Condition:   swarm.RestartPolicyConditionOnFailure,
+			MaxAttempts: uint64Ptr(policy.MaximumRetryCount),
+		}, nil
+	default:
+		return nil, fmt.Errorf("invalid restart policy: unknown policy '%s' (must be one of '%s', '%s', '%s', or '%s')",
+			policy.Name, container.RestartPolicyDisabled, container.RestartPolicyAlways, container.RestartPolicyOnFailure, container.RestartPolicyUnlessStopped,
+		)
+	}
 }
 
 func convertUpdateConfig(source *composetypes.UpdateConfig) *swarm.UpdateConfig {
@@ -564,20 +593,17 @@ func convertResources(source composetypes.Resources) (*swarm.ResourceRequirement
 }
 
 func convertEndpointSpec(endpointMode string, source []composetypes.ServicePortConfig) *swarm.EndpointSpec {
-	portConfigs := []swarm.PortConfig{}
+	portConfigs := make([]swarm.PortConfig, 0, len(source))
 	for _, port := range source {
-		portConfig := swarm.PortConfig{
+		portConfigs = append(portConfigs, swarm.PortConfig{
 			Protocol:      network.IPProtocol(port.Protocol),
 			TargetPort:    port.Target,
 			PublishedPort: port.Published,
 			PublishMode:   swarm.PortConfigPublishMode(port.Mode),
-		}
-		portConfigs = append(portConfigs, portConfig)
+		})
 	}
 
-	sort.Slice(portConfigs, func(i, j int) bool {
-		return portConfigs[i].PublishedPort < portConfigs[j].PublishedPort
-	})
+	slices.SortFunc(portConfigs, swarm.PortConfig.Compare)
 
 	return &swarm.EndpointSpec{
 		Mode:  swarm.ResolutionMode(strings.ToLower(endpointMode)),
@@ -698,28 +724,22 @@ func convertCredentialSpec(namespace Namespace, spec composetypes.CredentialSpec
 }
 
 func convertUlimits(origUlimits map[string]*composetypes.UlimitsConfig) []*container.Ulimit {
-	newUlimits := make(map[string]*container.Ulimit)
+	ulimits := make([]*container.Ulimit, 0, len(origUlimits))
 	for name, u := range origUlimits {
+		soft, hard := int64(u.Soft), int64(u.Hard)
 		if u.Single != 0 {
-			newUlimits[name] = &container.Ulimit{
-				Name: name,
-				Soft: int64(u.Single),
-				Hard: int64(u.Single),
-			}
-		} else {
-			newUlimits[name] = &container.Ulimit{
-				Name: name,
-				Soft: int64(u.Soft),
-				Hard: int64(u.Hard),
-			}
+			soft, hard = int64(u.Single), int64(u.Single)
 		}
+
+		ulimits = append(ulimits, &container.Ulimit{
+			Name: name,
+			Soft: soft,
+			Hard: hard,
+		})
 	}
-	ulimits := make([]*container.Ulimit, 0, len(newUlimits))
-	for _, ulimit := range newUlimits {
-		ulimits = append(ulimits, ulimit)
-	}
-	sort.SliceStable(ulimits, func(i, j int) bool {
-		return ulimits[i].Name < ulimits[j].Name
+
+	slices.SortFunc(ulimits, func(a, b *container.Ulimit) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return ulimits
 }

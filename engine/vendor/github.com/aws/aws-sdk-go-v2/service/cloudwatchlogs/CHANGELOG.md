@@ -1,3 +1,199 @@
+# v1.80.0 (2026-07-21)
+
+* **Feature**: Add an option to clients to disable clock skew
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.79.1 (2026-07-13)
+
+* No change notes available for this release.
+
+# v1.79.0 (2026-07-06)
+
+* **Feature**: Add request serialization snapshot tests.
+* **Feature**: Added PutStorageTierPolicy and GetStorageTierPolicy APIs to Amazon CloudWatch Logs. Customers can now configure account-level Intelligent Tiering to automatically optimize log storage costs by moving infrequently accessed data to lower-cost storage tiers.
+
+# v1.78.2 (2026-07-01)
+
+* **Bug Fix**: Bump smithy-go to 1.27.3, fix JSON encorder for document.Number, endpoint host label format validation and CBOR union serialization on new serde
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.78.1 (2026-06-29)
+
+* No change notes available for this release.
+
+# v1.78.0 (2026-06-22)
+
+* **Feature**: CloudWatch Logs Updates - New APIs introduced to support syslog ingestion to a log group. For more information, see CloudWatch Logs API documentation.
+
+# v1.77.0 (2026-06-18)
+
+* **Feature**: Added optional startFromHead parameter to FilterLogEvents enabling descending timestamp order (newest first) when set to false. Default true preserves existing ascending order. Reverse sorting requires a startTime on or after Jan 1, 2024.
+
+# v1.76.0 (2026-06-15)
+
+* **Feature**: Added endTimeOffset parameter to Scheduled Queries APIs (Create, Update, Get) enabling bounded time window configuration. Introduced scheduleType filter (CUSTOMER MANAGED, AWS MANAGED) for ListScheduledQueries and exposed it in Get and Update responses.
+
+# v1.75.2 (2026-06-08)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.75.1 (2026-06-04)
+
+* **Dependency Update**: Update to smithy-go v1.27.1 to fix several union-related deserialization bugs in schema-serde-enabled services.
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.75.0 (2026-06-03.2)
+
+* **Feature**: Adding new BDD representation of endpoint ruleset
+
+# v1.74.4 (2026-06-03)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.74.3 (2026-06-02)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.74.2 (2026-05-29)
+
+* **Dependency Update**: Update to smithy-go v1.26.0.
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.74.1 (2026-05-28)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.74.0 (2026-05-15)
+
+* **Feature**: Updating the max limit for start query api parameter.
+
+# v1.73.0 (2026-05-04)
+
+* **Feature**: Adding an additional optional deliverySourceConfiguration field to PutDeliverySource API. This enables customers to pass service-specific configurations through IngestionHub such as tracing enablement or sampling rates that will be propagated to the source resource.
+
+# v1.72.0 (2026-05-01)
+
+* **Feature**: Adds support for filtering log groups by tags in the ListLogGroups API via the new logGroupTags parameter.
+
+# v1.71.1 (2026-04-29)
+
+* **Dependency Update**: Update to smithy-go v1.25.1.
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.71.0 (2026-04-27)
+
+* **Feature**: Adds support for selecting all logs sources and types in a single association.
+
+# v1.70.0 (2026-04-24)
+
+* **Feature**: Adding nextToken and maxItems to the GetQueryResults API.
+
+# v1.69.1 (2026-04-17)
+
+* **Dependency Update**: Bump smithy-go to 1.25.0 to support endpointBdd trait
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.69.0 (2026-04-16)
+
+* **Feature**: Endpoint update for CloudWatch Logs Streaming APIs.
+
+# v1.68.0 (2026-04-03)
+
+* **Feature**: Added queryDuration, bytesScanned, and userIdentity fields to the QueryInfo response object returned by DescribeQueries. Customers can now view detailed query cost information including who ran the query, how long it took, and the volume of data scanned.
+
+# v1.67.0 (2026-04-02)
+
+* **Feature**: We are pleased to announce that our logs transformation csv processor now has a destination field, allowing you to specify under which parent node parsed columns be placed under.
+
+# v1.66.0 (2026-03-30)
+
+* **Feature**: Adds Lookup Tables to CloudWatch Logs for log enrichment using CSV key-value data with KMS encryption support.
+
+# v1.65.0 (2026-03-26)
+
+* **Feature**: This release adds parameter support to saved queries in CloudWatch Logs Insights. Define reusable query templates with named placeholders, invoke them using start query. Available in Console, CLI and SDK
+* **Bug Fix**: Fix a bug where a recorded clock skew could persist on the client even if the client and server clock ended up realigning.
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.64.2 (2026-03-23)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.64.1 (2026-03-13)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.64.0 (2026-03-03)
+
+* **Feature**: CloudWatch Logs updates- Added support for the PutBearerTokenAuthentication API to enable or disable bearer token authentication on a log group. For more information, see CloudWatch Logs API documentation.
+* **Dependency Update**: Bump minimum Go version to 1.24
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.63.2 (2026-02-23)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.63.1 (2026-01-09)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.63.0 (2025-12-15)
+
+* **Feature**: This release allows you to import your historical CloudTrail Lake data into CloudWatch with a few steps, enabling you to easily consolidate operational, security, and compliance data in one place.
+
+# v1.62.2 (2025-12-09)
+
+* No change notes available for this release.
+
+# v1.62.1 (2025-12-08)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.62.0 (2025-12-02)
+
+* **Feature**: CloudWatch Logs adds managed S3 Tables integration to access logs using other analytical tools, as well as facets and field indexing to simplify log analytics in CloudWatch Logs Insights.
+* **Dependency Update**: Updated to the latest SDK module versions
+* **Dependency Update**: Upgrade to smithy-go v1.24.0. Notably this version of the library reduces the allocation footprint of the middleware system. We observe a ~10% reduction in allocations per SDK call with this change.
+
+# v1.61.1 (2025-11-25)
+
+* **Bug Fix**: Add error check for endpoint param binding during auth scheme resolution to fix panic reported in #3234
+
+# v1.61.0 (2025-11-24)
+
+* **Feature**: New CloudWatch Logs feature - LogGroup Deletion Protection, a capability that allows customers to safeguard their critical CloudWatch log groups from accidental or unintended deletion.
+
+# v1.60.1 (2025-11-19.2)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
+# v1.60.0 (2025-11-19)
+
+* **Feature**: Adding support for ocsf version 1.5, add optional parameter MappingVersion
+
+# v1.59.0 (2025-11-18)
+
+* **Feature**: CloudWatch Logs updates: Added capability to setup a recurring schedule for log insights queries. Logs introduced Scheduled Queries (managed through Create/Update/Get/Delete/List/History Scheduled Query APIs). For more information, see CloudWatch Logs API documentation.
+
+# v1.58.9 (2025-11-12)
+
+* **Bug Fix**: Further reduce allocation overhead when the metrics system isn't in-use.
+* **Bug Fix**: Reduce allocation overhead when the client doesn't have any HTTP interceptors configured.
+* **Bug Fix**: Remove blank trace spans towards the beginning of the request that added no additional information. This conveys a slight reduction in overall allocations.
+
+# v1.58.8 (2025-11-11)
+
+* **Bug Fix**: Return validation error if input region is not a valid host label.
+
+# v1.58.7 (2025-11-04)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+* **Dependency Update**: Upgrade to smithy-go v1.23.2 which should convey some passive reduction of overall allocations, especially when not using the metrics system.
+
+# v1.58.6 (2025-10-30)
+
+* **Dependency Update**: Updated to the latest SDK module versions
+
 # v1.58.5 (2025-10-23)
 
 * **Dependency Update**: Updated to the latest SDK module versions

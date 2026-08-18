@@ -5,6 +5,7 @@ package journald
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,7 @@ const (
 	fieldLogOrdinal = "CONTAINER_LOG_ORDINAL"
 )
 
+// waitUntilFlushed is set if read support is enabled and a no-op otherwise.
 var waitUntilFlushed func(*journald) error
 
 type journald struct {
@@ -65,15 +67,6 @@ type journald struct {
 	sendToJournal   func(message string, priority journal.Priority, vars map[string]string) error
 	journalReadDir  string        //nolint:unused // Referenced in read.go, which has more restrictive build constraints.
 	readSyncTimeout time.Duration //nolint:unused // Referenced in read.go, which has more restrictive build constraints.
-}
-
-func init() {
-	if err := logger.RegisterLogDriver(name, New); err != nil {
-		panic(err)
-	}
-	if err := logger.RegisterLogOptValidator(name, validateLogOpt); err != nil {
-		panic(err)
-	}
 }
 
 // sanitizeKeyMod returns the sanitized string so that it could be used in journald.
@@ -129,9 +122,7 @@ func newJournald(info logger.Info) (*journald, error) {
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range extraAttrs {
-		vars[k] = v
-	}
+	maps.Copy(vars, extraAttrs)
 	return &journald{
 		epoch:         epoch,
 		vars:          vars,
@@ -140,16 +131,12 @@ func newJournald(info logger.Info) (*journald, error) {
 	}, nil
 }
 
-// We don't actually accept any options, but we have to supply a callback for
-// the factory to pass the (probably empty) configuration map to.
 func validateLogOpt(cfg map[string]string) error {
 	for key := range cfg {
 		switch key {
-		case "labels":
-		case "labels-regex":
-		case "env":
-		case "env-regex":
-		case "tag":
+		case logger.AttrEnv, logger.AttrEnvRegex, logger.AttrLabels, logger.AttrLabelsRegex, logger.AttrLogTag:
+			// Common attributes handled through [logger.Info.ExtraAttributes] and [loggerutils.ParseLogTag].
+			continue
 		default:
 			return fmt.Errorf("unknown log opt '%s' for journald log driver", key)
 		}
@@ -157,11 +144,15 @@ func validateLogOpt(cfg map[string]string) error {
 	return nil
 }
 
-func (s *journald) Log(msg *logger.Message) error {
+func (s *journald) Log(msg *logger.Message) (err error) {
+	defer func() {
+		if err == nil {
+			logger.PutMessage(msg)
+		}
+	}()
+
 	vars := map[string]string{}
-	for k, v := range s.vars {
-		vars[k] = v
-	}
+	maps.Copy(vars, s.vars)
 	if !msg.Timestamp.IsZero() {
 		vars[fieldSyslogTimestamp] = msg.Timestamp.Format(time.RFC3339Nano)
 	}
@@ -174,17 +165,13 @@ func (s *journald) Log(msg *logger.Message) error {
 		}
 	}
 
-	line := string(msg.Line)
-	source := msg.Source
-	logger.PutMessage(msg)
-
 	seq := s.ordinal.Add(1)
 	vars[fieldLogOrdinal] = strconv.FormatUint(seq, 10)
 
-	if source == "stderr" {
-		return s.sendToJournal(line, journal.PriErr, vars)
+	if msg.Source == "stderr" {
+		return s.sendToJournal(string(msg.Line), journal.PriErr, vars)
 	}
-	return s.sendToJournal(line, journal.PriInfo, vars)
+	return s.sendToJournal(string(msg.Line), journal.PriInfo, vars)
 }
 
 func (s *journald) Name() string {

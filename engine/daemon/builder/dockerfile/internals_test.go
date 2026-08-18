@@ -1,12 +1,12 @@
 package dockerfile
 
 import (
-	"fmt"
 	"os"
 	"runtime"
 	"testing"
 
 	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/v2/daemon/builder"
@@ -35,7 +35,7 @@ func TestSymlinkDockerfile(t *testing.T) {
 	// in the builder, the symlink is resolved within the context, therefore
 	// Dockerfile -> /etc/passwd becomes etc/passwd from the context which is
 	// a nonexistent file.
-	expectedError := fmt.Sprintf("Cannot locate specified Dockerfile: %s", builder.DefaultDockerfileName)
+	expectedError := "Cannot locate specified Dockerfile: " + builder.DefaultDockerfileName
 
 	readAndCheckDockerfile(t, "symlinkDockerfile", contextDir, builder.DefaultDockerfileName, expectedError)
 }
@@ -61,7 +61,7 @@ func readAndCheckDockerfile(t *testing.T, testName, contextDir, dockerfilePath, 
 	if runtime.GOOS != "windows" {
 		skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	}
-	tarStream, err := archive.Tar(contextDir, archive.Uncompressed)
+	tarStream, err := archive.Tar(contextDir, compression.None)
 	assert.NilError(t, err)
 
 	defer func() {

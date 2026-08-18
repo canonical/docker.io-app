@@ -118,8 +118,12 @@ func (n *Network) addLBBackend(ip net.IP, lb *loadBalancer) {
 		}
 		err := sb.osSbox.AddAliasIP(ifName, &net.IPNet{IP: lb.vip, Mask: net.CIDRMask(32, 32)})
 		if err != nil {
-			log.G(context.TODO()).Errorf("Failed add IP alias %s to network %s LB endpoint interface %s: %v", lb.vip, n.ID(), ifName, err)
-			return
+			if errors.Is(err, syscall.EEXIST) {
+				log.G(context.TODO()).Debugf("IP alias %s already exists on network %s LB endpoint interface %s", lb.vip, n.ID(), ifName)
+			} else {
+				log.G(context.TODO()).Errorf("Failed add IP alias %s to network %s LB endpoint interface %s: %v", lb.vip, n.ID(), ifName, err)
+				return
+			}
 		}
 
 		if sb.ingress {
@@ -247,7 +251,7 @@ func (n *Network) rmLBBackend(ip net.IP, lb *loadBalancer, rmService bool, fullR
 		}
 		err := sb.osSbox.RemoveAliasIP(ifName, &net.IPNet{IP: lb.vip, Mask: net.CIDRMask(32, 32)})
 		if err != nil {
-			log.G(context.TODO()).Errorf("Failed add IP alias %s to network %s LB endpoint interface %s: %v", lb.vip, n.ID(), ifName, err)
+			log.G(context.TODO()).Errorf("Failed to remove IP alias %s from network %s LB endpoint interface %s: %v", lb.vip, n.ID(), ifName, err)
 		}
 	}
 }
@@ -349,7 +353,7 @@ func initIngressConfiguration(gwIP net.IP, iptable *iptables.IPTable) error {
 	}
 	// Enable local routing for the gateway bridge interface by writing to /proc/sys/net/ipv4/conf/<oifName>/route_localnet.
 	path := filepath.Join("/proc/sys/net/ipv4/conf", oifName, "route_localnet")
-	if err := os.WriteFile(path, []byte{'1', '\n'}, 0o644); err != nil { //nolint:gosec // gosec complains about perms here, which must be 0644 in this case
+	if err := os.WriteFile(path, []byte{'1', '\n'}, 0o644); err != nil {
 		return fmt.Errorf("could not write to %s: %v", path, err)
 	}
 	// Add a POSTROUTING rule to the NAT table to masquerade traffic
@@ -450,7 +454,6 @@ func generateIngressRules(port *PortConfig, destIP net.IP) []iptables.Rule {
 }
 
 func programIngressPortsRules(gwIP net.IP, filteredPorts []*PortConfig) (portErr error) {
-
 	rollbackRules := make([]iptables.Rule, 0, len(filteredPorts)*3)
 	defer func() {
 		if portErr != nil {
@@ -463,7 +466,6 @@ func programIngressPortsRules(gwIP net.IP, filteredPorts []*PortConfig) (portErr
 	}()
 
 	for _, iPort := range filteredPorts {
-
 		for _, rule := range generateIngressRules(iPort, gwIP) {
 			if portErr = rule.Insert(); portErr != nil {
 				err := fmt.Errorf("set up rule failed, %v: %v", rule, portErr)
@@ -477,7 +479,6 @@ func programIngressPortsRules(gwIP net.IP, filteredPorts []*PortConfig) (portErr
 }
 
 func deleteIngressPortsRules(gwIP net.IP, filteredPorts []*PortConfig) error {
-
 	var portErr error
 
 	for _, iPort := range filteredPorts {
@@ -555,6 +556,7 @@ func plumbIngressPortsProxy(ingressPorts []*PortConfig) {
 
 		if err != nil {
 			log.G(context.TODO()).Warnf("failed to create proxy for port %s: %v", iPort, err)
+			continue
 		}
 
 		ingressProxyTbl[portSpec] = l

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	containerdcli "github.com/containerd/containerd/v2/client"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	containertypes "github.com/moby/moby/api/types/container"
@@ -48,6 +49,13 @@ func (daemon *Daemon) handleContainerExit(c *container.Container, e *libcontaine
 		return nil
 	}
 
+	// Ignore duplicate exit event that may arrive after the first one.
+	// See moby/moby#46212.
+	if daemon.shouldIgnoreExitEventWithLock(c, e) {
+		c.Unlock()
+		return nil
+	}
+
 	cfg := daemon.config()
 
 	// Health checks will be automatically restarted if/when the
@@ -76,7 +84,7 @@ func (daemon *Daemon) handleContainerExit(c *container.Container, e *libcontaine
 	c.StreamConfig.Wait(ctx)
 	cancel()
 
-	c.Reset(false)
+	c.Reset()
 
 	if e != nil {
 		ctrExitStatus.ExitCode = int(e.ExitCode)
@@ -90,15 +98,20 @@ func (daemon *Daemon) handleContainerExit(c *container.Container, e *libcontaine
 	execDuration := time.Since(c.State.StartedAt)
 	restart, wait, err := c.RestartManager().ShouldRestart(uint32(ctrExitStatus.ExitCode), daemonShutdown || c.HasBeenManuallyStopped, execDuration)
 	if err != nil {
-		log.G(ctx).WithFields(log.Fields{
-			"error":                  err,
-			"container":              c.ID,
-			"restartCount":           c.RestartCount,
-			"exitStatus":             ctrExitStatus,
-			"daemonShuttingDown":     daemonShutdown,
-			"hasBeenManuallyStopped": c.HasBeenManuallyStopped,
-			"execDuration":           execDuration,
-		}).Warn("ShouldRestart failed, container will not be restarted")
+		// Ignore ErrRestartCanceled errors, which mean the restart-manager
+		// was stopped (e.g., during daemon shutdown).
+		if !errors.Is(err, restartmanager.ErrRestartCanceled) {
+			log.G(ctx).WithFields(log.Fields{
+				"error":                  err,
+				"container":              c.ID,
+				"restartCount":           c.RestartCount,
+				"exitCode":               ctrExitStatus.ExitCode,
+				"exitedAt":               ctrExitStatus.ExitedAt,
+				"daemonShuttingDown":     daemonShutdown,
+				"hasBeenManuallyStopped": c.HasBeenManuallyStopped,
+				"execDuration":           execDuration,
+			}).Warn("ShouldRestart failed: container will not be restarted")
+		}
 		restart = false
 	}
 
@@ -112,10 +125,12 @@ func (daemon *Daemon) handleContainerExit(c *container.Container, e *libcontaine
 		c.RestartCount++
 		log.G(ctx).WithFields(log.Fields{
 			"container":     c.ID,
+			"restartPolicy": c.HostConfig.RestartPolicy,
 			"restartCount":  c.RestartCount,
-			"exitStatus":    ctrExitStatus,
+			"exitCode":      ctrExitStatus.ExitCode,
+			"exitedAt":      ctrExitStatus.ExitedAt,
 			"manualRestart": c.HasBeenManuallyRestarted,
-		}).Debug("Restarting container")
+		}).Info("restarting container")
 		c.State.SetRestarting(&ctrExitStatus)
 	} else {
 		c.State.SetStopped(&ctrExitStatus)
@@ -337,5 +352,89 @@ func (daemon *Daemon) autoRemove(cfg *config.Config, c *container.Container) {
 			return
 		}
 		log.G(context.TODO()).WithFields(log.Fields{"error": err, "container": c.ID}).Error("error removing container")
+	}
+}
+
+func (daemon *Daemon) shouldIgnoreExitEventWithLock(c *container.Container, e *libcontainerdtypes.EventInfo) (ret bool) {
+	if e == nil {
+		return false
+	}
+
+	defer func() {
+		if ret {
+			log.G(context.TODO()).WithFields(log.Fields{
+				"container": c.ID,
+				"state":     c.State.State(),
+				"exitCode":  e.ExitCode,
+				"exitedAt":  e.ExitedAt,
+			}).Info("ignoring duplicate container exit event")
+		}
+	}()
+
+	switch c.State.State() {
+	case containertypes.StateRemoving,
+		containertypes.StateExited,
+		containertypes.StateDead:
+
+		return true
+
+	case containertypes.StateRunning:
+		task, ok := c.State.Task()
+		if !ok {
+			log.G(context.TODO()).WithFields(log.Fields{
+				"container": c.ID,
+			}).Warn("container in running state but no task found while checking for duplicate exit event")
+			return false
+		}
+
+		ctx, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+		status, err := task.Status(ctx)
+		cancel()
+		if err != nil {
+			// If containerd-shim crashed, the task will be deleted
+			// automatically by containerd, so treat a NotFound
+			// error as meaning the task is not running.
+			log.G(ctx).WithFields(log.Fields{
+				"error":     err,
+				"container": c.ID,
+			}).Warn("failed to get task status while checking for duplicate exit event")
+			return false
+		}
+
+		// If the container is still running, then this exit event must
+		// be a duplicate from a previous run, so ignore it. If the
+		// container is not running, then we should process the exit
+		// event to transition the container to exited.
+		//
+		// Timestamp is not reliable for determining whether an exit
+		// event is a duplicate, because CLOCK_REALTIME can jump backwards
+		// (e.g., due to NTP adjustments).
+		//
+		// See moby/moby#52153 for more details.
+		if status.Status == containerdcli.Running {
+			return true
+		}
+
+		if status.Status == containerdcli.Stopped {
+			if status.ExitStatus != e.ExitCode {
+				log.G(ctx).WithFields(log.Fields{
+					"container": c.ID,
+					"exitCode":  status.ExitStatus,
+					"eventCode": e.ExitCode,
+				}).Warn("container stopped with different exit code than exit event while checking for duplicate exit event")
+				return true
+			}
+		}
+		return false
+
+	case containertypes.StateRestarting:
+		// The restart path acquires and holds the container lock before
+		// processing. So, if we're currently restarting, then we know
+		// for certain that we are still processing the previous exit
+		// event, and any new exit events must be duplicates.
+		return true
+
+	default:
+		return false
 	}
 }

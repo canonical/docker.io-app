@@ -27,6 +27,7 @@ import (
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
+	"github.com/moby/buildkit/solver/llbsolver/compat"
 	"github.com/moby/buildkit/util/compression"
 	"github.com/moby/buildkit/util/contentutil"
 	"github.com/moby/buildkit/util/errutil"
@@ -219,7 +220,7 @@ func (e *imageExporterInstance) Attrs() map[string]string {
 	return e.attrs
 }
 
-func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source, inlineCache exptypes.InlineCache, sessionID string) (_ map[string]string, descref exporter.DescriptorReference, err error) {
+func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source, buildInfo exporter.ExportBuildInfo) (_ map[string]string, _ exporter.FinalizeFunc, descref exporter.DescriptorReference, err error) {
 	src = src.Clone()
 	if src.Metadata == nil {
 		src.Metadata = make(map[string][]byte)
@@ -229,29 +230,32 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 	opts := e.opts
 	as, _, err := ParseAnnotations(src.Metadata)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	opts.Annotations = opts.Annotations.Merge(as)
+	opts.SetOCITypesDefault(DefaultOCITypes(buildInfo.CompatibilityVersion, src))
+	opts.SetOCIArtifactDefault(DefaultOCIArtifact(buildInfo.CompatibilityVersion, &opts))
+	if err := opts.Validate(); err != nil {
+		return nil, nil, nil, err
+	}
 
 	ctx, done, err := leaseutil.WithLease(ctx, e.opt.LeaseManager, leaseutil.MakeTemporary)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	// On success, we create descref which holds the lease's done function.
+	// The solver will release descref after recording the descriptor in build
+	// history. On error (descref is nil), we release the lease here.
 	defer func() {
 		if descref == nil {
 			done(context.WithoutCancel(ctx))
 		}
 	}()
 
-	desc, err := e.opt.ImageWriter.Commit(ctx, src, sessionID, inlineCache, &opts)
+	desc, err := e.opt.ImageWriter.Commit(ctx, src, buildInfo.SessionID, buildInfo.InlineCache, &opts, buildInfo.CompatibilityVersion, e.Type())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	defer func() {
-		if err == nil {
-			descref = NewDescriptorReference(*desc, done)
-		}
-	}()
 
 	resp := make(map[string]string)
 
@@ -270,6 +274,9 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 		}
 	}
 
+	// Collect names for finalize callback to push
+	var namesToPush []string
+
 	if e.opts.ImageName != "" {
 		targetNames := strings.SplitSeq(e.opts.ImageName, ",")
 		for targetName := range targetNames {
@@ -282,8 +289,8 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 				// However, due to a bug of containerd, we are temporarily stuck with this workaround.
 				// https://github.com/containerd/containerd/issues/8322
 				imageClientCtx := ctx
-				if e.opts.Epoch != nil {
-					imageClientCtx = epoch.WithSourceDateEpoch(imageClientCtx, e.opts.Epoch)
+				if e.opts.Epoch != nil && e.opts.Epoch.Value != nil {
+					imageClientCtx = epoch.WithSourceDateEpoch(imageClientCtx, e.opts.Epoch.Value)
 				}
 				img := images.Image{
 					Target: *desc,
@@ -297,14 +304,20 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 				}
 				for _, sfx := range sfx {
 					img.Name = targetName + sfx
-					if _, err := e.opt.Images.Update(imageClientCtx, img); err != nil {
-						if !errors.Is(err, cerrdefs.ErrNotFound) {
-							return nil, nil, tagDone(err)
-						}
+					for { // handle possible race between Update and Create
+						if _, err := e.opt.Images.Update(imageClientCtx, img); err != nil {
+							if !errors.Is(err, cerrdefs.ErrNotFound) {
+								return nil, nil, nil, tagDone(err)
+							}
 
-						if _, err := e.opt.Images.Create(imageClientCtx, img); err != nil {
-							return nil, nil, tagDone(err)
+							if _, err := e.opt.Images.Create(imageClientCtx, img); err != nil {
+								if !errors.Is(err, cerrdefs.ErrAlreadyExists) {
+									return nil, nil, nil, tagDone(err)
+								}
+								continue
+							}
 						}
+						break
 					}
 				}
 				tagDone(nil)
@@ -315,10 +328,10 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 						// /
 						// TODO: change e.unpackImage so that it takes Result[Remote] as parameter.
 						// https://github.com/moby/buildkit/pull/4057#discussion_r1324106088
-						return nil, nil, errors.New("exporter option \"rewrite-timestamp\" conflicts with \"unpack\"")
+						return nil, nil, nil, errors.New("exporter option \"rewrite-timestamp\" conflicts with \"unpack\"")
 					}
-					if err := e.unpackImage(ctx, img, src, session.NewGroup(sessionID)); err != nil {
-						return nil, nil, err
+					if err := e.unpackImage(ctx, img, src, session.NewGroup(buildInfo.SessionID)); err != nil {
+						return nil, nil, nil, err
 					}
 				}
 
@@ -336,7 +349,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 					eg, ctx := errgroup.WithContext(ctx)
 					for _, ref := range refs {
 						eg.Go(func() error {
-							remotes, err := ref.GetRemotes(ctx, false, e.opts.RefCfg, false, session.NewGroup(sessionID))
+							remotes, err := ref.GetRemotes(ctx, false, e.opts.RefCfg, false, session.NewGroup(buildInfo.SessionID))
 							if err != nil {
 								return err
 							}
@@ -350,19 +363,13 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 						})
 					}
 					if err := eg.Wait(); err != nil {
-						return nil, nil, err
+						return nil, nil, nil, err
 					}
 				}
 			}
+			// Collect names for pushing in finalize
 			if e.push {
-				err = e.pushImage(ctx, src, sessionID, targetName, desc.Digest)
-				if err != nil {
-					var statusErr remoteserrors.ErrUnexpectedStatus
-					if errors.As(err, &statusErr) {
-						err = errutil.WithDetails(err)
-					}
-					return nil, nil, errors.Wrapf(err, "failed to push %v", targetName)
-				}
+				namesToPush = append(namesToPush, targetName)
 			}
 		}
 		resp[exptypes.ExporterImageNameKey] = e.opts.ImageName
@@ -376,11 +383,34 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 
 	dtdesc, err := json.Marshal(desc)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	resp[exptypes.ExporterImageDescriptorKey] = base64.StdEncoding.EncodeToString(dtdesc)
 
-	return resp, nil, nil
+	// Create descref so descriptor is recorded in build history.
+	// Transfer lease ownership to descref - caller releases after finalize.
+	descref = NewDescriptorReference(*desc, done)
+
+	if len(namesToPush) == 0 {
+		return resp, nil, descref, nil
+	}
+
+	// Create finalize callback for pushing
+	finalize := func(ctx context.Context) error {
+		for _, targetName := range namesToPush {
+			err := e.pushImage(ctx, src, buildInfo.SessionID, targetName, desc.Digest)
+			if err != nil {
+				var statusErr remoteserrors.ErrUnexpectedStatus
+				if errors.As(err, &statusErr) {
+					err = errutil.WithDetails(err)
+				}
+				return errors.Wrapf(err, "failed to push %v", targetName)
+			}
+		}
+		return nil
+	}
+
+	return resp, finalize, descref, nil
 }
 
 func (e *imageExporterInstance) pushImage(ctx context.Context, src *exporter.Source, sessionID string, targetName string, dgst digest.Digest) error {
@@ -477,17 +507,33 @@ func (e *imageExporterInstance) unpackImage(ctx context.Context, img images.Imag
 	ctrdSnapshotter, release := snapshot.NewContainerdSnapshotter(snapshotter)
 	defer release()
 
-	var chain []digest.Digest
-	for _, layer := range layers {
-		if _, err := rootfs.ApplyLayer(ctx, layer, chain, ctrdSnapshotter, applier); err != nil {
-			return err
+	// Compute top chainID so we can add it to the lease before calling ApplyLayers
+	// as ApplyLayers may directly return after successful Stat call without applying
+	// layer to the lease and causing error if it gets deleted.
+	chainID := layersChainID(layers)
+	if leaseID, ok := leases.FromContext(ctx); ok {
+		r := leases.Resource{
+			ID:   chainID.String(),
+			Type: "snapshots/" + snapshotter.Name(),
 		}
-		chain = append(chain, layer.Diff.Digest)
+		if err := e.opt.LeaseManager.AddResource(ctx, leases.Lease{ID: leaseID}, r); err != nil {
+			return errors.Wrapf(err, "failed to lease snapshot %s", chainID)
+		}
+	}
+
+	// note that calling ApplyLayer in a loop here as alternative is not safe because
+	// single ApplyLayer does not have a safe way to ensure parents are not removed during unpack.
+	appliedChainID, err := rootfs.ApplyLayers(ctx, layers, ctrdSnapshotter, applier)
+	if err != nil {
+		return err
+	}
+	if appliedChainID != chainID {
+		return errors.Errorf("unexpected chain ID mismatch: %s != %s", appliedChainID, chainID)
 	}
 
 	var (
 		keyGCLabel   = fmt.Sprintf("containerd.io/gc.ref.snapshot.%s", snapshotter.Name())
-		valueGCLabel = identity.ChainID(chain).String()
+		valueGCLabel = chainID.String()
 	)
 
 	cinfo := content.Info{
@@ -514,6 +560,14 @@ func getLayers(descs []ocispecs.Descriptor, manifest ocispecs.Manifest) ([]rootf
 	return layers, nil
 }
 
+func layersChainID(layers []rootfs.Layer) digest.Digest {
+	chain := make([]digest.Digest, len(layers))
+	for i, l := range layers {
+		chain[i] = l.Diff.Digest
+	}
+	return identity.ChainID(chain)
+}
+
 func addAnnotations(m map[digest.Digest]map[string]string, desc ocispecs.Descriptor) {
 	if desc.Annotations == nil {
 		return
@@ -527,6 +581,19 @@ func addAnnotations(m map[digest.Digest]map[string]string, desc ocispecs.Descrip
 		a = make(map[string]string)
 	}
 	maps.Copy(a, desc.Annotations)
+}
+
+// DefaultOCITypes returns the default media type behavior for image exports.
+func DefaultOCITypes(compatibilityVersion int, src *exporter.Source) bool {
+	if compatibilityVersion >= compat.CompatibilityVersion031 {
+		return true
+	}
+	return len(src.Attestations) > 0
+}
+
+// DefaultOCIArtifact returns the default attestation manifest format.
+func DefaultOCIArtifact(compatibilityVersion int, opts *ImageCommitOpts) bool {
+	return compatibilityVersion >= compat.CompatibilityVersion031 && opts.OCITypesEnabled()
 }
 
 func NewDescriptorReference(desc ocispecs.Descriptor, release func(context.Context) error) exporter.DescriptorReference {

@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.25
+
 package container
 
 import (
@@ -60,7 +63,7 @@ func initTtySize(ctx context.Context, cli command.Cli, id string, isExec bool, r
 	if err := rTTYfunc(ctx, cli, id, isExec); err != nil {
 		go func() {
 			var err error
-			for retry := 0; retry < 10; retry++ {
+			for retry := range 10 {
 				time.Sleep(time.Duration(retry+1) * 10 * time.Millisecond)
 				if err = rTTYfunc(ctx, cli, id, isExec); err == nil {
 					break
