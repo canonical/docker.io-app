@@ -1,7 +1,2 @@
 loosen-tini-cmake-req.patch
-CVE-2026-33747_1.patch
-CVE-2026-33747_2.patch
-CVE-2026-33747_3.patch
-CVE-2026-33748_1.patch
-CVE-2026-33748_2.patch
 lp-2156625-rootless-bin.patch
