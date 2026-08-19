@@ -1,6 +1,16 @@
 docker.io-app (29.7.2-0ubuntu1) stonking; urgency=medium
 
   * New upstream version 29.7.2
+  * d/h/build-manpages.sh: allow go versions >= 1.24
+  * d/manpages: update to version 29.7.2
+  * d/p/CVE-2026-3374{7,8}: drop patches applied upstream
+  * d/control: build with golang 1.26
+  * d/rules: add golang 1.26 to PATH
+  * d/extra/vendor: refresh docker-trust dependencies
+  * d/README.source: document update process for trust deps
+  * d/extra/vendor: remove embedded non-free code
+  * d/control: B-D on libnss3-dev due to miekg/pkcs11 patch
+  * d/copyright: update copyright data
 
  -- Athos Ribeiro <athos@ubuntu.com>  Tue, 18 Aug 2026 16:18:07 -0300
 
