@@ -5,6 +5,7 @@
 package pkcs11
 
 /*
+#cgo pkg-config: nss
 #include <stdlib.h>
 #include <string.h>
 #include "pkcs11go.h"
