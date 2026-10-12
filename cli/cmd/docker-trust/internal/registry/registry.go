@@ -4,13 +4,13 @@ package registry
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/docker/distribution/registry/client/transport"
-	"github.com/docker/go-connections/tlsconfig"
 	"github.com/sirupsen/logrus"
 )
 
@@ -48,7 +48,7 @@ func loadTLSConfig(ctx context.Context, directory string, tlsConfig *tls.Config)
 		switch filepath.Ext(f.Name()) {
 		case ".crt":
 			if tlsConfig.RootCAs == nil {
-				systemPool, err := tlsconfig.SystemCertPool()
+				systemPool, err := x509.SystemCertPool()
 				if err != nil {
 					return invalidParam(fmt.Errorf("unable to get system cert pool: %w", err))
 				}

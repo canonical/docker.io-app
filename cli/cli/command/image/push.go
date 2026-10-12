@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package image
 
@@ -123,6 +123,7 @@ To push the complete multi-platform image, remove the --platform flag.
 		return err
 	}
 
+	var notes []string
 	defer func() {
 		_ = responseBody.Close()
 		for _, note := range notes {
@@ -131,18 +132,16 @@ To push the complete multi-platform image, remove the --platform flag.
 	}()
 
 	if opts.quiet {
-		err = jsonstream.Display(ctx, responseBody, streams.NewOut(io.Discard), jsonstream.WithAuxCallback(handleAux()))
+		err = jsonstream.Display(ctx, responseBody, streams.NewOut(io.Discard), jsonstream.WithAuxCallback(handleAux(&notes, out)))
 		if err == nil {
 			_, _ = fmt.Fprintln(dockerCli.Out(), ref.String())
 		}
 		return err
 	}
-	return jsonstream.Display(ctx, responseBody, dockerCli.Out(), jsonstream.WithAuxCallback(handleAux()))
+	return jsonstream.Display(ctx, responseBody, dockerCli.Out(), jsonstream.WithAuxCallback(handleAux(&notes, out)))
 }
 
-var notes []string
-
-func handleAux() func(jm jsonstream.JSONMessage) {
+func handleAux(notes *[]string, out tui.Output) func(jm jsonstream.JSONMessage) {
 	return func(jm jsonstream.JSONMessage) {
 		b := []byte(*jm.Aux)
 
@@ -150,10 +149,10 @@ func handleAux() func(jm jsonstream.JSONMessage) {
 		err := json.Unmarshal(b, &stripped)
 		if err == nil && stripped.ManifestPushedInsteadOfIndex {
 			note := fmt.Sprintf("Not all multiplatform-content is present and only the available single-platform image was pushed\n%s -> %s",
-				aec.RedF.Apply(stripped.OriginalIndex.Digest.String()),
-				aec.GreenF.Apply(stripped.SelectedManifest.Digest.String()),
+				out.Color(aec.RedF).Apply(stripped.OriginalIndex.Digest.String()),
+				out.Color(aec.GreenF).Apply(stripped.SelectedManifest.Digest.String()),
 			)
-			notes = append(notes, note)
+			*notes = append(*notes, note)
 		}
 
 		var missing auxprogress.ContentMissing
@@ -166,7 +165,7 @@ func handleAux() func(jm jsonstream.JSONMessage) {
 				Make sure you have all the referenced content and try again.
 
 				You can also push only a single platform specific manifest directly by specifying the platform you want to push with the --platform flag.`
-			notes = append(notes, note)
+			*notes = append(*notes, note)
 		}
 	}
 }

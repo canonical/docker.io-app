@@ -8,11 +8,8 @@ import (
 	"runtime"
 
 	"github.com/moby/buildkit/executor"
-	"github.com/moby/buildkit/executor/oci"
 	resourcetypes "github.com/moby/buildkit/executor/resources/types"
-	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
-	"github.com/moby/moby/v2/daemon/libnetwork"
-	"github.com/moby/sys/user"
+	"github.com/moby/buildkit/util/network"
 )
 
 type stubExecutor struct{}
@@ -26,6 +23,6 @@ func (w *stubExecutor) Exec(ctx context.Context, id string, process executor.Pro
 }
 
 // function stub created for GraphDriver
-func newExecutorGD(_, _ string, _ *libnetwork.Controller, _ *oci.DNSConfig, _ bool, _ user.IdentityMapping, _ string, _ *cdidevices.Manager, _, _ string) (executor.Executor, error) {
-	return &stubExecutor{}, nil
+func newExecutorGD(executorOpts) (executor.Executor, network.ProxyProvider, error) {
+	return &stubExecutor{}, nil, nil
 }

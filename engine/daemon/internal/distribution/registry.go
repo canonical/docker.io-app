@@ -2,7 +2,6 @@ package distribution
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -83,14 +82,12 @@ func newRepository(
 		KeepAlive: 30 * time.Second,
 	}
 
-	// TODO(dmcgowan): Call close idle connections when complete, use keep alive
 	base := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		DialContext:         direct.DialContext,
 		TLSHandshakeTimeout: 10 * time.Second,
 		TLSClientConfig:     endpoint.TLSConfig,
-		// TODO(dmcgowan): Call close idle connections when complete and use keep alive
-		DisableKeepAlives: true,
+		IdleConnTimeout:     30 * time.Second,
 	}
 
 	modifiers := registry.Headers(dockerversion.DockerUserAgent(ctx), metaHeaders)
@@ -157,6 +154,6 @@ func (th *passThruTokenHandler) Scheme() string {
 }
 
 func (th *passThruTokenHandler) AuthorizeRequest(req *http.Request, params map[string]string) error {
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", th.token))
+	req.Header.Set("Authorization", "Bearer "+th.token)
 	return nil
 }

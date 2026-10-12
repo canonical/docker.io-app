@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/distribution/reference"
 	gogotypes "github.com/gogo/protobuf/types"
@@ -62,6 +64,15 @@ func newContainerAdapter(b executorpkg.Backend, i executorpkg.ImageBackend, v ex
 		volumeBackend: v,
 		dependencies:  dependencies,
 	}, nil
+}
+
+// imageExists reports whether the image the container is configured with is
+// present in the local image store. An error other than "not found" is not
+// conclusive, so the image is reported as present and the container create
+// is left to surface the error.
+func (c *containerAdapter) imageExists(ctx context.Context) bool {
+	_, err := c.imageBackend.GetImage(ctx, c.container.image(), imagebackend.GetImageOpts{})
+	return !cerrdefs.IsNotFound(err)
 }
 
 func (c *containerAdapter) pullImage(ctx context.Context) error {
@@ -389,19 +400,22 @@ func (c *containerAdapter) inspect(ctx context.Context) (containertypes.InspectR
 // events. The stream of events can be shutdown by cancelling the context.
 func (c *containerAdapter) events(ctx context.Context) <-chan events.Message {
 	swarmlog.G(ctx).Debugf("waiting on events")
-	buffer, l := c.backend.SubscribeToEvents(time.Time{}, time.Time{}, c.container.eventFilter())
-	eventsq := make(chan events.Message, len(buffer))
 
-	for _, event := range buffer {
-		eventsq <- event
-	}
+	// Discard buffered events; we don't provide since/until filters and use live events only.
+	_, l := c.backend.SubscribeToEvents(time.Time{}, time.Time{}, c.container.eventFilter())
+	eventsq := make(chan events.Message)
 
 	go func() {
+		defer close(eventsq)
 		defer c.backend.UnsubscribeFromEvents(l)
 
 		for {
 			select {
-			case ev := <-l:
+			case ev, ok := <-l:
+				if !ok {
+					return
+				}
+
 				jev, ok := ev.(events.Message)
 				if !ok {
 					swarmlog.G(ctx).Warnf("unexpected event message: %q", ev)
@@ -436,7 +450,7 @@ func (c *containerAdapter) shutdown(ctx context.Context) error {
 }
 
 func (c *containerAdapter) terminate(ctx context.Context) error {
-	return c.backend.ContainerKill(c.container.name(), syscall.SIGKILL.String())
+	return c.backend.ContainerKill(ctx, c.container.name(), syscall.SIGKILL.String())
 }
 
 func (c *containerAdapter) remove(ctx context.Context) error {
@@ -526,15 +540,12 @@ func (c *containerAdapter) logs(ctx context.Context, options api.LogSubscription
 		if err != nil {
 			return nil, err
 		}
-		// print since as this formatted string because the docker container
-		// logs interface expects it like this.
-		// see [github.com/moby/moby/v2/daemon/internal/timestamp.ParseTimestamps]
-		apiOptions.Since = fmt.Sprintf("%d.%09d", since.Unix(), int64(since.Nanosecond()))
+		apiOptions.Since = since
 	}
 
 	if options.Tail < 0 {
 		// See protobuf documentation for details of how this works.
-		apiOptions.Tail = fmt.Sprint(-options.Tail - 1)
+		apiOptions.Tail = strconv.FormatInt(-options.Tail-1, 10)
 	} else if options.Tail > 0 {
 		return nil, errors.New("tail relative to start of logs not supported via docker API")
 	}

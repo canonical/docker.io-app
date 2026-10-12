@@ -1,8 +1,12 @@
+// Copyright IBM Corp. 2013, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package serf
 
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -11,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
+	metrics "github.com/hashicorp/go-metrics/compat"
 )
 
 /*
@@ -78,6 +82,7 @@ type Snapshotter struct {
 	shutdownCh              <-chan struct{}
 	waitCh                  chan struct{}
 	lastAttemptedCompaction time.Time
+	metricLabels            []metrics.Label
 }
 
 // PreviousNode is used to represent the previously known alive nodes
@@ -390,7 +395,7 @@ func (s *Snapshotter) tryAppend(l string) {
 
 // appendLine is used to append a line to the existing log
 func (s *Snapshotter) appendLine(l string) error {
-	defer metrics.MeasureSince([]string{"serf", "snapshot", "appendLine"}, time.Now())
+	defer metrics.MeasureSinceWithLabels([]string{"serf", "snapshot", "appendLine"}, time.Now(), s.metricLabels)
 
 	n, err := s.buffered.WriteString(l)
 	if err != nil {
@@ -418,18 +423,15 @@ func (s *Snapshotter) appendLine(l string) error {
 func (s *Snapshotter) snapshotMaxSize() int64 {
 	nodes := int64(len(s.aliveNodes))
 	estSize := nodes * snapshotBytesPerNode
-	threshold := estSize * snapshotCompactionThreshold
-
-	// Apply a minimum threshold to avoid frequent compaction
-	if threshold < s.minCompactSize {
-		threshold = s.minCompactSize
-	}
+	threshold := max(
+		// Apply a minimum threshold to avoid frequent compaction
+		estSize*snapshotCompactionThreshold, s.minCompactSize)
 	return threshold
 }
 
 // Compact is used to compact the snapshot once it is too large
 func (s *Snapshotter) compact() error {
-	defer metrics.MeasureSince([]string{"serf", "snapshot", "compact"}, time.Now())
+	defer metrics.MeasureSinceWithLabels([]string{"serf", "snapshot", "compact"}, time.Now(), s.metricLabels)
 
 	// Try to open the file to new fiel
 	newPath := s.path + tmpExt
@@ -503,7 +505,7 @@ func (s *Snapshotter) compact() error {
 
 	// Flush the existing snapshot, ignoring errors since we will
 	// delete it momentarily.
-	s.buffered.Flush()
+	_ = s.buffered.Flush()
 	s.buffered = nil
 
 	// Close the file handle to the old snapshot
@@ -540,7 +542,7 @@ func (s *Snapshotter) compact() error {
 // state
 func (s *Snapshotter) replay() error {
 	// Seek to the beginning
-	if _, err := s.fh.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := s.fh.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
@@ -556,8 +558,8 @@ func (s *Snapshotter) replay() error {
 		line = line[:len(line)-1]
 
 		// Switch on the prefix
-		if strings.HasPrefix(line, "alive: ") {
-			info := strings.TrimPrefix(line, "alive: ")
+		if after, ok := strings.CutPrefix(line, "alive: "); ok {
+			info := after
 			addrIdx := strings.LastIndex(info, " ")
 			if addrIdx == -1 {
 				s.logger.Printf("[WARN] serf: Failed to parse address: %v", line)
@@ -567,12 +569,12 @@ func (s *Snapshotter) replay() error {
 			name := info[:addrIdx]
 			s.aliveNodes[name] = addr
 
-		} else if strings.HasPrefix(line, "not-alive: ") {
-			name := strings.TrimPrefix(line, "not-alive: ")
+		} else if after, ok := strings.CutPrefix(line, "not-alive: "); ok {
+			name := after
 			delete(s.aliveNodes, name)
 
-		} else if strings.HasPrefix(line, "clock: ") {
-			timeStr := strings.TrimPrefix(line, "clock: ")
+		} else if after, ok := strings.CutPrefix(line, "clock: "); ok {
+			timeStr := after
 			timeInt, err := strconv.ParseUint(timeStr, 10, 64)
 			if err != nil {
 				s.logger.Printf("[WARN] serf: Failed to convert clock time: %v", err)
@@ -580,8 +582,8 @@ func (s *Snapshotter) replay() error {
 			}
 			s.lastClock = LamportTime(timeInt)
 
-		} else if strings.HasPrefix(line, "event-clock: ") {
-			timeStr := strings.TrimPrefix(line, "event-clock: ")
+		} else if after, ok := strings.CutPrefix(line, "event-clock: "); ok {
+			timeStr := after
 			timeInt, err := strconv.ParseUint(timeStr, 10, 64)
 			if err != nil {
 				s.logger.Printf("[WARN] serf: Failed to convert event clock time: %v", err)
@@ -589,8 +591,8 @@ func (s *Snapshotter) replay() error {
 			}
 			s.lastEventClock = LamportTime(timeInt)
 
-		} else if strings.HasPrefix(line, "query-clock: ") {
-			timeStr := strings.TrimPrefix(line, "query-clock: ")
+		} else if after, ok := strings.CutPrefix(line, "query-clock: "); ok {
+			timeStr := after
 			timeInt, err := strconv.ParseUint(timeStr, 10, 64)
 			if err != nil {
 				s.logger.Printf("[WARN] serf: Failed to convert query clock time: %v", err)
@@ -620,7 +622,7 @@ func (s *Snapshotter) replay() error {
 	}
 
 	// Seek to the end
-	if _, err := s.fh.Seek(0, os.SEEK_END); err != nil {
+	if _, err := s.fh.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	return nil

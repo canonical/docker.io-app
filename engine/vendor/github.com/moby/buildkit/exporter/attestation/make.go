@@ -3,6 +3,7 @@ package attestation
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 
 	"github.com/containerd/continuity/fs"
@@ -15,6 +16,8 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 )
+
+const maxAttestationBytes int64 = 40 << 20
 
 // ReadAll reads the content of an attestation.
 func ReadAll(ctx context.Context, s session.Group, att exporter.Attestation) ([]byte, error) {
@@ -41,7 +44,7 @@ func ReadAll(ctx context.Context, s session.Group, att exporter.Attestation) ([]
 		if err != nil {
 			return nil, err
 		}
-		content, err = os.ReadFile(p)
+		content, err = readRegularFile(p)
 		if err != nil {
 			return nil, errors.Wrap(err, "cannot read in-toto attestation")
 		}
@@ -54,6 +57,51 @@ func ReadAll(ctx context.Context, s session.Group, att exporter.Attestation) ([]
 	return content, nil
 }
 
+func readRegularFile(p string) ([]byte, error) {
+	f, err := openRegularFile(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	dt, err := readAllLimited(f, p, maxAttestationBytes)
+	if err != nil {
+		return nil, err
+	}
+	return dt, nil
+}
+
+func readAllLimited(r io.Reader, name string, limit int64) ([]byte, error) {
+	limited := &io.LimitedReader{R: r, N: limit + 1}
+	dt, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if limited.N == 0 {
+		return nil, errors.Errorf("%s exceeds %d bytes", name, limit)
+	}
+	return dt, nil
+}
+
+func openRegularFile(p string) (*os.File, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, errors.WithStack(err)
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, errors.Errorf("%s is not a regular file", p)
+	}
+
+	return f, nil
+}
+
 // MakeInTotoStatements iterates over all provided result attestations and
 // generates intoto attestation statements.
 func MakeInTotoStatements(ctx context.Context, s session.Group, attestations []exporter.Attestation, defaultSubjects []intoto.Subject) ([]intoto.Statement, error) {
@@ -61,7 +109,6 @@ func MakeInTotoStatements(ctx context.Context, s session.Group, attestations []e
 	statements := make([]intoto.Statement, len(attestations))
 
 	for i, att := range attestations {
-		i, att := i, att
 		eg.Go(func() error {
 			content, err := ReadAll(ctx, s, att)
 			if err != nil {
@@ -125,10 +172,9 @@ func makeInTotoStatement(content []byte, attestation exporter.Attestation, defau
 			return nil, errors.Errorf("unknown attestation subject type %T", subject)
 		}
 	}
-
 	stmt := intoto.Statement{
 		StatementHeader: intoto.StatementHeader{
-			Type:          intoto.StatementInTotoV01,
+			Type:          intoto.StatementInTotoV1,
 			PredicateType: attestation.InToto.PredicateType,
 			Subject:       subjects,
 		},

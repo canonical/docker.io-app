@@ -56,13 +56,14 @@ func installCommonConfigFlags(conf *config.Config, flags *pflag.FlagSet) {
 	flags.Var(opts.NewListOptsRef(&conf.DNSSearch, opts.ValidateDNSSearch), "dns-search", "DNS search domains to use")
 	flags.Var(dopts.NewNamedIPListOptsRef("host-gateway-ips", &conf.HostGatewayIPs), "host-gateway-ip", "IP addresses that the special 'host-gateway' string in --add-host resolves to. Defaults to the IP addresses of the default bridge")
 	flags.Var(opts.NewNamedListOptsRef("labels", &conf.Labels, opts.ValidateLabel), "label", "Set key=value labels to the daemon")
-	flags.StringVar(&conf.LogConfig.Type, "log-driver", "json-file", "Default driver for container logs")
+	flags.StringVar(&conf.LogConfig.Type, "log-driver", conf.LogConfig.Type, "Default driver for container logs")
 	flags.Var(opts.NewNamedMapOpts("log-opts", conf.LogConfig.Config, nil), "log-opt", "Default log driver options for containers")
 
 	flags.IntVar(&conf.MaxConcurrentDownloads, "max-concurrent-downloads", conf.MaxConcurrentDownloads, "Set the max concurrent downloads")
 	flags.IntVar(&conf.MaxConcurrentUploads, "max-concurrent-uploads", conf.MaxConcurrentUploads, "Set the max concurrent uploads")
 	flags.IntVar(&conf.MaxDownloadAttempts, "max-download-attempts", conf.MaxDownloadAttempts, "Set the max download attempts for each pull")
 	flags.IntVar(&conf.ShutdownTimeout, "shutdown-timeout", conf.ShutdownTimeout, "Set the default shutdown timeout")
+	flags.IntVar(&conf.DefaultStopTimeout, "default-stop-timeout", conf.DefaultStopTimeout, "Set the default container stop timeout in seconds (0 to terminate immediately)")
 
 	flags.StringVar(&conf.SwarmDefaultAdvertiseAddr, "swarm-default-advertise-addr", "", "Set default address or interface for swarm advertised address")
 	flags.BoolVar(&conf.Experimental, "experimental", false, "Enable experimental features")
@@ -78,6 +79,8 @@ func installCommonConfigFlags(conf *config.Config, flags *pflag.FlagSet) {
 	flags.StringVar(&conf.NoProxy, "no-proxy", "", "Comma-separated list of hosts or IP addresses for which the proxy is skipped")
 
 	flags.Var(opts.NewNamedListOptsRef("cdi-spec-dirs", &conf.CDISpecDirs, nil), "cdi-spec-dir", "CDI specification directories to use")
+
+	flags.Var(opts.NewNamedNRIOptsRef(&conf.NRIOpts), "nri-opts", "Node Resource Interface configuration")
 
 	// Deprecated flags / options
 	flags.BoolVarP(&conf.AutoRestart, "restart", "r", true, "--restart on the daemon has been deprecated in favor of --restart policies on docker run")

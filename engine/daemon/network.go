@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -279,13 +280,21 @@ func (daemon *Daemon) WaitForDetachment(ctx context.Context, networkName, networ
 
 // CreateManagedNetwork creates an agent network.
 func (daemon *Daemon) CreateManagedNetwork(create clustertypes.NetworkCreateRequest) error {
-	_, err := daemon.createNetwork(context.TODO(), &daemon.config().Config, create.CreateRequest, create.ID, true)
-	return err
+	return daemon.runInNetNS(func() error {
+		_, err := daemon.createNetwork(context.TODO(), &daemon.config().Config, create.CreateRequest, create.ID, true)
+		return err
+	})
 }
 
 // CreateNetwork creates a network with the given name, driver and other optional parameters
 func (daemon *Daemon) CreateNetwork(ctx context.Context, create networktypes.CreateRequest) (*networktypes.CreateResponse, error) {
-	return daemon.createNetwork(ctx, &daemon.config().Config, create, "", false)
+	var resp *networktypes.CreateResponse
+	err := daemon.runInNetNS(func() error {
+		var err error
+		resp, err = daemon.createNetwork(ctx, &daemon.config().Config, create, "", false)
+		return err
+	})
+	return resp, err
 }
 
 func (daemon *Daemon) createNetwork(ctx context.Context, cfg *config.Config, create networktypes.CreateRequest, id string, agent bool) (*networktypes.CreateResponse, error) {
@@ -304,9 +313,7 @@ func (daemon *Daemon) createNetwork(ctx context.Context, cfg *config.Config, cre
 	}
 
 	networkOptions := make(map[string]string)
-	for k, v := range create.Options {
-		networkOptions[k] = v
-	}
+	maps.Copy(networkOptions, create.Options)
 	if defaultOpts, ok := cfg.DefaultNetworkOpts[driver]; create.ConfigFrom == nil && ok {
 		for k, v := range defaultOpts {
 			if _, ok := networkOptions[k]; !ok {
@@ -435,10 +442,8 @@ func (daemon *Daemon) pluginRefCount(driver, capability string, mode int) {
 		// other capabilities can be ignored for now
 	}
 
-	for _, d := range builtinDrivers {
-		if d == driver {
-			return
-		}
+	if slices.Contains(builtinDrivers, driver) {
+		return
 	}
 
 	if daemon.PluginStore != nil {
@@ -626,20 +631,24 @@ func (daemon *Daemon) GetNetworkDriverList(ctx context.Context) []string {
 // DeleteManagedNetwork deletes an agent network.
 // The requirement of networkID is enforced.
 func (daemon *Daemon) DeleteManagedNetwork(networkID string) error {
-	n, err := daemon.GetNetworkByID(networkID)
-	if err != nil {
-		return err
-	}
-	return daemon.deleteNetwork(n, true)
+	return daemon.runInNetNS(func() error {
+		n, err := daemon.GetNetworkByID(networkID)
+		if err != nil {
+			return err
+		}
+		return daemon.deleteNetwork(n, true)
+	})
 }
 
 // DeleteNetwork destroys a network unless it's one of docker's predefined networks.
 func (daemon *Daemon) DeleteNetwork(networkID string) error {
-	n, err := daemon.GetNetworkByID(networkID)
-	if err != nil {
-		return fmt.Errorf("could not find network by ID: %w", err)
-	}
-	return daemon.deleteNetwork(n, false)
+	return daemon.runInNetNS(func() error {
+		n, err := daemon.GetNetworkByID(networkID)
+		if err != nil {
+			return fmt.Errorf("could not find network by ID: %w", err)
+		}
+		return daemon.deleteNetwork(n, false)
+	})
 }
 
 func (daemon *Daemon) deleteNetwork(nw *libnetwork.Network, dynamic bool) error {
