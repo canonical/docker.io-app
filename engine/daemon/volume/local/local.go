@@ -29,7 +29,10 @@ const (
 	// It uses a very distinctive name to avoid collisions migrating data between
 	// Docker versions.
 	volumeDataPathName = "_data"
-	volumesPathName    = "volumes"
+
+	// volumeOptsFile is the name of the file where options are stored for the volume.
+	volumeOptsFile  = "opts.json"
+	volumesPathName = "volumes"
 )
 
 var (
@@ -72,6 +75,18 @@ func New(scope string, rootIdentity idtools.Identity) (*Root, error) {
 		log.G(context.TODO()).Debugf("No quota support for local volumes in %s: %v", r.path, err)
 	}
 
+	// isVolume checks if the given volume is a volume-directory; it either
+	// contains a "_data" directory or a "opts.json".
+	isVolume := func(v *localVolume) bool {
+		if _, err := os.Lstat(v.path); err == nil {
+			return true
+		}
+		if _, err := os.Lstat(v.optsFile); err == nil {
+			return true
+		}
+		return false
+	}
+
 	for _, d := range dirs {
 		if !d.IsDir() {
 			continue
@@ -83,7 +98,16 @@ func New(scope string, rootIdentity idtools.Identity) (*Root, error) {
 			name:       name,
 			rootPath:   filepath.Join(r.path, name),
 			path:       filepath.Join(r.path, name, volumeDataPathName),
+			optsFile:   filepath.Join(r.path, name, volumeOptsFile),
 			quotaCtl:   r.quotaCtl,
+		}
+
+		if !isVolume(v) {
+			log.G(context.TODO()).WithFields(log.Fields{
+				"volume":    v.name,
+				"root-path": v.rootPath,
+			}).Debug("skipping non-volume directory")
+			continue
 		}
 
 		if err := v.loadOpts(); err != nil {
@@ -156,6 +180,7 @@ func (r *Root) Create(name string, opts map[string]string) (volume.Volume, error
 		name:       name,
 		rootPath:   filepath.Join(r.path, name),
 		path:       filepath.Join(r.path, name, volumeDataPathName),
+		optsFile:   filepath.Join(r.path, name, volumeOptsFile),
 		quotaCtl:   r.quotaCtl,
 	}
 
@@ -276,6 +301,8 @@ type localVolume struct {
 	path string
 	// driverName is the name of the driver that created the volume.
 	driverName string
+	// opts is path of the file where volume options are stored.
+	optsFile string
 	// opts is the parsed list of options used to create the volume
 	opts *optsConfig
 	// active refcounts the active mounts
@@ -339,7 +366,7 @@ func (v *localVolume) Unmount(id string) error {
 	// ultimately there's nothing that can be done. If we don't decrement the count
 	// this volume can never be removed until a daemon restart occurs.
 	if v.needsMount() {
-		// TODO: Remove once the real bug is fixed: https://github.com/moby/moby/issues/46508
+		// TODO: Remove once the fix is confirmed: https://github.com/moby/moby/issues/46508
 		if v.active.count > 0 {
 			v.active.count--
 			logger.WithField("active mounts", v.active).Debug("Decremented active mount count")
@@ -367,7 +394,7 @@ func (v *localVolume) Status() map[string]any {
 }
 
 func (v *localVolume) loadOpts() error {
-	b, err := os.ReadFile(filepath.Join(v.rootPath, "opts.json"))
+	b, err := os.ReadFile(v.optsFile)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			log.G(context.TODO()).WithError(err).Warnf("error while loading volume options for volume: %s", v.name)
@@ -392,7 +419,7 @@ func (v *localVolume) saveOpts() error {
 	if err != nil {
 		return err
 	}
-	err = atomicwriter.WriteFile(filepath.Join(v.rootPath, "opts.json"), b, 0o600)
+	err = atomicwriter.WriteFile(v.optsFile, b, 0o600)
 	if err != nil {
 		return errdefs.System(errors.Wrap(err, "error while persisting volume options"))
 	}
@@ -419,9 +446,9 @@ func (v *localVolume) LiveRestoreVolume(ctx context.Context, _ string) error {
 
 // getAddress finds out address/hostname from options
 func getAddress(opts string) string {
-	for _, opt := range strings.Split(opts, ",") {
-		if strings.HasPrefix(opt, "addr=") {
-			return strings.TrimPrefix(opt, "addr=")
+	for opt := range strings.SplitSeq(opts, ",") {
+		if after, ok := strings.CutPrefix(opt, "addr="); ok {
+			return after
 		}
 	}
 	return ""
@@ -429,9 +456,9 @@ func getAddress(opts string) string {
 
 // getPassword finds out a password from options
 func getPassword(opts string) string {
-	for _, opt := range strings.Split(opts, ",") {
-		if strings.HasPrefix(opt, "password=") {
-			return strings.TrimPrefix(opt, "password=")
+	for opt := range strings.SplitSeq(opts, ",") {
+		if after, ok := strings.CutPrefix(opt, "password="); ok {
+			return after
 		}
 	}
 	return ""

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -20,12 +21,15 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/v2/daemon/internal/filters"
 	"github.com/moby/moby/v2/daemon/internal/runconfig"
+	"github.com/moby/moby/v2/daemon/internal/timestamp"
 	"github.com/moby/moby/v2/daemon/internal/versions"
 	"github.com/moby/moby/v2/daemon/libnetwork/netlabel"
 	networkSettings "github.com/moby/moby/v2/daemon/network"
 	"github.com/moby/moby/v2/daemon/server/backend"
 	"github.com/moby/moby/v2/daemon/server/httpstatus"
 	"github.com/moby/moby/v2/daemon/server/httputils"
+	"github.com/moby/moby/v2/daemon/server/httputils/contenttype"
+	"github.com/moby/moby/v2/daemon/server/httputils/logstream"
 	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/moby/v2/pkg/ioutils"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -33,6 +37,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"golang.org/x/net/websocket"
 )
+
+// errLegacyCapabilities is returned when a client sends the deprecated
+// HostConfig.Capabilities field, which this daemon can no longer fulfill.
+var errLegacyCapabilities = errdefs.InvalidParameter(errors.New("the HostConfig.Capabilities field is not supported by this daemon; use CapAdd and CapDrop to set capabilities"))
 
 // commitRequest may contain an optional [container.Config].
 type commitRequest struct {
@@ -105,7 +113,7 @@ func (c *containerRouter) getContainersJSON(ctx context.Context, w http.Response
 	if tmpLimit := r.Form.Get("limit"); tmpLimit != "" {
 		val, err := strconv.Atoi(tmpLimit)
 		if err != nil {
-			return err
+			return errdefs.InvalidParameter(err)
 		}
 		limit = val
 	}
@@ -113,8 +121,6 @@ func (c *containerRouter) getContainersJSON(ctx context.Context, w http.Response
 	containers, err := c.backend.Containers(ctx, &backend.ContainerListOptions{
 		All:     httputils.BoolValue(r, "all"),
 		Size:    httputils.BoolValue(r, "size"),
-		Since:   r.Form.Get("since"),
-		Before:  r.Form.Get("before"),
 		Limit:   limit,
 		Filters: filter,
 	})
@@ -177,6 +183,12 @@ func (c *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 	})
 }
 
+var jsonTypes = []string{
+	types.MediaTypeJSONLines,
+	types.MediaTypeNDJSON,
+	types.MediaTypeJSONSequence,
+}
+
 func (c *containerRouter) getContainersLogs(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -189,15 +201,50 @@ func (c *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 	// with the appropriate status code.
 	stdout, stderr := httputils.BoolValue(r, "stdout"), httputils.BoolValue(r, "stderr")
 	if !stdout && !stderr {
-		return errdefs.InvalidParameter(errors.New("Bad parameters: you must choose at least one stream"))
+		return errdefs.InvalidParameter(errors.New("must specify at least one of 'stdout' or 'stderr'"))
+	}
+
+	var since time.Time
+	if v := r.Form.Get("since"); v != "" {
+		var err error
+		since, err = timestamp.ParseUnixTimestamp(v)
+		if err != nil {
+			return errdefs.InvalidParameter(fmt.Errorf(`invalid value for "since": %w`, err))
+		}
+	}
+
+	var until time.Time
+	if v := r.Form.Get("until"); v != "" && v != "0" {
+		var err error
+		until, err = timestamp.ParseUnixTimestamp(v)
+		if err != nil {
+			return errdefs.InvalidParameter(fmt.Errorf(`invalid value for "until": %w`, err))
+		}
+	}
+
+	var logFormat string
+	// TODO(thaJeztah): this is currently experimental; there is no implementation
+	// for this feature yet in the client, and the response struct is not yet part
+	// of the API type definitions. Change this to API 1.55 once the remaining parts
+	// are completed.
+	if versions.GreaterThanOrEqualTo(httputils.VersionFromContext(ctx), "1.54") {
+		// Opt-in through "format" query-arg or JSON stream "Accept" header if
+		// set; wildcards ("*/*", "application/*") are not considered.
+		logFormat = r.Form.Get("format")
+		if logFormat != "" && logFormat != "json" {
+			return errdefs.InvalidParameter(errors.New("unsupported log format"))
+		}
+		if logFormat == "" && contenttype.MatchAcceptStrict(r.Header, jsonTypes) != "" {
+			logFormat = "json"
+		}
 	}
 
 	containerName := vars["name"]
 	logsConfig := &backend.ContainerLogsOptions{
 		Follow:     httputils.BoolValue(r, "follow"),
 		Timestamps: httputils.BoolValue(r, "timestamps"),
-		Since:      r.Form.Get("since"),
-		Until:      r.Form.Get("until"),
+		Since:      since,
+		Until:      until,
 		Tail:       r.Form.Get("tail"),
 		ShowStdout: stdout,
 		ShowStderr: stderr,
@@ -207,6 +254,12 @@ func (c *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 	msgs, tty, err := c.backend.ContainerLogs(ctx, containerName, logsConfig)
 	if err != nil {
 		return err
+	}
+
+	if logFormat == "json" {
+		w.Header().Set("Content-Type", contenttype.Negotiate(r.Header, jsonTypes, types.MediaTypeNDJSON))
+		logstream.WriteJSON(ctx, w, msgs, logsConfig)
+		return nil
 	}
 
 	contentType := types.MediaTypeRawStream
@@ -219,7 +272,7 @@ func (c *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 	// this is the point of no return for writing a response. once we call
 	// WriteLogStream, the response has been started and errors will be
 	// returned in band by WriteLogStream
-	httputils.WriteLogStream(ctx, w, msgs, logsConfig, !tty)
+	logstream.Write(ctx, w, msgs, logsConfig, !tty)
 	return nil
 }
 
@@ -270,7 +323,7 @@ func (c *containerRouter) postContainersStop(ctx context.Context, w http.Respons
 	if tmpSeconds := r.Form.Get("t"); tmpSeconds != "" {
 		valSeconds, err := strconv.Atoi(tmpSeconds)
 		if err != nil {
-			return err
+			return errdefs.InvalidParameter(err)
 		}
 		options.Timeout = &valSeconds
 	}
@@ -283,13 +336,13 @@ func (c *containerRouter) postContainersStop(ctx context.Context, w http.Respons
 	return nil
 }
 
-func (c *containerRouter) postContainersKill(_ context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (c *containerRouter) postContainersKill(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
 
 	name := vars["name"]
-	if err := c.backend.ContainerKill(name, r.Form.Get("signal")); err != nil {
+	if err := c.backend.ContainerKill(ctx, name, r.Form.Get("signal")); err != nil {
 		return errors.Wrapf(err, "cannot kill container: %s", name)
 	}
 
@@ -463,8 +516,16 @@ func (c *containerRouter) postContainerUpdate(ctx context.Context, w http.Respon
 	if err := httputils.ReadJSON(r, &updateConfig); err != nil {
 		return err
 	}
-	if versions.LessThan(httputils.VersionFromContext(ctx), "1.40") {
+	version := httputils.VersionFromContext(ctx)
+	if versions.LessThan(version, "1.40") {
 		updateConfig.PidsLimit = nil
+	}
+	if versions.LessThan(version, "1.55") {
+		updateConfig.BlkioWeightDevice = nil
+		updateConfig.BlkioDeviceReadBps = nil
+		updateConfig.BlkioDeviceWriteBps = nil
+		updateConfig.BlkioDeviceReadIOps = nil
+		updateConfig.BlkioDeviceWriteIOps = nil
 	}
 
 	if updateConfig.PidsLimit != nil && *updateConfig.PidsLimit <= 0 {
@@ -504,7 +565,11 @@ func (c *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 	rdr := io.TeeReader(r.Body, &requestBody)
 
 	// TODO(thaJeztah): do we prefer [backend.ContainerCreateConfig] here?
-	req, err := runconfig.DecodeCreateRequest(rdr, c.backend.RawSysInfo())
+	sysInfo, err := c.backend.RawSysInfo()
+	if err != nil {
+		return err
+	}
+	req, err := runconfig.DecodeCreateRequest(rdr, sysInfo)
 	if err != nil {
 		return err
 	}
@@ -545,7 +610,7 @@ func (c *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 
 	if versions.LessThan(version, "1.41") {
 		// Older clients expect the default to be "host" on cgroup v1 hosts
-		if hostConfig.CgroupnsMode.IsEmpty() && !c.backend.RawSysInfo().CgroupUnified {
+		if hostConfig.CgroupnsMode.IsEmpty() && !sysInfo.CgroupUnified {
 			hostConfig.CgroupnsMode = container.CgroupnsModeHost
 		}
 	}
@@ -674,8 +739,19 @@ func (c *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 			//
 			// MacAddress field is deprecated since API v1.44. Use EndpointSettings.MacAddress instead.
 			MacAddress network.HardwareAddr `json:",omitempty"`
+
+			HostConfig struct {
+				// Capabilities was removed in commit 24f173a003 for
+				// API version 1.41, favoring CapAdd and CapDrop instead.
+				Capabilities []string `json:",omitempty"`
+			}
 		}
 		_ = json.Unmarshal(requestBody.Bytes(), &legacyConfig)
+
+		if err := rejectLegacyCapabilities(legacyConfig.HostConfig.Capabilities, version); err != nil {
+			return err
+		}
+
 		if warn, err := handleMACAddressBC(hostConfig, networkingConfig, version, legacyConfig.MacAddress); err != nil {
 			return err
 		} else if warn != "" {
@@ -741,6 +817,26 @@ func handleVolumeDriverBC(version string, hostConfig *container.HostConfig) (war
 		return "WARNING: the container-wide volume-driver configuration is ignored for volumes specified via 'mount'. Use '--mount type=volume,volume-driver=...' instead"
 	}
 	return ""
+}
+
+// rejectLegacyCapabilities returns an error if the deprecated
+// HostConfig.Capabilities field is present in a request for API version 1.40.
+//
+// The Capabilities field was added in API 1.40 (Docker 19.03) as a way to
+// specify the exact set of kernel capabilities for a container, overriding
+// the CapAdd/CapDrop mechanism. It was removed before API 1.41 (Docker 20.10)
+// because putting the burden of providing the full capability list on the
+// client was considered a poor design (see 24f173a003).
+//
+// The field has since been deleted from the API type, so json.Unmarshal
+// silently drops it. This daemon cannot honor the field, so it is best to
+// return an explicit error rather than silently ignoring the field when it is
+// expected to be supported.
+func rejectLegacyCapabilities(capabilities []string, version string) error {
+	if len(capabilities) > 0 && versions.Equal(version, "1.40") {
+		return errLegacyCapabilities
+	}
+	return nil
 }
 
 // handleMACAddressBC takes care of backward-compatibility for the container-wide MAC address by mutating the
@@ -903,18 +999,25 @@ func handlePortBindingsBC(hostConfig *container.HostConfig, version string) stri
 		if len(bindings) > 0 {
 			continue
 		}
-		if versions.GreaterThan(version, "1.52") && len(bindings) == 0 {
-			// Starting with API 1.53, no backfilling is done. An empty slice
-			// of port bindings is treated as "no port bindings" by the daemon,
-			// but it still needs to backfill empty slices when loading the
-			// on-disk state for containers created by older versions of the
-			// Engine. Drop the PortBindings entry to ensure that no backfilling
-			// will happen when restarting the daemon.
-			delete(hostConfig.PortBindings, port)
-			continue
-		}
+		/*
+			API 1.53 shipped in a minor release. We cannot introduce a breaking change there, so
+			we must still backfill empty port bindings. This change can be re-introduced for the
+			API version that ships in 30.x. Note that some networking tests will need fixing.
+			See https://github.com/moby/moby/issues/51727
 
-		if versions.Equal(version, "1.52") {
+			if versions.GreaterThan(version, "1.52") && len(bindings) == 0 {
+				// Starting with API 1.53, no backfilling is done. An empty slice
+				// of port bindings is treated as "no port bindings" by the daemon,
+				// but it still needs to backfill empty slices when loading the
+				// on-disk state for containers created by older versions of the
+				// Engine. Drop the PortBindings entry to ensure that no backfilling
+				// will happen when restarting the daemon.
+				delete(hostConfig.PortBindings, port)
+				continue
+			}
+		*/
+
+		if versions.GreaterThanOrEqualTo(version, "1.52") {
 			emptyPBs = append(emptyPBs, port.String())
 		}
 
@@ -922,7 +1025,7 @@ func handlePortBindingsBC(hostConfig *container.HostConfig, version string) stri
 	}
 
 	if len(emptyPBs) > 0 {
-		return fmt.Sprintf("Following container port(s) have an empty list of port-bindings: %s. Starting with API 1.53, such bindings will be discarded.", strings.Join(emptyPBs, ", "))
+		return fmt.Sprintf("Following container port(s) have an empty list of port-bindings: %s. Such bindings will be discarded in a future version.", strings.Join(emptyPBs, ", "))
 	}
 
 	return ""

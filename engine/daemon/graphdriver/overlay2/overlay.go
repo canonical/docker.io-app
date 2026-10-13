@@ -19,6 +19,7 @@ import (
 	"github.com/docker/go-units"
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
+	"github.com/moby/go-archive/compression"
 	"github.com/moby/locker"
 	"github.com/moby/moby/v2/daemon/graphdriver"
 	"github.com/moby/moby/v2/daemon/graphdriver/overlayutils"
@@ -166,10 +167,10 @@ func Init(home string, options []string, idMap user.IdentityMapping) (graphdrive
 
 	cuid := os.Getuid()
 	_, gid := idMap.RootPair()
-	if err := user.MkdirAllAndChown(home, 0o710, cuid, gid); err != nil {
+	if err := user.MkdirAndChown(home, 0o710, cuid, gid); err != nil {
 		return nil, err
 	}
-	if err := user.MkdirAllAndChown(path.Join(home, linkDir), 0o700, cuid, os.Getegid()); err != nil {
+	if err := user.MkdirAndChown(path.Join(home, linkDir), 0o700, cuid, os.Getegid()); err != nil {
 		return nil, err
 	}
 
@@ -347,9 +348,6 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
 
 	cuid := os.Getuid()
 	uid, gid := d.idMap.RootPair()
-	if err := user.MkdirAllAndChown(path.Dir(dir), 0o710, cuid, gid); err != nil {
-		return err
-	}
 	if err := user.MkdirAndChown(dir, 0o710, cuid, gid); err != nil {
 		return err
 	}
@@ -469,7 +467,7 @@ func (d *Driver) getLowerDirs(id string) ([]string, error) {
 	var lowersArray []string
 	lowers, err := os.ReadFile(path.Join(d.dir(id), lowerFile))
 	if err == nil {
-		for _, s := range strings.Split(string(lowers), ":") {
+		for s := range strings.SplitSeq(string(lowers), ":") {
 			lp, err := os.Readlink(path.Join(d.home, s))
 			if err != nil {
 				return nil, err
@@ -721,7 +719,7 @@ func (d *Driver) Diff(id, parent string) (io.ReadCloser, error) {
 	diffPath := d.getDiffPath(id)
 	logger.Debugf("Tar with options on %s", diffPath)
 	return archive.TarWithOptions(diffPath, &archive.TarOptions{
-		Compression:    archive.Uncompressed,
+		Compression:    compression.None,
 		IDMap:          d.idMap,
 		WhiteoutFormat: archive.OverlayWhiteoutFormat,
 	})

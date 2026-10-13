@@ -133,8 +133,8 @@ func (f *remoteFileServer) Close() error {
 
 func newRemoteFileServer(t testing.TB, ctx *fakecontext.Fake, c client.APIClient) *remoteFileServer {
 	var (
-		imgName = fmt.Sprintf("fileserver-img-%s", strings.ToLower(testutil.GenerateRandomAlphaOnlyString(10)))
-		ctrName = fmt.Sprintf("fileserver-cnt-%s", strings.ToLower(testutil.GenerateRandomAlphaOnlyString(10)))
+		imgName = "fileserver-img-" + testutil.RandomAlpha(10)
+		ctrName = "fileserver-cnt-" + testutil.RandomAlpha(10)
 	)
 
 	ensureHTTPServerImage(t)

@@ -7,7 +7,7 @@ import (
 
 	digest "github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
-	"go.etcd.io/bbolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 var ErrInvalidEncoding = errors.Errorf("invalid encoding")
@@ -16,7 +16,7 @@ var ErrNotFound = errors.Errorf("not found")
 const bucketName = "byhash"
 
 type DB struct {
-	db *bbolt.DB
+	db *bolt.DB
 	wg sync.WaitGroup
 }
 
@@ -31,7 +31,9 @@ func GetDefaultDB() *DB {
 }
 
 func NewDB(path string) (*DB, error) {
-	db, err := bbolt.Open(path, 0600, nil)
+	db, err := bolt.Open(path, 0600, &bolt.Options{
+		FreelistType: bolt.FreelistMapType,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -67,22 +69,21 @@ func (d *DB) saveFrames(key string, frames []Frame) {
 	if d.db == nil {
 		return
 	}
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+
+	d.wg.Go(func() {
 		val, err := encodeFrames(frames)
 		if err != nil {
 			// Optionally log error
 			return
 		}
-		_ = d.db.Update(func(tx *bbolt.Tx) error {
+		_ = d.db.Update(func(tx *bolt.Tx) error {
 			b, err := tx.CreateBucketIfNotExists([]byte(bucketName))
 			if err != nil {
 				return err
 			}
 			return b.Put([]byte(key), val)
 		})
-	}()
+	})
 }
 
 func (d *DB) Get(ctx context.Context, dgst string) (Type, []Frame, error) {
@@ -95,7 +96,7 @@ func (d *DB) Get(ctx context.Context, dgst string) (Type, []Frame, error) {
 	}
 	var typ Type
 	var resultFrames []Frame
-	err = d.db.View(func(tx *bbolt.Tx) error {
+	err = d.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
 			return errors.WithStack(ErrNotFound)
@@ -128,7 +129,7 @@ func (d *DB) All(ctx context.Context, cb func(key string, typ Type, frames []Fra
 	if d.db == nil {
 		return nil
 	}
-	return d.db.View(func(tx *bbolt.Tx) error {
+	return d.db.View(func(tx *bolt.Tx) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)

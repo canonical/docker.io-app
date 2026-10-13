@@ -2,28 +2,62 @@ package llbsolver
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb/sourceresolver"
+	"github.com/moby/buildkit/frontend/gateway"
 	gatewaypb "github.com/moby/buildkit/frontend/gateway/pb"
+	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/sourcepolicy"
 	spb "github.com/moby/buildkit/sourcepolicy/pb"
 	"github.com/moby/buildkit/sourcepolicy/policysession"
+	"github.com/moby/buildkit/worker"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
+
+const (
+	keySourcePolicy        = "llb.sourcepolicy"
+	keySourcePolicySession = "llb.sourcepolicysession"
+)
+
+// SourcePolicyEvaluator evaluates source operations against configured policies.
+type SourcePolicyEvaluator interface {
+	Evaluate(ctx context.Context, op *pb.Op) (bool, error)
+}
 
 type policyEvaluator struct {
 	*llbBridge
 	engine *sourcepolicy.Engine
 }
 
+func normalizedSourceIdentifier(w worker.Worker, op *pb.SourceOp) string {
+	if w == nil {
+		return op.GetIdentifier()
+	}
+	id, err := w.ParseSource(op, nil)
+	if err != nil {
+		return op.GetIdentifier()
+	}
+	return id.String()
+}
+
 func (p *policyEvaluator) Evaluate(ctx context.Context, op *pb.Op) (bool, error) {
+	return p.evaluate(ctx, op, 10)
+}
+
+func (p *policyEvaluator) evaluate(ctx context.Context, op *pb.Op, max int) (bool, error) {
 	source := op.GetSource()
 	if source == nil {
 		return false, nil
 	}
+	w, err := p.resolveWorker()
+	if err != nil {
+		return false, err
+	}
+	source.Identifier = normalizedSourceIdentifier(w, source)
 	ok, err := p.engine.Evaluate(ctx, source)
 	if err != nil {
 		return false, err
@@ -41,6 +75,7 @@ func (p *policyEvaluator) Evaluate(ctx context.Context, op *pb.Op) (bool, error)
 	}
 
 	verifier := policysession.NewPolicyVerifierClient(caller.Conn())
+	ctx = caller.Context(ctx)
 	req := &policysession.CheckPolicyRequest{
 		Platform: op.Platform,
 		Source: &gatewaypb.ResolveSourceMetaResponse{
@@ -48,10 +83,9 @@ func (p *policyEvaluator) Evaluate(ctx context.Context, op *pb.Op) (bool, error)
 		},
 	}
 
-	max := 0
 	for {
-		max++
-		if max > 10 { // TODO: better loop detection
+		max--
+		if max < 0 { // TODO: better loop detection
 			return false, errors.Errorf("too many policy requests")
 		}
 		resp, err := verifier.CheckPolicy(ctx, req)
@@ -88,19 +122,35 @@ func (p *policyEvaluator) Evaluate(ctx context.Context, op *pb.Op) (bool, error)
 					Platform: toOCIPlatform(metareq.Platform),
 				}
 			}
+
+			if metareq.Image != nil {
+				if op.ImageOpt == nil {
+					op.ImageOpt = &sourceresolver.ResolveImageOpt{}
+				}
+				op.ImageOpt.NoConfig = metareq.Image.NoConfig
+				op.ImageOpt.AttestationChain = metareq.Image.AttestationChain
+				op.ImageOpt.ResolveAttestations = slices.Clone(metareq.Image.ResolveAttestations)
+			}
+
+			if metareq.Git != nil {
+				op.GitOpt = &sourceresolver.ResolveGitOpt{
+					ReturnObject: metareq.Git.ReturnObject,
+				}
+			}
+			if metareq.HTTP != nil && metareq.HTTP.ChecksumRequest != nil {
+				op.HTTPOpt = &sourceresolver.ResolveHTTPOpt{
+					ChecksumReq: &sourceresolver.ResolveHTTPChecksumRequest{
+						Algo:   fromPBHTTPChecksumAlgo(metareq.HTTP.ChecksumRequest.Algo),
+						Suffix: slices.Clone(metareq.HTTP.ChecksumRequest.Suffix),
+					},
+				}
+			}
+
 			resp, err := p.resolveSourceMetadata(ctx, metareq.Source, op, false)
 			if err != nil {
 				return false, errors.Wrap(err, "error resolving source metadata from policy request")
 			}
-			req.Source = &gatewaypb.ResolveSourceMetaResponse{
-				Source: resp.Op,
-			}
-			if resp.Image != nil {
-				req.Source.Image = &gatewaypb.ResolveSourceImageResponse{
-					Digest: resp.Image.Digest.String(),
-					Config: resp.Image.Config,
-				}
-			}
+			req.Source = gateway.ToPBResolveSourceMetaResponse(resp)
 			continue
 		}
 
@@ -109,10 +159,21 @@ func (p *policyEvaluator) Evaluate(ctx context.Context, op *pb.Op) (bool, error)
 			return false, errors.Errorf("no decision in policy response")
 		}
 		if decision.Action == spb.PolicyAction_CONVERT {
-			return false, errors.Errorf("convert action not yet supported")
+			newSrc := decision.Update
+			if newSrc == nil {
+				return false, errors.Errorf("convert action requires updated source")
+			}
+			source.Identifier = newSrc.Identifier
+			source.Attrs = newSrc.Attrs
+			_, err = p.evaluate(ctx, op, max)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
 		}
 		if decision.Action != spb.PolicyAction_ALLOW {
-			return false, errors.Errorf("source %q not allowed by policy: action %s", source.Identifier, decision.Action.String())
+			err := errors.Errorf("source %q not allowed by policy: action %s", source.Identifier, decision.Action.String())
+			return false, policysession.WrapDenyMessages(err, decision.GetDenyMessages())
 		}
 		return ok, nil
 	}
@@ -158,4 +219,74 @@ func toOCIPlatform(p *pb.Platform) *ocispecs.Platform {
 		OSVersion:    p.OSVersion,
 		OSFeatures:   p.OSFeatures,
 	}
+}
+
+func fromPBHTTPChecksumAlgo(in gatewaypb.ChecksumRequest_ChecksumAlgo) sourceresolver.ResolveHTTPChecksumAlgo {
+	switch in {
+	case gatewaypb.ChecksumRequest_CHECKSUM_ALGO_SHA256:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA256
+	case gatewaypb.ChecksumRequest_CHECKSUM_ALGO_SHA384:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA384
+	case gatewaypb.ChecksumRequest_CHECKSUM_ALGO_SHA512:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA512
+	default:
+		return sourceresolver.ResolveHTTPChecksumAlgo(in)
+	}
+}
+
+func validateSourcePolicy(pol *spb.Policy) error {
+	for _, r := range pol.Rules {
+		if r == nil {
+			return errors.New("invalid nil rule in policy")
+		}
+		if r.Selector == nil {
+			return errors.New("invalid nil selector in policy")
+		}
+		for _, c := range r.Selector.Constraints {
+			if c == nil {
+				return errors.New("invalid nil constraint in policy")
+			}
+		}
+	}
+	return nil
+}
+
+func loadSourcePolicy(b solver.Builder) (*spb.Policy, error) {
+	var srcPol spb.Policy
+	err := b.EachValue(context.TODO(), keySourcePolicy, func(v any) error {
+		x, ok := v.(*spb.Policy)
+		if !ok {
+			return errors.Errorf("invalid source policy %T", v)
+		}
+		for _, f := range x.Rules {
+			if f == nil {
+				return errors.Errorf("invalid nil policy rule")
+			}
+			srcPol.Rules = append(srcPol.Rules, f.CloneVT())
+		}
+		srcPol.Version = x.Version
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &srcPol, nil
+}
+
+func loadSourcePolicySession(b solver.Builder) (string, error) {
+	var session string
+	err := b.EachValue(context.TODO(), keySourcePolicySession, func(v any) error {
+		x, ok := v.(string)
+		if !ok {
+			return errors.Errorf("invalid source policy session %T", v)
+		}
+		if x != "" {
+			session = x
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return session, nil
 }
