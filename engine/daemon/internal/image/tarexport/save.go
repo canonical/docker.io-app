@@ -17,12 +17,14 @@ import (
 	"github.com/distribution/reference"
 	"github.com/docker/distribution"
 	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/v2/daemon/internal/image"
 	v1 "github.com/moby/moby/v2/daemon/internal/image/v1"
 	"github.com/moby/moby/v2/daemon/internal/ioutils"
 	"github.com/moby/moby/v2/daemon/internal/layer"
 	"github.com/moby/moby/v2/daemon/internal/system"
+	"github.com/moby/moby/v2/errdefs"
 	"github.com/moby/sys/sequential"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -103,7 +105,7 @@ func (l *tarexporter) parseNames(ctx context.Context, names []string) (desc map[
 
 		ref, err := reference.ParseAnyReference(name)
 		if err != nil {
-			return nil, err
+			return nil, errdefs.InvalidParameter(err)
 		}
 		namedRef, ok := ref.(reference.Named)
 		if !ok {
@@ -395,7 +397,7 @@ func (s *saveSession) writeTar(ctx context.Context, tempDir string, outStream io
 	ctx, span := tracing.StartSpan(ctx, "writeTar")
 	defer span.End()
 
-	fs, err := archive.Tar(tempDir, archive.Uncompressed)
+	fs, err := archive.Tar(tempDir, compression.None)
 	if err != nil {
 		span.SetStatus(err)
 		return err

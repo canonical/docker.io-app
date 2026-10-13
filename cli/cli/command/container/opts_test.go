@@ -830,13 +830,6 @@ func TestParseRestartPolicy(t *testing.T) {
 			},
 		},
 		{
-			input: "always:1",
-			expected: container.RestartPolicy{
-				Name:              container.RestartPolicyAlways,
-				MaximumRetryCount: 1,
-			},
-		},
-		{
 			input:       "always:2:3",
 			expectedErr: "invalid restart policy format: maximum retry count must be an integer",
 		},
@@ -860,6 +853,16 @@ func TestParseRestartPolicy(t *testing.T) {
 		{
 			input:       "unless-stopped:invalid",
 			expectedErr: "invalid restart policy format: maximum retry count must be an integer",
+		},
+
+		// Unknown / invalid combinations: validation is handled by the daemon>
+		{
+			input:    "anything:123",
+			expected: container.RestartPolicy{Name: "anything", MaximumRetryCount: 123},
+		},
+		{
+			input:    "negative:-123",
+			expected: container.RestartPolicy{Name: "negative", MaximumRetryCount: -123},
 		},
 	}
 	for _, tc := range tests {
@@ -937,13 +940,13 @@ func TestParseLoggingOpts(t *testing.T) {
 }
 
 func TestParseEnvfileVariables(t *testing.T) {
-	e := "open nonexistent: no such file or directory"
+	expErr := "--env-file: open nonexistent: no such file or directory"
 	if runtime.GOOS == "windows" {
-		e = "open nonexistent: The system cannot find the file specified."
+		expErr = "--env-file: open nonexistent: The system cannot find the file specified."
 	}
 	// env ko
-	if _, _, _, err := parseRun([]string{"--env-file=nonexistent", "img", "cmd"}); err == nil || err.Error() != e {
-		t.Fatalf("Expected an error with message '%s', got %v", e, err)
+	if _, _, _, err := parseRun([]string{"--env-file=nonexistent", "img", "cmd"}); err == nil || err.Error() != expErr {
+		t.Fatalf("Expected an error with message '%s', got %v", expErr, err)
 	}
 	// env ok
 	config, _, _, err := parseRun([]string{"--env-file=testdata/valid.env", "img", "cmd"})
@@ -990,13 +993,13 @@ func TestParseEnvfileVariablesWithBOMUnicode(t *testing.T) {
 }
 
 func TestParseLabelfileVariables(t *testing.T) {
-	e := "open nonexistent: no such file or directory"
+	expErr := "--label-file: open nonexistent: no such file or directory"
 	if runtime.GOOS == "windows" {
-		e = "open nonexistent: The system cannot find the file specified."
+		expErr = "--label-file: open nonexistent: The system cannot find the file specified."
 	}
 	// label ko
-	if _, _, _, err := parseRun([]string{"--label-file=nonexistent", "img", "cmd"}); err == nil || err.Error() != e {
-		t.Fatalf("Expected an error with message '%s', got %v", e, err)
+	if _, _, _, err := parseRun([]string{"--label-file=nonexistent", "img", "cmd"}); err == nil || err.Error() != expErr {
+		t.Fatalf("Expected an error with message '%s', got %v", expErr, err)
 	}
 	// label ok
 	config, _, _, err := parseRun([]string{"--label-file=testdata/valid.label", "img", "cmd"})

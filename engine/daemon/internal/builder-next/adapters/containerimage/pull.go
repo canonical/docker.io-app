@@ -131,6 +131,12 @@ func (is *Source) registryIdentifier(ref string, attrs map[string]string, platfo
 				return nil, errors.Errorf("invalid layer limit %s", v)
 			}
 			id.LayerLimit = &l
+		case pb.AttrImageChecksum:
+			dgst, err := digest.Parse(v)
+			if err != nil {
+				return nil, errors.Wrapf(err, "invalid image checksum %s", v)
+			}
+			id.Checksum = dgst
 		}
 	}
 
@@ -180,7 +186,7 @@ func (is *Source) resolveRemote(ctx context.Context, ref string, platform *ocisp
 	// key is used to synchronize resolutions that can happen in parallel when doing multi-stage.
 	key := "getconfig::" + ref + "::" + platforms.FormatAll(p)
 	res, err := is.g.Do(ctx, key, func(ctx context.Context) (*resolveRemoteResult, error) {
-		res := resolver.DefaultPool.GetResolver(is.RegistryHosts, ref, "pull", sm, g)
+		res := resolver.DefaultPool.GetResolver(is.RegistryHosts, ref, resolver.ScopeType{}, sm, g)
 		dgst, dt, err := imageutil.Config(ctx, ref, res, is.ContentStore, is.LeaseManager, platform)
 		if err != nil {
 			return nil, err
@@ -285,7 +291,7 @@ type puller struct {
 }
 
 func (p *puller) resolver(g session.Group) remotes.Resolver {
-	return resolver.DefaultPool.GetResolver(p.is.RegistryHosts, p.src.Reference.String(), "pull", p.sm, g)
+	return resolver.DefaultPool.GetResolver(p.is.RegistryHosts, p.src.Reference.String(), resolver.ScopeType{}, p.sm, g)
 }
 
 func (p *puller) mainManifestKey(platform ocispec.Platform) (digest.Digest, error) {
@@ -328,7 +334,7 @@ func (p *puller) resolveLocal() {
 			}
 		}
 
-		if p.src.ResolveMode == resolver.ResolveModeDefault || p.src.ResolveMode == resolver.ResolveModePreferLocal {
+		if p.src.Checksum == "" && (p.src.ResolveMode == resolver.ResolveModeDefault || p.src.ResolveMode == resolver.ResolveModePreferLocal) {
 			ref := p.src.Reference.String()
 			img, err := p.is.resolveLocal(ref)
 			if err == nil {
@@ -347,7 +353,7 @@ func (p *puller) resolveLocal() {
 
 func (p *puller) resolve(ctx context.Context, jobCtx solver.JobContext) error {
 	_, err := p.g.Do(ctx, "", func(ctx context.Context) (_ struct{}, retErr error) {
-		resolveProgressDone := oneOffProgress(ctx, "resolve "+p.src.Reference.String())
+		resolveProgressDone := progress.OneOff(ctx, "resolve "+p.src.Reference.String())
 		defer func() {
 			_ = resolveProgressDone(retErr)
 		}()
@@ -369,6 +375,10 @@ func (p *puller) resolve(ctx context.Context, jobCtx solver.JobContext) error {
 
 			p.desc = desc
 			p.ref = origRef
+		}
+
+		if p.src.Checksum != "" && p.desc.Digest != p.src.Checksum {
+			return struct{}{}, errors.Errorf("image digest %s for %s does not match expected checksum %s", p.desc.Digest, p.src.Reference.String(), p.src.Checksum)
 		}
 
 		// Schema 1 manifests cannot be resolved to an image config
@@ -480,7 +490,7 @@ func (p *puller) Snapshot(ctx context.Context, jobCtx solver.JobContext) (cache.
 			l, err := p.is.LayerStore.Get(img.RootFS.ChainID())
 			if err == nil {
 				layer.ReleaseAndLog(p.is.LayerStore, l)
-				ref, err := p.getRef(ctx, img.RootFS.DiffIDs, cache.WithDescription(fmt.Sprintf("from local %s", p.ref)))
+				ref, err := p.getRef(ctx, img.RootFS.DiffIDs, cache.WithDescription("from local "+p.ref))
 				if err != nil {
 					return nil, err
 				}
@@ -664,7 +674,7 @@ func (p *puller) Snapshot(ctx context.Context, jobCtx solver.JobContext) (cache.
 		return nil, err
 	}
 
-	ref, err := p.getRef(ctx, rootFS.DiffIDs, cache.WithDescription(fmt.Sprintf("pulled from %s", p.ref)))
+	ref, err := p.getRef(ctx, rootFS.DiffIDs, cache.WithDescription("pulled from "+p.ref))
 	release()
 	if err != nil {
 		return nil, err
@@ -899,23 +909,6 @@ type statusInfo struct {
 	Total     int64
 	StartedAt time.Time
 	UpdatedAt time.Time
-}
-
-func oneOffProgress(ctx context.Context, id string) func(err error) error {
-	pw, _, _ := progress.NewFromContext(ctx)
-	s := time.Now()
-	st := progress.Status{
-		Started: &s,
-	}
-	_ = pw.Write(id, st)
-	return func(err error) error {
-		// TODO: set error on status
-		c := time.Now()
-		st.Completed = &c
-		_ = pw.Write(id, st)
-		_ = pw.Close()
-		return err
-	}
 }
 
 // cacheKeyFromConfig returns a stable digest from image config. If image config

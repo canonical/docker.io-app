@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package formatter
 
@@ -21,13 +21,14 @@ import (
 const (
 	defaultContainerTableFormat = "table {{.ID}}\t{{.Image}}\t{{.Command}}\t{{.RunningFor}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
 
-	namesHeader      = "NAMES"
-	commandHeader    = "COMMAND"
-	runningForHeader = "CREATED"
-	mountsHeader     = "MOUNTS"
-	localVolumes     = "LOCAL VOLUMES"
-	networksHeader   = "NETWORKS"
-	platformHeader   = "PLATFORM"
+	namesHeader        = "NAMES"
+	commandHeader      = "COMMAND"
+	runningForHeader   = "CREATED"
+	mountsHeader       = "MOUNTS"
+	localVolumes       = "LOCAL VOLUMES"
+	networksHeader     = "NETWORKS"
+	platformHeader     = "PLATFORM"
+	healthStatusHeader = "HEALTH STATUS"
 )
 
 // Platform wraps a [ocispec.Platform] to implement the stringer interface.
@@ -121,6 +122,7 @@ func NewContainerContext() *ContainerContext {
 		"LocalVolumes": localVolumes,
 		"Networks":     networksHeader,
 		"Platform":     platformHeader,
+		"HealthStatus": healthStatusHeader,
 	}
 	return &containerCtx
 }
@@ -141,25 +143,36 @@ func (c *ContainerContext) ID() string {
 
 // Names returns a comma-separated string of the container's names, with their
 // slash (/) prefix stripped. Additional names for the container (related to the
-// legacy `--link` feature) are omitted.
+// legacy `--link` feature) are omitted when formatting "truncated".
 func (c *ContainerContext) Names() string {
-	names := StripNamePrefix(c.c.Names)
-	if c.trunc {
-		for _, name := range names {
-			if len(strings.Split(name, "/")) == 1 {
-				names = []string{name}
-				break
+	var b strings.Builder
+	for i, n := range c.c.Names {
+		name := strings.TrimPrefix(n, "/")
+		if c.trunc {
+			// When printing truncated, we only print a single name.
+			//
+			// Pick the first name that's not a legacy link (does not have
+			// slashes inside the name itself (e.g., "/other-container/link")).
+			// Normally this would be the first name found.
+			if strings.IndexByte(name, '/') == -1 {
+				return name
 			}
+			continue
 		}
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(name)
 	}
-	return strings.Join(names, ",")
+	return b.String()
 }
 
-// StripNamePrefix removes prefix from string, typically container names as returned by `ContainersList` API
+// StripNamePrefix removes any "/" prefix from container names returned
+// by the "ContainersList" API.
 func StripNamePrefix(ss []string) []string {
 	sss := make([]string, len(ss))
 	for i, s := range ss {
-		sss[i] = s[1:]
+		sss[i] = strings.TrimPrefix(s, "/")
 	}
 	return sss
 }
@@ -341,6 +354,35 @@ func (c *ContainerContext) Networks() string {
 	return strings.Join(networks, ",")
 }
 
+// HealthStatus returns the container's health status (for example, "healthy","unhealthy", or "starting").
+// If no healthcheck is configured, an empty
+// string is returned.
+func (c *ContainerContext) HealthStatus() string {
+	if c.c.Health != nil && c.c.Health.Status != "" {
+		return string(c.c.Health.Status)
+	}
+
+	// Fallback for API versions before v1.52, which include health only in Status text;
+	// see https://github.com/moby/moby/pull/50281
+	// see https://github.com/moby/moby/blob/docker-v29.4.3/daemon/container/health.go#L18-L43
+	_, health, ok := strings.Cut(c.c.Status, "(")
+	if !ok || !strings.HasSuffix(health, ")") {
+		return ""
+	}
+
+	health = strings.TrimSuffix(health, ")")
+	health = strings.TrimPrefix(health, "health: ")
+
+	switch container.HealthStatus(health) {
+	case container.Healthy, container.Unhealthy, container.Starting:
+		return health
+	case container.NoHealthcheck:
+		return ""
+	default:
+		return ""
+	}
+}
+
 // DisplayablePorts returns formatted string representing open ports of container
 // e.g. "0.0.0.0:80->9090/tcp, 9988/tcp"
 // it's used by command 'docker ps'
@@ -350,7 +392,7 @@ func DisplayablePorts(ports []container.PortSummary) string {
 		last  uint16
 	}
 	groupMap := make(map[string]*portGroup)
-	var result []string //nolint:prealloc
+	var result []string
 	var hostMappings []string
 	var groupMapKeys []string
 	sort.Slice(ports, func(i, j int) bool {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/moby/moby/v2/integration-cli/cli"
@@ -63,7 +64,8 @@ func (s *DockerAPISuite) TestLogsAPINoStdoutNorStderr(c *testing.T) {
 	defer apiClient.Close()
 
 	_, err = apiClient.ContainerLogs(testutil.GetContext(c), name, client.ContainerLogsOptions{})
-	assert.ErrorContains(c, err, "Bad parameters: you must choose at least one stream")
+	assert.ErrorType(c, err, cerrdefs.IsInvalidArgument)
+	assert.ErrorContains(c, err, "must specify at least one of 'stdout' or 'stderr'")
 }
 
 // Regression test for #12704
@@ -125,7 +127,7 @@ func (s *DockerAPISuite) TestLogsAPIUntilFutureFollow(c *testing.T) {
 	go func() {
 		bufReader := bufio.NewReader(reader)
 		defer reader.Close()
-		for i := 0; i < untilSecs; i++ {
+		for range untilSecs {
 			out, _, err := bufReader.ReadLine()
 			if err != nil {
 				if err == io.EOF {
@@ -148,7 +150,7 @@ func (s *DockerAPISuite) TestLogsAPIUntilFutureFollow(c *testing.T) {
 		}
 	}()
 
-	for i := 0; i < untilSecs; i++ {
+	for range untilSecs {
 		select {
 		case l := <-chLog:
 			assert.NilError(c, l.err)

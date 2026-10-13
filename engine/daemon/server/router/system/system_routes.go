@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/containerd/log"
-	"github.com/golang/gddo/httputil"
 	"github.com/moby/moby/api/pkg/authconfig"
 	"github.com/moby/moby/api/types"
 	"github.com/moby/moby/api/types/events"
@@ -22,6 +21,7 @@ import (
 	"github.com/moby/moby/v2/daemon/server/backend"
 	"github.com/moby/moby/v2/daemon/server/buildbackend"
 	"github.com/moby/moby/v2/daemon/server/httputils"
+	"github.com/moby/moby/v2/daemon/server/httputils/contenttype"
 	"github.com/moby/moby/v2/daemon/server/router/build"
 	"github.com/moby/moby/v2/pkg/ioutils"
 	"github.com/pkg/errors"
@@ -117,6 +117,10 @@ func (s *systemRouter) getInfo(ctx context.Context, w http.ResponseWriter, r *ht
 				"BridgeNfIptables":  json.RawMessage("false"),
 				"BridgeNfIp6tables": json.RawMessage("false"),
 			}))
+		}
+		if versions.LessThan(version, "1.53") {
+			// Field introduced in API v1.53.
+			info.NRI = nil
 		}
 		return compat.Wrap(info, legacyOptions...), nil
 	})
@@ -233,6 +237,20 @@ func (s *systemRouter) getDiskUsage(ctx context.Context, w http.ResponseWriter, 
 		}
 	}
 	if versions.LessThan(version, "1.52") {
+		if versions.LessThan(version, "1.44") && len(legacy.Images) > 0 {
+			wrappedImages := make([]*compat.Wrapper, len(legacy.Images))
+			for i := range legacy.Images {
+				wrappedImages[i] = compat.Wrap(&legacy.Images[i], compat.WithExtraFields(map[string]any{
+					"VirtualSize": legacy.Images[i].Size,
+				}))
+			}
+			return httputils.WriteJSON(w, http.StatusOK, compat.Wrap(&legacy,
+				compat.WithOmittedFields("Images"),
+				compat.WithExtraFields(map[string]any{
+					"Images": wrappedImages,
+				}),
+			))
+		}
 		return httputils.WriteJSON(w, http.StatusOK, &legacy)
 	}
 
@@ -266,18 +284,24 @@ func (e invalidRequestError) Error() string {
 
 func (e invalidRequestError) InvalidParameter() {}
 
+var jsonTypes = []string{
+	types.MediaTypeJSONLines,
+	types.MediaTypeNDJSON,
+	types.MediaTypeJSONSequence,
+}
+
 func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
 
-	since, err := eventTime(r.Form.Get("since"))
+	since, err := timestamp.ParseUnixTimestamp(r.Form.Get("since"))
 	if err != nil {
-		return err
+		return invalidRequestError{fmt.Errorf("invalid value for 'since': %w", err)}
 	}
-	until, err := eventTime(r.Form.Get("until"))
+	until, err := timestamp.ParseUnixTimestamp(r.Form.Get("until"))
 	if err != nil {
-		return err
+		return invalidRequestError{fmt.Errorf("invalid value for 'until': %w", err)}
 	}
 
 	var (
@@ -306,10 +330,14 @@ func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *
 		return err
 	}
 
-	contentType := httputil.NegotiateContentType(r, []string{
-		types.MediaTypeNDJSON,
-		types.MediaTypeJSONSequence,
-	}, types.MediaTypeJSON) // output isn't actually JSON but API used to  this content-type
+	contentType := types.MediaTypeJSONLines
+	if versions.LessThan(httputils.VersionFromContext(ctx), "1.52") {
+		// output isn't actually JSON but API used to use this content-type.
+		contentType = types.MediaTypeJSON
+	}
+	if ct := contenttype.MatchAcceptStrict(r.Header, jsonTypes); ct != "" {
+		contentType = ct
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	output := ioutils.NewWriteFlusher(w)
@@ -400,17 +428,6 @@ func (s *systemRouter) postAuth(ctx context.Context, w http.ResponseWriter, r *h
 		Status:        "Login Succeeded",
 		IdentityToken: token,
 	})
-}
-
-func eventTime(formTime string) (time.Time, error) {
-	t, tNano, err := timestamp.ParseTimestamps(formTime, -1)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if t == -1 {
-		return time.Time{}, nil
-	}
-	return time.Unix(t, tNano), nil
 }
 
 // These fields were deprecated in docker v1.10, API v1.22, but not removed
