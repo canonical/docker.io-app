@@ -1,3 +1,12 @@
+docker.io-app (29.7.2-0ubuntu1~24.04.1) noble; urgency=medium
+
+  * Backport from stonking to noble (LP: #2153483). Remaining changes:
+    - d/docker.io.postinst: notify when a reboot is required to reload the
+      AppArmor profile (LP #2065423)
+    - d/t/docker-in-lxd: workaround Apparmor/kernel bug (LP #2067900)
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Tue, 13 Oct 2026 11:05:24 -0300
+
 docker.io-app (29.7.2-0ubuntu1) stonking; urgency=medium
 
   * New upstream version 29.7.2
