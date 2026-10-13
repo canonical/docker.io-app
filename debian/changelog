@@ -1,3 +1,13 @@
+docker.io-app (29.7.2-0ubuntu1~22.04.1) jammy; urgency=medium
+
+  * Backport from stonking to jammy (LP: #2153483). Remaining changes:
+  - d/t/basic-smoke:
+    + Target bullseye for debootstrap image generation (LP #2124109)
+    + Change the MIRROR URL to use archive.d.o since oldoldstable is not
+      available for ppc64el and s390x through ftp.d.o
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Tue, 13 Oct 2026 11:13:58 -0300
+
 docker.io-app (29.7.2-0ubuntu1) stonking; urgency=medium
 
   * New upstream version 29.7.2
