@@ -1,8 +1,19 @@
+// Copyright The Moby Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package seccomp
 
 import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+)
+
+// The socket rules in DefaultProfile rely on AF_ALG and AF_VSOCK being
+// exactly two apart (38 and 40), with a single family (39) between them.
+var (
+	_ [38]byte = [unix.AF_ALG]byte{}
+	_ [40]byte = [unix.AF_VSOCK]byte{}
+	_ [1]byte  = [unix.AF_VSOCK - unix.AF_ALG - 1]byte{}
 )
 
 func arches() []Architecture {
@@ -37,6 +48,10 @@ func arches() []Architecture {
 		},
 		{
 			Arch:      specs.ArchRISCV64,
+			SubArches: nil,
+		},
+		{
+			Arch:      specs.ArchLOONGARCH64,
 			SubArches: nil,
 		},
 	}
@@ -427,6 +442,38 @@ func DefaultProfile() *Seccomp {
 				MinKernel: &KernelVersion{4, 8},
 			},
 		},
+		// Allow socket(2) for all address families except AF_VSOCK and AF_ALG.
+		// NOTE: on 32-bit x86, socket() goes through socketcall(2) which is
+		// allowed unconditionally above, so AF_VSOCK/AF_ALG is still reachable
+		// via the socketcall-based socket() path. These arg filters only apply
+		// to the direct socket syscall, and do not protect 32-bit x86 unless
+		// socketcall(2) is also addressed.
+		{
+			LinuxSyscall: specs.LinuxSyscall{
+				Names:  []string{"socket"},
+				Action: specs.ActAllow,
+				Args: []specs.LinuxSeccompArg{
+					{
+						Index: 0,
+						Value: unix.AF_ALG,
+						Op:    specs.OpLessThan,
+					},
+				},
+			},
+		},
+		{
+			LinuxSyscall: specs.LinuxSyscall{
+				Names:  []string{"socket"},
+				Action: specs.ActAllow,
+				Args: []specs.LinuxSeccompArg{
+					{
+						Index: 0,
+						Value: unix.AF_ALG + 1,
+						Op:    specs.OpEqualTo,
+					},
+				},
+			},
+		},
 		{
 			LinuxSyscall: specs.LinuxSyscall{
 				Names:  []string{"socket"},
@@ -435,7 +482,7 @@ func DefaultProfile() *Seccomp {
 					{
 						Index: 0,
 						Value: unix.AF_VSOCK,
-						Op:    specs.OpNotEqual,
+						Op:    specs.OpGreaterThan,
 					},
 				},
 			},

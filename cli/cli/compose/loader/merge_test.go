@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package loader
 
@@ -1153,7 +1153,7 @@ func TestLoadMultipleServiceVolumes(t *testing.T) {
 func TestMergeUlimitsConfig(t *testing.T) {
 	specials := &specials{
 		m: map[reflect.Type]func(dst, src reflect.Value) error{
-			reflect.TypeOf(&types.UlimitsConfig{}): mergeUlimitsConfig,
+			reflect.TypeFor[*types.UlimitsConfig](): mergeUlimitsConfig,
 		},
 	}
 	base := map[string]*types.UlimitsConfig{
@@ -1189,7 +1189,7 @@ func TestMergeUlimitsConfig(t *testing.T) {
 func TestMergeServiceNetworkConfig(t *testing.T) {
 	specials := &specials{
 		m: map[reflect.Type]func(dst, src reflect.Value) error{
-			reflect.TypeOf(&types.ServiceNetworkConfig{}): mergeServiceNetworkConfig,
+			reflect.TypeFor[*types.ServiceNetworkConfig](): mergeServiceNetworkConfig,
 		},
 	}
 	base := map[string]*types.ServiceNetworkConfig{

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/pkg/apparmor"
 	coci "github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/moby/moby/v2/daemon/config"
 	"github.com/moby/moby/v2/daemon/container"
@@ -66,7 +65,7 @@ func (daemon *Daemon) execSetPlatformOpt(ctx context.Context, daemonCfg *config.
 		}
 	}
 
-	if apparmor.HostSupports() {
+	if appArmorSupported() {
 		var appArmorProfile string
 		if ec.Container.AppArmorProfile != "" {
 			appArmorProfile = ec.Container.AppArmorProfile
@@ -83,9 +82,9 @@ func (daemon *Daemon) execSetPlatformOpt(ctx context.Context, daemonCfg *config.
 			// profiles inadvertently. Since we cannot store our profile in
 			// /etc/apparmor.d, nor can we practically add other ways of
 			// telling the system to keep our profile loaded, in order to make
-			// sure that we keep the default profile enabled we dynamically
-			// reload it if necessary.
-			if err := ensureDefaultAppArmorProfile(); err != nil {
+			// sure that we keep the default profile enabled we load it again
+			// if it is missing.
+			if err := loadDefaultAppArmorProfileIfMissing(); err != nil {
 				return err
 			}
 		}

@@ -35,7 +35,9 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       -
         name: Create matrix
         id: platforms
@@ -63,10 +65,10 @@ jobs:
     steps:
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       -
         name: Build
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         with:
           targets: ${{ matrix.target }}
           set: |
@@ -78,63 +80,50 @@ jobs:
         working-directory: ./build
         run: |
           mkdir /tmp/out
-          platform=${{ matrix.platform }}
-          platformPair=${platform//\//-}
+          platformPair=${PLATFORM//\//-}
           tar -cvzf "/tmp/out/docker-${platformPair}.tar.gz" .
           if [ -z "${{ matrix.use_glibc }}" ]; then
             echo "ARTIFACT_NAME=${{ matrix.target }}-${platformPair}" >> $GITHUB_ENV
           else
             echo "ARTIFACT_NAME=${{ matrix.target }}-${platformPair}-glibc" >> $GITHUB_ENV
           fi
+        env:
+          PLATFORM: ${{ matrix.platform }}
       -
         name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: /tmp/out/*
           if-no-files-found: error
 
   bin-image:
-    runs-on: ubuntu-24.04
     if: ${{ github.event_name != 'pull_request' && github.repository == 'docker/cli' }}
-    steps:
-      -
-        name: Login to DockerHub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_CLIBIN_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_CLIBIN_TOKEN }}
-      -
-        name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: dockereng/cli-bin
-          tags: |
-            type=semver,pattern={{version}}
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{major}}
-            type=semver,pattern={{major}}.{{minor}}
-      -
-        name: Build and push image
-        uses: docker/bake-action@v6
-        with:
-          files: |
-            ./docker-bake.hcl
-            cwd://${{ steps.meta.outputs.bake-file }}
-          targets: bin-image-cross
-          push: ${{ github.event_name != 'pull_request' }}
-          set: |
-            *.cache-from=type=gha,scope=bin-image
-            *.cache-to=type=gha,scope=bin-image,mode=max
+    uses: docker/github-builder/.github/workflows/bake.yml@27ade872c1e2296e62ef15ab3b10d37665e57cf7 # v1.15.0
+    permissions:
+      contents: read # same as global permission
+      id-token: write # for signing attestation(s) and authenticating to Docker Hub with GitHub OIDC Token
+    with:
+      setup-qemu: true
+      target: bin-image-cross
+      cache: true
+      cache-scope: bin-image
+      output: image
+      push: true
+      vars: |
+        VERSION=${{ github.ref }}
+      meta-images: |
+        dockereng/cli-bin
+      meta-tags: |
+        type=semver,pattern={{version}}
+        type=ref,event=branch
+        type=ref,event=pr
+        type=semver,pattern={{major}}
+        type=semver,pattern={{major}}.{{minor}}
+      registry-identities: |
+        - type: dockerhub
+          username: dockereng
+          connection_id: ${{ vars.DOCKERHUB_OIDC_CONNECTIONID }}
 
   prepare-plugins:
     runs-on: ubuntu-24.04
@@ -143,7 +132,9 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       -
         name: Create matrix
         id: platforms
@@ -165,10 +156,10 @@ jobs:
     steps:
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       -
         name: Build
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         with:
           targets: plugins-cross
           set: |

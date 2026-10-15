@@ -97,10 +97,18 @@ func (i *ImageService) PullImage(ctx context.Context, baseRef reference.Named, o
 }
 
 func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platform *ocispec.Platform, metaHeaders map[string][]string, authConfig *registrytypes.AuthConfig, out progress.Output) error {
-	var opts []containerd.RemoteOpt
+	// Register media types used by Sigstore bundles and OCI referrers so that
+	// MakeRefKey can assign a proper ref-key prefix instead of logging
+	// "reference for unknown type" warnings.
+	ctx = remotes.WithMediaTypeKeyPrefix(ctx, ocispec.MediaTypeEmptyJSON, "empty")
+	ctx = remotes.WithMediaTypeKeyPrefix(ctx, policyimage.ArtifactTypeCosignSignature, "cosign-signature")
+	ctx = remotes.WithMediaTypeKeyPrefix(ctx, policyimage.ArtifactTypeSigstoreBundle, "sigstore-bundle")
+
+	pullPlatform := i.hostPlatformSpec()
 	if platform != nil {
-		opts = append(opts, containerd.WithPlatform(platforms.FormatAll(*platform)))
+		pullPlatform = *platform
 	}
+	opts := []containerd.RemoteOpt{containerd.WithPlatform(platforms.FormatAll(pullPlatform))}
 
 	resolver, _ := i.newResolverFromAuthConfig(ctx, authConfig, ref, metaHeaders)
 	opts = append(opts, containerd.WithResolver(resolver))
@@ -131,10 +139,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 		}()
 	}
 
-	p := platforms.Default()
-	if platform != nil {
-		p = platforms.Only(*platform)
-	}
+	p := platforms.Only(pullPlatform)
 
 	pullJobs := newJobs()
 	opts = append(opts, containerd.WithImageHandler(c8dimages.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
@@ -230,6 +235,14 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	opts = append(opts, containerd.WithImageHandlerWrapper(joinHandlerWrappers(infoHandler, referrers.Handler)))
 	opts = append(opts, containerd.WithReferrersProvider(referrers))
 
+	i.transferLimitMu.Lock()
+	maxConcurrentDownloads := i.maxConcurrentDownloads
+	downloadLimiter := i.downloadLimiter
+	i.transferLimitMu.Unlock()
+	if maxConcurrentDownloads > 0 {
+		opts = append(opts, containerd.WithMaxConcurrentDownloads(maxConcurrentDownloads))
+	}
+	opts = append(opts, containerd.WithDownloadLimiter(downloadLimiter))
 	img, err := i.client.Pull(ctx, ref.String(), opts...)
 	if err != nil {
 		if errors.Is(err, docker.ErrInvalidAuthorization) {
@@ -245,10 +258,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 			// the same message as the graphdrivers backend.
 			// The one returned by containerd doesn't contain the platform and is much less informative.
 			if strings.Contains(err.Error(), "platform") {
-				platformStr := platforms.DefaultString()
-				if platform != nil {
-					platformStr = platforms.FormatAll(*platform)
-				}
+				platformStr := platforms.FormatAll(pullPlatform)
 				return errdefs.NotFound(fmt.Errorf("no matching manifest for %s in the manifest list entries: %w", platformStr, err))
 			}
 		}
@@ -270,6 +280,7 @@ func (i *ImageService) pullTag(ctx context.Context, ref reference.Named, platfor
 	}
 
 	i.LogImageEvent(ctx, reference.FamiliarString(ref), reference.FamiliarName(ref), events.ActionPull)
+	i.warmImageIdentityCache(ctx, img.Metadata())
 	outNewImg = img
 
 	return nil
@@ -399,6 +410,7 @@ func newReferrersList() *referrersList {
 		m: make(map[digest.Digest][]ocispec.Descriptor),
 	}
 }
+
 func (rl *referrersList) Get(dgst digest.Digest) ([]ocispec.Descriptor, bool) {
 	rl.mu.RLock()
 	defer rl.mu.RUnlock()

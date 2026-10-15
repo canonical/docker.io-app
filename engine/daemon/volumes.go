@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,9 +99,7 @@ func (daemon *Daemon) registerMountPoints(ctr *container.Container, defaultReadO
 	}
 
 	// 1. Read already configured mount points.
-	for destination, point := range ctr.MountPoints {
-		mountPoints[destination] = point
-	}
+	maps.Copy(mountPoints, ctr.MountPoints)
 
 	// 2. Read volumes from other containers.
 	for _, v := range ctr.HostConfig.VolumesFrom {
@@ -204,7 +204,8 @@ func (daemon *Daemon) registerMountPoints(ctr *container.Container, defaultReadO
 			return duplicateMountPointError(cfg.Target)
 		}
 
-		if mp.Type == mounttypes.TypeVolume {
+		switch mp.Type {
+		case mounttypes.TypeVolume:
 			var v *volumetypes.Volume
 			if cfg.VolumeOptions != nil {
 				var driverOpts map[string]string
@@ -234,9 +235,7 @@ func (daemon *Daemon) registerMountPoints(ctr *container.Container, defaultReadO
 			if mp.Driver == volume.DefaultDriverName {
 				setBindModeIfNull(mp)
 			}
-		}
-
-		if mp.Type == mounttypes.TypeBind {
+		case mounttypes.TypeBind:
 			if cfg.BindOptions == nil || !cfg.BindOptions.CreateMountpoint {
 				mp.SkipMountpointCreation = true
 			}
@@ -247,32 +246,29 @@ func (daemon *Daemon) registerMountPoints(ctr *container.Container, defaultReadO
 				}
 				mp.Spec.BindOptions.ReadOnlyNonRecursive = true
 			}
-		}
-
-		if mp.Type == mounttypes.TypeImage {
+		case mounttypes.TypeImage:
 			img, err := daemon.imageService.GetImage(ctx, mp.Source, imagebackend.GetImageOpts{})
 			if err != nil {
 				return err
 			}
 
-			rwLayerOpts := &layer.CreateRWLayerOpts{
-				StorageOpt: ctr.HostConfig.StorageOpt,
-			}
-
-			// Include the destination in the layer name to make it unique for each mount point and container.
+			// Hash the source and destination to create a safe, unique identifier for each mount point and container.
 			// This makes sure that the same image can be mounted multiple times with different destinations.
-			// Hex encode the destination to create a safe, unique identifier
-			layerName := hex.EncodeToString([]byte(ctr.ID + ",src=" + mp.Source + ",dst=" + mp.Destination))
-			layer, err := daemon.imageService.CreateLayerFromImage(img, layerName, rwLayerOpts)
+			// We hash it so that the snapshot name is friendly to the underlying filesystem and doesn't exceed path length limits.
+			destHash := sha256.Sum256([]byte(ctr.ID + "-src=" + mp.Source + "-dst=" + mp.Destination))
+			layerName := hex.EncodeToString(destHash[:])
+			imgLayer, err := daemon.imageService.CreateLayerFromImage(img, layerName, &layer.CreateRWLayerOpts{
+				StorageOpt: ctr.HostConfig.StorageOpt,
+			})
 			if err != nil {
 				return err
 			}
-			metadata, err := layer.Metadata()
+			metadata, err := imgLayer.Metadata()
 			if err != nil {
 				return err
 			}
 
-			path, err := layer.Mount("")
+			srcPath, err := imgLayer.Mount("")
 			if err != nil {
 				return err
 			}
@@ -283,9 +279,11 @@ func (daemon *Daemon) registerMountPoints(ctr *container.Container, defaultReadO
 
 			mp.Name = mp.Spec.Source
 			mp.Spec.Source = img.ID().String()
-			mp.Source = path
-			mp.Layer = layer
+			mp.Source = srcPath
+			mp.Layer = imgLayer
 			mp.RW = false
+		case mounttypes.TypeTmpfs, mounttypes.TypeCluster, mounttypes.TypeNamedPipe:
+			// nothing to do
 		}
 
 		binds[mp.Destination] = true

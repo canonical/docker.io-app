@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/containerd/log"
+	"github.com/moby/moby/v2/daemon/internal/rootless"
 	"github.com/moby/moby/v2/daemon/internal/unshare"
 	"github.com/moby/moby/v2/daemon/libnetwork/nlwrap"
 	"github.com/moby/moby/v2/daemon/libnetwork/ns"
@@ -76,8 +77,8 @@ func GenerateKey(containerID string) string {
 
 		for _, v := range dir {
 			id := v.Name()
-			if strings.HasSuffix(id, containerID[:maxLen-1]) {
-				indexStr = strings.TrimSuffix(id, containerID[:maxLen-1])
+			if before, ok := strings.CutSuffix(id, containerID[:maxLen-1]); ok {
+				indexStr = before
 				tmpindex, err := strconv.Atoi(indexStr)
 				if err != nil {
 					return ""
@@ -114,6 +115,15 @@ func NewSandbox(key string, osCreate, isRestore bool) (*Namespace, error) {
 	}
 
 	n := &Namespace{path: key, isDefault: !osCreate}
+
+	detachedNetNS, err := rootless.DetachedNetNS()
+	if err != nil {
+		return nil, err
+	}
+	if detachedNetNS != "" && !osCreate {
+		// n refers to the host netns and we do not have a permission to do the netlink stuff
+		return n, nil
+	}
 
 	sboxNs, err := netns.GetFromPath(n.path)
 	if err != nil {
@@ -193,6 +203,7 @@ func createNetworkNamespace(path string, osCreate bool) error {
 	if osCreate {
 		return unshare.Go(unix.CLONE_NEWNET, do, nil)
 	}
+	// use host netns
 	return do()
 }
 
@@ -212,7 +223,8 @@ func createNamespaceFile(path string) error {
 	// If the path is there unmount it first
 	unmountNamespaceFile(path)
 
-	f, err := os.Create(path)
+	// lgtm[go/path-injection] Ignore CodeQL "path depends on a user-provided value".
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
@@ -355,6 +367,7 @@ func (n *Namespace) InvokeFunc(f func()) error {
 		}
 		defer func() {
 			close(done)
+			rootless.UnmarkInSandboxNS()
 			if err := netns.Set(origNS); err != nil {
 				log.G(context.TODO()).WithError(err).Warn("failed to restore thread's network namespace")
 				// Recover from the error by leaving this goroutine locked to
@@ -364,6 +377,7 @@ func (n *Namespace) InvokeFunc(f func()) error {
 				runtime.UnlockOSThread()
 			}
 		}()
+		rootless.MarkInSandboxNS()
 		f()
 	}()
 	return <-done
@@ -397,10 +411,14 @@ func (n *Namespace) Destroy() error {
 	return nil
 }
 
-// RestoreInterfaces restores the network namespace's interfaces.
-func (n *Namespace) RestoreInterfaces(interfaces map[Iface][]IfaceOption) error {
+// RestoreInterfaces restores the network namespace's interfaces and sends
+// unsolicited ARP/NA messages to update neighbor caches.
+func (n *Namespace) RestoreInterfaces(ctx context.Context, interfaces map[Iface][]IfaceOption) error {
 	// restore interfaces
 	for iface, opts := range interfaces {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		i, err := newInterface(n, iface.SrcName, iface.DstPrefix, iface.DstName, opts...)
 		if err != nil {
 			return err
@@ -458,6 +476,32 @@ func (n *Namespace) RestoreInterfaces(interfaces map[Iface][]IfaceOption) error 
 			n.mu.Lock()
 			n.iFaces = append(n.iFaces, i)
 			n.mu.Unlock()
+		}
+
+		// Send unsolicited ARP/NA messages to update neighbor caches with the
+		// MAC address associated with the interface's IP addresses. This is
+		// necessary after a daemon restart because other hosts may have stale
+		// neighbor cache entries.
+		if i.dstName != "" {
+			log.G(ctx).WithFields(log.Fields{
+				"interface": i.dstName,
+				"ipv4":      i.address,
+				"ipv6":      i.addressIPv6,
+			}).Debug("Sending neighbor advertisements during restore")
+			link, err := n.nlHandle.LinkByName(i.dstName)
+			if err != nil {
+				log.G(ctx).WithFields(log.Fields{"error": err, "interface": i.dstName}).Warn("Failed to get link for neighbor advertisement during restore")
+				continue
+			}
+			ifIndex := link.Attrs().Index
+			waitForBridgePort(ctx, ns.NlHandle(), link)
+			mcastRouteOk := waitForMcastRoute(ctx, ifIndex, i, n.nlHandle)
+			if err := n.advertiseAddrs(ctx, ifIndex, i, n.nlHandle, mcastRouteOk); err != nil {
+				log.G(ctx).WithFields(log.Fields{
+					"error":     err,
+					"interface": i.dstName,
+				}).Warn("Failed to send neighbor advertisement during restore")
+			}
 		}
 	}
 	return nil

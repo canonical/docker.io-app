@@ -4,6 +4,7 @@ package fluentd
 
 import (
 	"context"
+	"maps"
 	"math"
 	"net/url"
 	"strconv"
@@ -67,15 +68,6 @@ const (
 	readTimeoutKey = "fluentd-read-timeout"
 )
 
-func init() {
-	if err := logger.RegisterLogDriver(name, New); err != nil {
-		panic(err)
-	}
-	if err := logger.RegisterLogOptValidator(name, ValidateLogOpt); err != nil {
-		panic(err)
-	}
-}
-
 // New creates a fluentd logger using the configuration passed in on
 // the context. The supported context configuration variable is
 // fluentd-address.
@@ -113,16 +105,20 @@ func New(info logger.Info) (logger.Logger, error) {
 	}, nil
 }
 
-func (f *fluentd) Log(msg *logger.Message) error {
+func (f *fluentd) Log(msg *logger.Message) (err error) {
+	defer func() {
+		if err == nil {
+			logger.PutMessage(msg)
+		}
+	}()
+
 	data := map[string]string{
 		"container_id":   f.containerID,
 		"container_name": f.containerName,
 		"source":         msg.Source,
 		"log":            string(msg.Line),
 	}
-	for k, v := range f.extra {
-		data[k] = v
-	}
+	maps.Copy(data, f.extra)
 	if msg.PLogMetaData != nil {
 		data["partial_message"] = "true"
 		data["partial_id"] = msg.PLogMetaData.ID
@@ -130,11 +126,9 @@ func (f *fluentd) Log(msg *logger.Message) error {
 		data["partial_last"] = strconv.FormatBool(msg.PLogMetaData.Last)
 	}
 
-	ts := msg.Timestamp
-	logger.PutMessage(msg)
 	// fluent-logger-golang buffers logs from failures and disconnections,
 	// and these are transferred again automatically.
-	return f.writer.PostWithTime(f.tag, ts, data)
+	return f.writer.PostWithTime(f.tag, msg.Timestamp, data)
 }
 
 func (f *fluentd) Close() error {
@@ -149,11 +143,9 @@ func (f *fluentd) Name() string {
 func ValidateLogOpt(cfg map[string]string) error {
 	for key := range cfg {
 		switch key {
-		case "env":
-		case "env-regex":
-		case "labels":
-		case "labels-regex":
-		case "tag":
+		case logger.AttrEnv, logger.AttrEnvRegex, logger.AttrLabels, logger.AttrLabelsRegex, logger.AttrLogTag:
+			// Common attributes handled through [logger.Info.ExtraAttributes] and [loggerutils.ParseLogTag].
+			continue
 
 		case addressKey:
 		case asyncKey:

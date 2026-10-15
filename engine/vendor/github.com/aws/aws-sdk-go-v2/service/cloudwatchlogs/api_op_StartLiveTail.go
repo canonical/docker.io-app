@@ -5,7 +5,6 @@ package cloudwatchlogs
 import (
 	"context"
 	"fmt"
-	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/aws/smithy-go/middleware"
 	smithysync "github.com/aws/smithy-go/sync"
@@ -47,9 +46,12 @@ import (
 //	- A [SessionTimeoutException]object is returned when the session times out, after it has been kept
 //	open for three hours.
 //
-// The StartLiveTail API routes requests to streaming-logs.Region.amazonaws.com
-// using SDK host prefix injection. VPC endpoint support is not available for this
-// API.
+// The StartLiveTail API routes requests using SDK host prefix injection. SDK
+// versions released before April 1, 2026 route to
+// streaming-logs.Region.amazonaws.com , which does not support VPC endpoints. SDK
+// versions released on or after April 1, 2026 route to
+// stream-logs.Region.amazonaws.com , which supports VPC endpoints. To set up a VPC
+// endpoint for this API, see [Creating a VPC endpoint for CloudWatch Logs].
 //
 // You can end a session before it times out by closing the session stream or by
 // closing the client that is receiving the stream. The session also ends if the
@@ -60,6 +62,7 @@ import (
 // [LiveTailSessionStart]: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_LiveTailSessionStart.html
 // [LiveTailSessionUpdate]: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_LiveTailSessionUpdate.html
 // [Use Live Tail to view logs in near real time]: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatchLogs_LiveTail.html
+// [Creating a VPC endpoint for CloudWatch Logs]: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/cloudwatch-logs-and-interface-VPC.html#create-VPC-endpoint-for-CloudWatchLogs
 // [Start a Live Tail session using an Amazon Web Services SDK]: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/example_cloudwatch-logs_StartLiveTail_section.html
 //
 // [SessionTimeoutException]: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_StartLiveTailResponseStream.html#CWL-Type-StartLiveTailResponseStream-SessionTimeoutException
@@ -143,9 +146,6 @@ func (o *StartLiveTailOutput) GetStream() *StartLiveTailEventStream {
 }
 
 func (c *Client) addOperationStartLiveTailMiddlewares(stack *middleware.Stack, options Options) (err error) {
-	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
-		return err
-	}
 	err = stack.Serialize.Add(&awsAwsjson11_serializeOpStartLiveTail{}, middleware.After)
 	if err != nil {
 		return err
@@ -154,20 +154,11 @@ func (c *Client) addOperationStartLiveTailMiddlewares(stack *middleware.Stack, o
 	if err != nil {
 		return err
 	}
-	if err := addProtocolFinalizerMiddlewares(stack, options, "StartLiveTail"); err != nil {
-		return fmt.Errorf("add protocol finalizers: %v", err)
-	}
 
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
 		return err
 	}
 	if err = addEventStreamStartLiveTailMiddleware(stack, options); err != nil {
-		return err
-	}
-	if err = addSetLoggerMiddleware(stack, options); err != nil {
-		return err
-	}
-	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
 	if err = addComputeContentLength(stack); err != nil {
@@ -179,28 +170,7 @@ func (c *Client) addOperationStartLiveTailMiddlewares(stack *middleware.Stack, o
 	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetry(stack, options); err != nil {
-		return err
-	}
-	if err = addRawResponseToMetadata(stack); err != nil {
-		return err
-	}
-	if err = addRecordResponseTiming(stack); err != nil {
-		return err
-	}
-	if err = addSpanRetryLoop(stack, options); err != nil {
-		return err
-	}
-	if err = addClientUserAgent(stack, options); err != nil {
-		return err
-	}
-	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
-		return err
-	}
-	if err = addTimeOffsetBuild(stack, c); err != nil {
-		return err
-	}
-	if err = addUserAgentRetryMode(stack, options); err != nil {
+	if err = addRecordResponseTiming(stack, options); err != nil {
 		return err
 	}
 	if err = addCredentialSource(stack, options); err != nil {
@@ -212,10 +182,7 @@ func (c *Client) addOperationStartLiveTailMiddlewares(stack *middleware.Stack, o
 	if err = addOpStartLiveTailValidationMiddleware(stack); err != nil {
 		return err
 	}
-	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opStartLiveTail(options.Region), middleware.Before); err != nil {
-		return err
-	}
-	if err = addRecursionDetection(stack); err != nil {
+	if err = stack.Initialize.Add(newServiceMetadataMiddleware(options.Region, "StartLiveTail"), middleware.Before); err != nil {
 		return err
 	}
 	if err = addRequestIDRetrieverMiddleware(stack); err != nil {
@@ -230,46 +197,7 @@ func (c *Client) addOperationStartLiveTailMiddlewares(stack *middleware.Stack, o
 	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptAttempt(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptExecution(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptBeforeSerialization(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptAfterSerialization(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptBeforeSigning(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptAfterSigning(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptTransmit(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptBeforeDeserialization(stack, options); err != nil {
-		return err
-	}
-	if err = addInterceptAfterDeserialization(stack, options); err != nil {
-		return err
-	}
-	if err = addSpanInitializeStart(stack); err != nil {
-		return err
-	}
-	if err = addSpanInitializeEnd(stack); err != nil {
-		return err
-	}
-	if err = addSpanBuildRequestStart(stack); err != nil {
-		return err
-	}
-	if err = addSpanBuildRequestEnd(stack); err != nil {
+	if err = addInterceptors(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -294,20 +222,12 @@ func (m *endpointPrefix_opStartLiveTailMiddleware) HandleFinalize(ctx context.Co
 		return out, metadata, fmt.Errorf("unknown transport type %T", in.Request)
 	}
 
-	req.URL.Host = "streaming-" + req.URL.Host
+	req.URL.Host = "stream-" + req.URL.Host
 
 	return next.HandleFinalize(ctx, in)
 }
 func addEndpointPrefix_opStartLiveTailMiddleware(stack *middleware.Stack) error {
 	return stack.Finalize.Insert(&endpointPrefix_opStartLiveTailMiddleware{}, "ResolveEndpointV2", middleware.After)
-}
-
-func newServiceMetadataMiddleware_opStartLiveTail(region string) *awsmiddleware.RegisterServiceMetadata {
-	return &awsmiddleware.RegisterServiceMetadata{
-		Region:        region,
-		ServiceID:     ServiceID,
-		OperationName: "StartLiveTail",
-	}
 }
 
 // StartLiveTailEventStream provides the event stream handling for the StartLiveTail operation.
