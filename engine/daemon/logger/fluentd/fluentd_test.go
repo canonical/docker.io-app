@@ -1,8 +1,9 @@
 package fluentd
 
 import (
-	"bufio"
 	"context"
+	"io"
+	"maps"
 	"net"
 	"path/filepath"
 	"runtime"
@@ -296,9 +297,10 @@ func TestReadWriteTimeoutsAreEffective(t *testing.T) {
 				go func() {
 					// Log will hang forever if the read timeout is not set. Hence, we invoke that
 					// asynchronously so that we can timeout the test if something goes wrong.
+					// This timestamp contains a newline byte when encoded as MessagePack.
 					done <- f.Log(&logger.Message{
 						Line:      data,
-						Timestamp: time.Now(),
+						Timestamp: time.Unix(10, 0),
 					})
 				}()
 
@@ -328,7 +330,7 @@ func TestReadWriteTimeoutsAreEffective(t *testing.T) {
 
 			// This is to guard against potential run-away test scenario so that a future change
 			// doesn't cause the tests suite to timeout.
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 
 			var connectedWG sync.WaitGroup
@@ -340,7 +342,6 @@ func TestReadWriteTimeoutsAreEffective(t *testing.T) {
 			// Create a base configuration for fluentd logger, agnostic of the test.
 			cfg := map[string]string{
 				"fluentd-address": "unix://" + socketFile,
-				"tag":             "{{.Name}}/{{.FullID}}",
 				// Disabling async behavior with limited retries and buffer size lets us test this in a more
 				// preditable manner for failures. The "fluentd-read-timeout" flag should be equally effective
 				// regardless of async being enabled/disabled.
@@ -348,11 +349,10 @@ func TestReadWriteTimeoutsAreEffective(t *testing.T) {
 				"fluentd-max-retries":  "1",
 				"fluentd-retry-wait":   "10ms",
 				"fluentd-buffer-limit": "1",
+				logger.AttrLogTag:      "{{.Name}}/{{.FullID}}",
 			}
 			// Update the config with test specific configs.
-			for k, v := range tc.cfg {
-				cfg[k] = v
-			}
+			maps.Copy(cfg, tc.cfg)
 
 			f, err := New(logger.Info{
 				ContainerName: "/test-container",
@@ -425,21 +425,15 @@ func blackholeConnectionHandler(ctx context.Context, conn net.Conn) {
 }
 
 func noAckConnectionHandler(ctx context.Context, conn net.Conn) {
-	// Create a buffered reader to read from the connection.
-	reader := bufio.NewReader(conn)
-	// Read data from the connection.
-	_, err := reader.ReadString('\n')
-	if err != nil {
-		// If there's an error reading from the connection, it means the connection is closed.
-		select {
-		case <-ctx.Done():
-			// If the context is canceled, there's nothing for us to do here.
-			return
-		default:
-			return
-		}
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		close(readDone)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-readDone:
 	}
-	// Don't write an ack back. The fluent configuration is set to expect an ack from the server.
-	<-ctx.Done()
 	_ = conn.Close()
 }

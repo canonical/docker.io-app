@@ -1,22 +1,29 @@
 name: validate-pr
 
-# Default to 'contents: read', which grants actions to read commits.
-#
-# If any permission is set, any permission not included in the list is
-# implicitly set to "none".
-#
-# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
 permissions:
   contents: read
 
 on:
   pull_request:
-    types: [opened, edited, labeled, unlabeled, synchronize]
+    types: [opened, reopened, edited, synchronize, labeled, unlabeled]
 
 jobs:
   check-labels:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-check-labels
+      cancel-in-progress: true
+    if: >-
+      ${{
+        github.event.pull_request.state == 'open' &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'reopened' ||
+          github.event.action == 'labeled' ||
+          github.event.action == 'unlabeled'
+        )
+      }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # guardrails timeout for the whole job
+    timeout-minutes: 5
     steps:
       - name: Missing `area/` label
         if: always() && contains(join(github.event.pull_request.labels.*.name, ','), 'impact/') && !contains(join(github.event.pull_request.labels.*.name, ','), 'area/')
@@ -32,8 +39,25 @@ jobs:
         run: exit 0
 
   check-changelog:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-check-changelog
+      cancel-in-progress: true
+    if: >-
+      ${{
+        github.event.pull_request.state == 'open' &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'reopened' ||
+          github.event.action == 'labeled' ||
+          github.event.action == 'unlabeled' ||
+          (
+            github.event.action == 'edited' &&
+            github.event.changes.body != null
+          )
+        )
+      }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # guardrails timeout for the whole job
+    timeout-minutes: 5
     env:
       HAS_IMPACT_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'impact/') }}
       PR_BODY: |
@@ -69,9 +93,54 @@ jobs:
           echo "This PR will be included in the release notes with the following note:"
           echo "$desc"
 
-  check-pr-branch:
+  check-commit-references:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-check-commit-references
+      cancel-in-progress: true
+    if: >-
+      ${{
+        github.event.pull_request.state == 'open' &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'reopened' ||
+          github.event.action == 'synchronize'
+        )
+      }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120 # guardrails timeout for the whole job
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check GitHub references
+        env:
+          VALIDATE_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+          VALIDATE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: bash hack/validate/pr-gh-references
+
+  check-pr-branch:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-check-pr-branch
+      cancel-in-progress: true
+    if: >-
+      ${{
+        github.event.pull_request.state == 'open' &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'reopened' ||
+          (
+            github.event.action == 'edited' &&
+            (
+              github.event.changes.title != null ||
+              github.event.changes.base != null
+            )
+          )
+        )
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     env:
       PR_TITLE: ${{ github.event.pull_request.title }}
     steps:

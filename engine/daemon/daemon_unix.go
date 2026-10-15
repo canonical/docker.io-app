@@ -118,9 +118,10 @@ func getPidsLimit(config containertypes.Resources) *specs.LinuxPids {
 		// docker API allows 0 and negative values to unset this to be consistent
 		// with default values. When updating values, runc requires -1 to unset
 		// the previous limit.
-		return &specs.LinuxPids{Limit: -1}
+		val := int64(-1)
+		return &specs.LinuxPids{Limit: &val}
 	}
-	return &specs.LinuxPids{Limit: *config.PidsLimit}
+	return &specs.LinuxPids{Limit: config.PidsLimit}
 }
 
 func getCPUResources(config containertypes.Resources) (*specs.LinuxCPU, error) {
@@ -501,7 +502,7 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		return warnings, errors.New("CPU cfs quota can not be less than 1ms (i.e. 1000)")
 	}
 	if resources.CPUPercent > 0 {
-		warnings = append(warnings, fmt.Sprintf("%s does not support CPU percent. Percent discarded.", runtime.GOOS))
+		warnings = append(warnings, runtime.GOOS+" does not support CPU percent. Percent discarded.")
 		resources.CPUPercent = 0
 	}
 
@@ -624,13 +625,24 @@ func isRunningSystemd() bool {
 	return runningSystemd
 }
 
+// maxHostnameLen is the maximum length (in bytes) of a container hostname on
+// Linux, as defined by HOST_NAME_MAX (include/uapi/linux/limits.h).
+const maxHostnameLen = 64
+
 // verifyPlatformContainerSettings performs platform-specific validation of the
 // hostconfig and config structures.
-func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hostConfig *containertypes.HostConfig, update bool) (warnings []string, _ error) {
+func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, _ error) {
+	if runtime.GOOS == "linux" && config != nil && len(config.Hostname) > maxHostnameLen {
+		return warnings, errors.Errorf("hostname %q is too long (maximum %d bytes)", config.Hostname, maxHostnameLen)
+	}
+
 	if hostConfig == nil {
 		return nil, nil
 	}
-	sysInfo := daemon.RawSysInfo()
+	sysInfo, err := daemon.RawSysInfo()
+	if err != nil {
+		return nil, err
+	}
 
 	w, err := verifyPlatformContainerResources(&hostConfig.Resources, sysInfo, update)
 
@@ -836,7 +848,9 @@ func (daemon *Daemon) initNetworkController(cfg *config.Config, activeSandboxes 
 
 	if len(activeSandboxes) > 0 {
 		log.G(ctx).Info("there are running containers, updated network configuration will not take affect")
-	} else if err := configureNetworking(ctx, daemon.netController, cfg); err != nil {
+	} else if err := daemon.runInNetNS(func() error {
+		return configureNetworking(ctx, daemon.netController, cfg)
+	}); err != nil {
 		return err
 	}
 
@@ -1335,35 +1349,30 @@ func parseRemappedRoot(usergrp string) (string, string, error) {
 	return username, groupname, nil
 }
 
-func setupRemappedRoot(config *config.Config) (user.IdentityMapping, error) {
-	if runtime.GOOS != "linux" && config.RemappedRoot != "" {
-		return user.IdentityMapping{}, errors.New("User namespaces are only supported on Linux")
+func setupRemappedRoot(cfg *config.Config) (user.IdentityMapping, error) {
+	if cfg.RemappedRoot == "" {
+		return user.IdentityMapping{}, nil
 	}
 
-	// if the daemon was started with remapped root option, parse
-	// the config option to the int uid,gid values
-	if config.RemappedRoot != "" {
-		username, groupname, err := parseRemappedRoot(config.RemappedRoot)
-		if err != nil {
-			return user.IdentityMapping{}, err
-		}
-		if username == "root" {
-			// Cannot setup user namespaces with a 1-to-1 mapping; "--root=0:0" is a no-op
-			// effectively
-			log.G(context.TODO()).Warn("User namespaces: root cannot be remapped with itself; user namespaces are OFF")
-			return user.IdentityMapping{}, nil
-		}
-		log.G(context.TODO()).Infof("User namespaces: ID ranges will be mapped to subuid/subgid ranges of: %s", username)
-		// update remapped root setting now that we have resolved them to actual names
-		config.RemappedRoot = fmt.Sprintf("%s:%s", username, groupname)
-
-		mappings, err := usergroup.LoadIdentityMapping(username)
-		if err != nil {
-			return user.IdentityMapping{}, errors.Wrap(err, "Can't create ID mappings")
-		}
-		return mappings, nil
+	// parse the config option to the int uid,gid values
+	username, groupname, err := parseRemappedRoot(cfg.RemappedRoot)
+	if err != nil {
+		return user.IdentityMapping{}, err
 	}
-	return user.IdentityMapping{}, nil
+	if username == "root" {
+		// Cannot set up user namespaces with a 1-to-1 mapping; "--root=0:0" is a no-op effectively
+		log.G(context.TODO()).Warn("User namespaces: root cannot be remapped with itself; user namespaces are OFF")
+		return user.IdentityMapping{}, nil
+	}
+	log.G(context.TODO()).Infof("User namespaces: ID ranges will be mapped to subuid/subgid ranges of: %s", username)
+	// update remapped root setting now that we have resolved them to actual names
+	cfg.RemappedRoot = fmt.Sprintf("%s:%s", username, groupname)
+
+	mappings, err := usergroup.LoadIdentityMapping(username)
+	if err != nil {
+		return user.IdentityMapping{}, fmt.Errorf("error creating ID mappings: %w", err)
+	}
+	return mappings, nil
 }
 
 func setupDaemonRoot(config *config.Config, rootDir string, uid, gid int) error {
@@ -1620,7 +1629,20 @@ func getSysInfo(cfg *config.Config) *sysinfo.SysInfo {
 			siOpts = append(siOpts, sysinfo.WithCgroup2GroupPath("/user.slice/user-"+euid+".slice"))
 		}
 	}
-	return sysinfo.New(siOpts...)
+	si := sysinfo.New(siOpts...)
+
+	// The "time-namespaces" feature-flag is a (temporary) escape-hatch to disable
+	// the use of time-namespaces for containers. This allows users to return to the
+	// previous default, which unconditionally used the host's time-namespace.
+	//
+	// We can consider removing this flag if there's no regressions; see https://github.com/moby/moby/pull/52326#issuecomment-4401495854
+	if enabled, ok := cfg.Features["time-namespaces"]; ok && !enabled {
+		if si.TimeNamespaces {
+			si.TimeNamespaces = false
+			log.G(context.TODO()).Info("time-namespaces disabled through feature-override")
+		}
+	}
+	return si
 }
 
 func recursiveUnmount(target string) error {

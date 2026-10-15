@@ -95,7 +95,7 @@ func getPlatformDefaults(info system.Info) PlatformDefaults {
 			ContainerStoragePath: filepath.FromSlash(containersPath),
 		}
 	default:
-		panic(fmt.Sprintf("unknown OSType for daemon: %s", info.OSType))
+		panic("unknown OSType for daemon: " + info.OSType)
 	}
 }
 
@@ -157,9 +157,13 @@ func (e *Execution) IsUserNamespace() bool {
 	return root != ""
 }
 
-// RuntimeIsWindowsContainerd returns whether containerd runtime is used on Windows
+// RuntimeIsWindowsContainerd returns whether the containerd runtime is used on Windows.
+// It is true when either the legacy DOCKER_WINDOWS_CONTAINERD_RUNTIME=1 env
+// var is set, or when the embedded-containerd feature is enabled via
+// TEST_INTEGRATION_CONTAINERD_EMBEDDED (which also uses containerd).
 func (e *Execution) RuntimeIsWindowsContainerd() bool {
-	return os.Getenv("DOCKER_WINDOWS_CONTAINERD_RUNTIME") == "1"
+	return os.Getenv("DOCKER_WINDOWS_CONTAINERD_RUNTIME") == "1" ||
+		(runtime.GOOS == "windows" && os.Getenv("TEST_INTEGRATION_CONTAINERD_EMBEDDED") != "")
 }
 
 // IsRootless returns whether the rootless mode is enabled
@@ -191,7 +195,7 @@ func (e *Execution) IsUserNamespaceInKernel() bool {
 // UsingSnapshotter returns whether containerd snapshotters are used for the
 // tests by checking if the "TEST_INTEGRATION_USE_GRAPHDRIVER" is empty
 func (e *Execution) UsingSnapshotter() bool {
-	return os.Getenv("TEST_INTEGRATION_USE_GRAPHDRIVER") == "" && runtime.GOOS != "windows"
+	return os.Getenv("TEST_INTEGRATION_USE_GRAPHDRIVER") == ""
 }
 
 // HasExistingImage checks whether there is an image with the given reference.

@@ -30,17 +30,7 @@ var buffersPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte
 // JSONFileLogger is Logger implementation for default Docker logging.
 type JSONFileLogger struct {
 	writer *loggerutils.LogFile
-	tag    string // tag values requested by the user to log
 	extra  json.RawMessage
-}
-
-func init() {
-	if err := logger.RegisterLogDriver(Name, New); err != nil {
-		panic(err)
-	}
-	if err := logger.RegisterLogOptValidator(Name, ValidateLogOpt); err != nil {
-		panic(err)
-	}
 }
 
 // New creates new JSONFileLogger which writes to filename passed in
@@ -86,13 +76,13 @@ func New(info logger.Info) (logger.Logger, error) {
 		return nil, err
 	}
 
-	// no default template. only use a tag if the user asked for it
-	tag, err := loggerutils.ParseLogTag(info, "")
-	if err != nil {
-		return nil, err
-	}
-	if tag != "" {
-		extraAttrs["tag"] = tag
+	if v, ok := info.Config[logger.AttrLogTag]; ok && v != "" {
+		// no default template. and only use a tag if the user asked for it.
+		if tag, err := loggerutils.ParseLogTag(info, ""); err != nil {
+			return nil, err
+		} else if tag != "" {
+			extraAttrs[logger.AttrLogTag] = tag
+		}
 	}
 
 	var extra json.RawMessage
@@ -111,26 +101,27 @@ func New(info logger.Info) (logger.Logger, error) {
 
 	return &JSONFileLogger{
 		writer: writer,
-		tag:    tag,
 		extra:  extra,
 	}, nil
 }
 
 // Log converts logger.Message to jsonlog.JSONLog and serializes it to file.
-func (l *JSONFileLogger) Log(msg *logger.Message) error {
+func (l *JSONFileLogger) Log(msg *logger.Message) (err error) {
+	defer func() {
+		if err == nil {
+			logger.PutMessage(msg)
+		}
+	}()
+
 	buf := buffersPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer buffersPool.Put(buf)
 
-	timestamp := msg.Timestamp
-	err := marshalMessage(msg, l.extra, buf)
-	logger.PutMessage(msg)
-
-	if err != nil {
+	if err := marshalMessage(msg, l.extra, buf); err != nil {
 		return err
 	}
 
-	return l.writer.WriteLogEntry(timestamp, buf.Bytes())
+	return l.writer.WriteLogEntry(msg.Timestamp, buf.Bytes())
 }
 
 func marshalMessage(msg *logger.Message, extra json.RawMessage, buf *bytes.Buffer) error {
@@ -155,14 +146,12 @@ func marshalMessage(msg *logger.Message, extra json.RawMessage, buf *bytes.Buffe
 func ValidateLogOpt(cfg map[string]string) error {
 	for key := range cfg {
 		switch key {
+		case logger.AttrEnv, logger.AttrEnvRegex, logger.AttrLabels, logger.AttrLabelsRegex, logger.AttrLogTag:
+			// Common attributes handled through [logger.Info.ExtraAttributes] and [loggerutils.ParseLogTag].
+			continue
 		case "max-file":
 		case "max-size":
 		case "compress":
-		case "labels":
-		case "labels-regex":
-		case "env":
-		case "env-regex":
-		case "tag":
 		default:
 			return fmt.Errorf("unknown log opt '%s' for json-file log driver", key)
 		}

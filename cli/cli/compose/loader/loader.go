@@ -1,11 +1,12 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package loader
 
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -249,9 +250,7 @@ func GetDeprecatedProperties(configDicts ...map[string]any) map[string]string {
 
 	for _, configDict := range configDicts {
 		deprecatedProperties := getProperties(getServices(configDict), types.DeprecatedProperties)
-		for key, value := range deprecatedProperties {
-			deprecated[key] = value
-		}
+		maps.Copy(deprecated, deprecatedProperties)
 	}
 
 	return deprecated
@@ -322,26 +321,26 @@ type Transformer struct {
 
 func createTransformHook(additionalTransformers ...Transformer) mapstructure.DecodeHookFuncType {
 	transforms := map[reflect.Type]func(any) (any, error){
-		reflect.TypeOf(types.External{}):                         transformExternal,
-		reflect.TypeOf(types.HealthCheckTest{}):                  transformHealthCheckTest,
-		reflect.TypeOf(types.ShellCommand{}):                     transformShellCommand,
-		reflect.TypeOf(types.StringList{}):                       transformStringList,
-		reflect.TypeOf(map[string]string{}):                      transformMapStringString,
-		reflect.TypeOf(types.UlimitsConfig{}):                    transformUlimits,
-		reflect.TypeOf(types.UnitBytes(0)):                       transformSize,
-		reflect.TypeOf([]types.ServicePortConfig{}):              transformServicePort,
-		reflect.TypeOf(types.ServiceSecretConfig{}):              transformStringSourceMap,
-		reflect.TypeOf(types.ServiceConfigObjConfig{}):           transformStringSourceMap,
-		reflect.TypeOf(types.StringOrNumberList{}):               transformStringOrNumberList,
-		reflect.TypeOf(map[string]*types.ServiceNetworkConfig{}): transformServiceNetworkMap,
-		reflect.TypeOf(types.Mapping{}):                          transformMappingOrListFunc("=", false),
-		reflect.TypeOf(types.MappingWithEquals{}):                transformMappingOrListFunc("=", true),
-		reflect.TypeOf(types.Labels{}):                           transformMappingOrListFunc("=", false),
-		reflect.TypeOf(types.MappingWithColon{}):                 transformMappingOrListFunc(":", false),
-		reflect.TypeOf(types.HostsList{}):                        transformHostsList,
-		reflect.TypeOf(types.ServiceVolumeConfig{}):              transformServiceVolumeConfig,
-		reflect.TypeOf(types.BuildConfig{}):                      transformBuildConfig,
-		reflect.TypeOf(types.Duration(0)):                        transformStringToDuration,
+		reflect.TypeFor[types.External]():                         transformExternal,
+		reflect.TypeFor[types.HealthCheckTest]():                  transformHealthCheckTest,
+		reflect.TypeFor[types.ShellCommand]():                     transformShellCommand,
+		reflect.TypeFor[types.StringList]():                       transformStringList,
+		reflect.TypeFor[map[string]string]():                      transformMapStringString,
+		reflect.TypeFor[types.UlimitsConfig]():                    transformUlimits,
+		reflect.TypeFor[types.UnitBytes]():                        transformSize,
+		reflect.TypeFor[[]types.ServicePortConfig]():              transformServicePort,
+		reflect.TypeFor[types.ServiceSecretConfig]():              transformStringSourceMap,
+		reflect.TypeFor[types.ServiceConfigObjConfig]():           transformStringSourceMap,
+		reflect.TypeFor[types.StringOrNumberList]():               transformStringOrNumberList,
+		reflect.TypeFor[map[string]*types.ServiceNetworkConfig](): transformServiceNetworkMap,
+		reflect.TypeFor[types.Mapping]():                          transformMappingOrListFunc("=", false),
+		reflect.TypeFor[types.MappingWithEquals]():                transformMappingOrListFunc("=", true),
+		reflect.TypeFor[types.Labels]():                           transformMappingOrListFunc("=", false),
+		reflect.TypeFor[types.MappingWithColon]():                 transformMappingOrListFunc(":", false),
+		reflect.TypeFor[types.HostsList]():                        transformHostsList,
+		reflect.TypeFor[types.ServiceVolumeConfig]():              transformServiceVolumeConfig,
+		reflect.TypeFor[types.BuildConfig]():                      transformBuildConfig,
+		reflect.TypeFor[types.Duration]():                         transformStringToDuration,
 	}
 
 	for _, transformer := range additionalTransformers {

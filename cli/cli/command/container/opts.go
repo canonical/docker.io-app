@@ -1,5 +1,5 @@
-// FIXME(vvoland): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.25
 
 package container
 
@@ -371,7 +371,7 @@ func parse(flags *pflag.FlagSet, copts *containerOptions, serverOS string) (*con
 	var binds []string
 	volumes := copts.volumes.GetMap()
 	// add any bind targets to the list of container volumes
-	for bind := range copts.volumes.GetMap() {
+	for bind := range volumes {
 		parsed, err := volumespec.Parse(bind)
 		if err != nil {
 			return nil, err
@@ -506,13 +506,13 @@ func parse(flags *pflag.FlagSet, copts *containerOptions, serverOS string) (*con
 	// collect all the environment variables for the container
 	envVariables, err := opts.ReadKVEnvStrings(copts.envFile.GetSlice(), copts.env.GetSlice())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("--env-file: %w", err)
 	}
 
 	// collect all the labels for the container
 	labels, err := opts.ReadKVStrings(copts.labelsFile.GetSlice(), copts.labels.GetSlice())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("--label-file: %w", err)
 	}
 
 	pidMode := container.PidMode(copts.pidMode)
@@ -795,7 +795,7 @@ func parseNetworkOpts(copts *containerOptions) (map[string]*network.EndpointSett
 		// and only a single network is specified, omit the endpoint-configuration
 		// on the client (the daemon will still create it when creating the container)
 		if i == 0 && len(copts.netMode.Value()) == 1 {
-			if ep == nil || reflect.DeepEqual(*ep, network.EndpointSettings{}) {
+			if ep == nil || reflect.ValueOf(*ep).IsZero() {
 				continue
 			}
 		}
@@ -902,7 +902,7 @@ func convertToStandardNotation(ports []string) ([]string, error) {
 	for _, publish := range ports {
 		if strings.Contains(publish, "=") {
 			params := map[string]string{"protocol": "tcp"}
-			for _, param := range strings.Split(publish, ",") {
+			for param := range strings.SplitSeq(publish, ",") {
 				k, v, ok := strings.Cut(param, "=")
 				if !ok || k == "" {
 					return optsList, fmt.Errorf("invalid publish opts format (should be name=value but got '%s')", param)
@@ -947,11 +947,11 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 				if err != nil {
 					return securityOpts, fmt.Errorf("opening seccomp profile (%s) failed: %w", v, err)
 				}
-				b := bytes.NewBuffer(nil)
-				if err := json.Compact(b, f); err != nil {
+				var b bytes.Buffer
+				if err := json.Compact(&b, f); err != nil {
 					return securityOpts, fmt.Errorf("compacting json for seccomp profile (%s) failed: %w", v, err)
 				}
-				securityOpts[key] = fmt.Sprintf("seccomp=%s", b.Bytes())
+				securityOpts[key] = "seccomp=" + b.String()
 			}
 		}
 	}
@@ -997,9 +997,11 @@ func parseDevice(device, serverOS string) (container.DeviceMapping, error) {
 	case "linux":
 		return parseLinuxDevice(device)
 	case "windows":
-		return parseWindowsDevice(device)
+		// Windows doesn't support mapping, so passing the given value as-is.
+		return container.DeviceMapping{PathOnHost: device}, nil
+	default:
+		return container.DeviceMapping{}, fmt.Errorf("unknown server OS: %s", serverOS)
 	}
-	return container.DeviceMapping{}, fmt.Errorf("unknown server OS: %s", serverOS)
 }
 
 // parseLinuxDevice parses a device mapping string to a container.DeviceMapping struct
@@ -1030,18 +1032,11 @@ func parseLinuxDevice(device string) (container.DeviceMapping, error) {
 		dst = src
 	}
 
-	deviceMapping := container.DeviceMapping{
+	return container.DeviceMapping{
 		PathOnHost:        src,
 		PathInContainer:   dst,
 		CgroupPermissions: permissions,
-	}
-	return deviceMapping, nil
-}
-
-// parseWindowsDevice parses a device mapping string to a container.DeviceMapping struct
-// knowing that the target is a Windows daemon
-func parseWindowsDevice(device string) (container.DeviceMapping, error) {
-	return container.DeviceMapping{PathOnHost: device}, nil
+	}, nil
 }
 
 // validateDeviceCgroupRule validates a device cgroup rule string format

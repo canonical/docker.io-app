@@ -27,8 +27,10 @@ import (
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/source"
 	srctypes "github.com/moby/buildkit/source/types"
+	"github.com/moby/buildkit/source/util/pathutil"
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/cachedigest"
+	"github.com/moby/buildkit/util/pgpsign"
 	"github.com/moby/buildkit/util/tracing"
 	"github.com/moby/buildkit/version"
 	digest "github.com/opencontainers/go-digest"
@@ -111,6 +113,16 @@ func (hs *Source) Identifier(scheme, ref string, attrs map[string]string, platfo
 			id.GID = int(i)
 		case pb.AttrHTTPAuthHeaderSecret:
 			id.AuthHeaderSecret = v
+		case pb.AttrHTTPSignatureVerifyPubKey:
+			if id.VerifySignature == nil {
+				id.VerifySignature = &HTTPSignatureVerifyOptions{}
+			}
+			id.VerifySignature.PubKey = []byte(v)
+		case pb.AttrHTTPSignatureVerify:
+			if id.VerifySignature == nil {
+				id.VerifySignature = &HTTPSignatureVerifyOptions{}
+			}
+			id.VerifySignature.Signature = []byte(v)
 		default:
 			if name, found := strings.CutPrefix(k, pb.AttrHTTPHeaderPrefix); found {
 				name = http.CanonicalHeaderKey(name)
@@ -127,13 +139,41 @@ func (hs *Source) Identifier(scheme, ref string, attrs map[string]string, platfo
 		return cmp.Compare(a.Name, b.Name)
 	})
 
+	if err := validateSignatureVerifyOptions(id.VerifySignature); err != nil {
+		return nil, err
+	}
+
 	return id, nil
 }
 
 type Metadata struct {
-	Digest       digest.Digest
-	Filename     string
-	LastModified *time.Time
+	Digest           digest.Digest
+	Filename         string
+	LastModified     *time.Time
+	ChecksumResponse *MetadataChecksumResponse
+}
+
+type MetadataOpts struct {
+	ChecksumReq *MetadataChecksumRequest
+}
+
+type MetadataChecksumAlgo int
+
+const (
+	MetadataChecksumAlgoSHA256 MetadataChecksumAlgo = iota
+	MetadataChecksumAlgoSHA384
+	MetadataChecksumAlgoSHA512
+	maxChecksumSuffixSize = 4 * 1024
+)
+
+type MetadataChecksumRequest struct {
+	Algo   MetadataChecksumAlgo
+	Suffix []byte
+}
+
+type MetadataChecksumResponse struct {
+	Digest string
+	Suffix []byte
 }
 
 type httpSourceHandler struct {
@@ -148,13 +188,13 @@ type metadataWithRef struct {
 	refID string
 }
 
-func (hs *Source) ResolveMetadata(ctx context.Context, id *HTTPIdentifier, sm *session.Manager, jobCtx solver.JobContext) (*Metadata, error) {
+func (hs *Source) ResolveMetadata(ctx context.Context, id *HTTPIdentifier, sm *session.Manager, jobCtx solver.JobContext, opt MetadataOpts) (*Metadata, error) {
 	hsh := &httpSourceHandler{
 		src:    *id,
 		Source: hs,
 		sm:     sm,
 	}
-	return hsh.resolveMetadata(ctx, jobCtx)
+	return hsh.resolveMetadata(ctx, jobCtx, opt)
 }
 
 func (hs *Source) Resolve(ctx context.Context, id source.Identifier, sm *session.Manager, _ solver.Vertex) (source.SourceInstance, error) {
@@ -230,14 +270,38 @@ func (hs *httpSourceHandler) formatCacheKey(filename string, dgst digest.Digest,
 	return dgst
 }
 
-func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.JobContext) (md *Metadata, retErr error) {
+func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.JobContext, opt MetadataOpts) (*Metadata, error) {
+	if err := validateChecksumRequest(opt.ChecksumReq); err != nil {
+		return nil, err
+	}
+	if err := validateSignatureVerifyOptions(hs.src.VerifySignature); err != nil {
+		return nil, err
+	}
+	md, err := hs.resolveMetadataStatic(ctx, jobCtx)
+	if err != nil {
+		return nil, err
+	}
+	md, err = hs.handleSignatureVerification(ctx, jobCtx, md)
+	if err != nil {
+		return nil, err
+	}
+	return hs.handleChecksumRequest(ctx, jobCtx, md, opt)
+}
+
+func (hs *httpSourceHandler) resolveMetadataStatic(ctx context.Context, jobCtx solver.JobContext) (*Metadata, error) {
 	if hs.src.Checksum != "" {
 		return &Metadata{
 			Digest:   hs.src.Checksum,
 			Filename: getFileName(hs.src.URL, hs.src.Filename, nil),
 		}, nil
 	}
+	if hs.resolved != nil {
+		return &hs.resolved.Metadata, nil
+	}
+	return hs.resolveMetadataRef(ctx, jobCtx)
+}
 
+func (hs *httpSourceHandler) resolveMetadataRef(ctx context.Context, jobCtx solver.JobContext) (md *Metadata, retErr error) {
 	var g session.Group
 	if jobCtx != nil {
 		g = jobCtx.Session()
@@ -248,7 +312,7 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 		return nil, err
 	}
 
-	if hs.resolved != nil {
+	if hs.resolved != nil && hs.resolved.refID != "" {
 		return &hs.resolved.Metadata, nil
 	}
 	if jobCtx != nil {
@@ -259,9 +323,9 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 			}
 			saveResolved := true
 			defer func() {
-				ret := hs.resolved
-				if retErr != nil || !saveResolved {
-					ret = nil
+				var ret any
+				if retErr == nil && saveResolved && hs.resolved != nil {
+					ret = hs.resolved
 				}
 				if err := release(ret); err != nil {
 					bklog.G(ctx).WithError(err).Warn("failed to release resolver cache lock")
@@ -273,6 +337,9 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 					return nil, errors.Errorf("invalid HTTP resolver cache value: %T", v)
 				}
 				if hs.src.Checksum != "" && v2.Digest != hs.src.Checksum {
+					continue
+				}
+				if v2.refID == "" {
 					continue
 				}
 				hs.resolved = v2
@@ -366,6 +433,9 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 							Filename:     getFileName(hs.src.URL, hs.src.Filename, resp),
 							LastModified: modTime,
 						}
+						if err := hs.validatePinnedChecksum(m.Digest); err != nil {
+							return nil, err
+						}
 						hs.resolved = &metadataWithRef{
 							Metadata: *m,
 							refID:    md.ID(),
@@ -420,6 +490,9 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 			Filename:     getFileName(hs.src.URL, hs.src.Filename, resp),
 			LastModified: modTime,
 		}
+		if err := hs.validatePinnedChecksum(m.Digest); err != nil {
+			return nil, err
+		}
 		hs.resolved = &metadataWithRef{
 			Metadata: *m,
 			refID:    md.ID(),
@@ -449,6 +522,9 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 			modTime = &t
 		}
 	}
+	if err := hs.validatePinnedChecksum(dgst); err != nil {
+		return nil, err
+	}
 
 	out := &Metadata{
 		Digest:       dgst,
@@ -463,7 +539,7 @@ func (hs *httpSourceHandler) resolveMetadata(ctx context.Context, jobCtx solver.
 }
 
 func (hs *httpSourceHandler) CacheKey(ctx context.Context, jobCtx solver.JobContext, index int) (string, string, solver.CacheOpts, bool, error) {
-	md, err := hs.resolveMetadata(ctx, jobCtx)
+	md, err := hs.resolveMetadata(ctx, jobCtx, MetadataOpts{})
 	if err != nil {
 		return "", "", nil, false, err
 	}
@@ -473,6 +549,177 @@ func (hs *httpSourceHandler) CacheKey(ctx context.Context, jobCtx solver.JobCont
 		}
 	}
 	return hs.formatCacheKey(md.Filename, md.Digest, md.LastModified).String(), md.Digest.String(), nil, true, nil
+}
+
+func (hs *httpSourceHandler) validatePinnedChecksum(got digest.Digest) error {
+	if hs.src.Checksum == "" || got == hs.src.Checksum {
+		return nil
+	}
+	return errors.Errorf("digest mismatch for %s: %s (expected: %s)", hs.src.URL, got, hs.src.Checksum)
+}
+
+func validateChecksumRequest(req *MetadataChecksumRequest) error {
+	if req == nil {
+		return nil
+	}
+	if len(req.Suffix) > maxChecksumSuffixSize {
+		return errors.Errorf("http checksum request suffix exceeds max size %d", maxChecksumSuffixSize)
+	}
+	switch req.Algo {
+	case MetadataChecksumAlgoSHA256, MetadataChecksumAlgoSHA384, MetadataChecksumAlgoSHA512:
+		return nil
+	default:
+		return errors.Errorf("unsupported checksum algorithm %d", req.Algo)
+	}
+}
+
+func validateSignatureVerifyOptions(opt *HTTPSignatureVerifyOptions) error {
+	if opt == nil {
+		return nil
+	}
+	hasPubKey := len(opt.PubKey) > 0
+	hasSignature := len(opt.Signature) > 0
+	if hasPubKey == hasSignature {
+		return nil
+	}
+	return errors.New("http signature verification requires both pubkey and signature")
+}
+
+func (hs *httpSourceHandler) handleSignatureVerification(ctx context.Context, jobCtx solver.JobContext, in *Metadata) (*Metadata, error) {
+	out := *in
+	if hs.src.VerifySignature == nil {
+		return &out, nil
+	}
+	if hs.resolved == nil || hs.resolved.refID == "" {
+		md, err := hs.resolveMetadataRef(ctx, jobCtx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to resolve source reference for signature verification")
+		}
+		out = *md
+	}
+	if err := hs.verifySignature(ctx, out.Filename, hs.resolved.refID, hs.src.VerifySignature); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (hs *httpSourceHandler) handleChecksumRequest(ctx context.Context, jobCtx solver.JobContext, in *Metadata, opt MetadataOpts) (*Metadata, error) {
+	out := *in
+	if opt.ChecksumReq == nil {
+		out.ChecksumResponse = nil
+		return &out, nil
+	}
+	if hs.resolved == nil || hs.resolved.refID == "" {
+		md, err := hs.resolveMetadataRef(ctx, jobCtx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to resolve source reference for checksum request")
+		}
+		out = *md
+	}
+	resp, err := hs.computeChecksumResponse(ctx, out.Filename, hs.resolved.refID, opt.ChecksumReq)
+	if err != nil {
+		return nil, err
+	}
+	out.ChecksumResponse = resp
+	return &out, nil
+}
+
+func (hs *httpSourceHandler) verifySignature(ctx context.Context, filename, refID string, opts *HTTPSignatureVerifyOptions) error {
+	ref, err := hs.cache.Get(ctx, refID, nil)
+	if err != nil {
+		return errors.Wrap(err, "failed to load http source reference")
+	}
+	defer ref.Release(context.WithoutCancel(ctx))
+
+	mount, err := ref.Mount(ctx, false, nil)
+	if err != nil {
+		return errors.Wrap(err, "failed to mount http source reference")
+	}
+	lm := snapshot.LocalMounter(mount)
+	dir, err := lm.Mount()
+	if err != nil {
+		return errors.Wrap(err, "failed to mount local http source reference")
+	}
+	defer lm.Unmount()
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return errors.Wrap(err, "failed to open http source root")
+	}
+	defer root.Close()
+
+	f, err := root.Open(filepath.Base(filepath.Join("/", filename)))
+	if err != nil {
+		return errors.Wrap(err, "failed to open http source payload")
+	}
+	defer f.Close()
+
+	if err := pgpsign.VerifyArmoredDetachedSignature(f, opts.Signature, opts.PubKey, nil); err != nil {
+		return errors.Wrap(err, "failed to verify pgp signature")
+	}
+	return nil
+}
+
+func (hs *httpSourceHandler) computeChecksumResponse(ctx context.Context, filename, refID string, req *MetadataChecksumRequest) (*MetadataChecksumResponse, error) {
+	algo, err := checksumAlgo(req.Algo)
+	if err != nil {
+		return nil, err
+	}
+
+	ref, err := hs.cache.Get(ctx, refID, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to load http source reference")
+	}
+	defer ref.Release(context.WithoutCancel(ctx))
+
+	mount, err := ref.Mount(ctx, false, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to mount http source reference")
+	}
+	lm := snapshot.LocalMounter(mount)
+	dir, err := lm.Mount()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to mount local http source reference")
+	}
+	defer lm.Unmount()
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open http source root")
+	}
+	defer root.Close()
+
+	f, err := root.Open(filepath.Base(filepath.Join("/", filename)))
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open http source payload")
+	}
+	defer f.Close()
+
+	digester := algo.Digester()
+	h := digester.Hash()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, errors.Wrap(err, "failed to hash http source payload")
+	}
+	if _, err := h.Write(req.Suffix); err != nil {
+		return nil, errors.Wrap(err, "failed to hash checksum suffix")
+	}
+	return &MetadataChecksumResponse{
+		Digest: digester.Digest().String(),
+		Suffix: slices.Clone(req.Suffix),
+	}, nil
+}
+
+func checksumAlgo(algo MetadataChecksumAlgo) (digest.Algorithm, error) {
+	switch algo {
+	case MetadataChecksumAlgoSHA256:
+		return digest.SHA256, nil
+	case MetadataChecksumAlgoSHA384:
+		return digest.SHA384, nil
+	case MetadataChecksumAlgoSHA512:
+		return digest.SHA512, nil
+	default:
+		return "", errors.Errorf("unsupported checksum algorithm %d", algo)
+	}
 }
 
 func (hs *httpSourceHandler) save(ctx context.Context, resp *http.Response, s session.Group) (ref cache.ImmutableRef, dgst digest.Digest, retErr error) {
@@ -511,9 +758,16 @@ func (hs *httpSourceHandler) save(ctx context.Context, resp *http.Response, s se
 	if hs.src.Perm != 0 {
 		perm = hs.src.Perm
 	}
-	fp := filepath.Join(dir, getFileName(hs.src.URL, hs.src.Filename, resp))
 
-	f, err := os.OpenFile(fp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(perm))
+	name := getFileName(hs.src.URL, hs.src.Filename, resp)
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(perm))
 	if err != nil {
 		return nil, "", err
 	}
@@ -544,7 +798,7 @@ func (hs *httpSourceHandler) save(ctx context.Context, resp *http.Response, s se
 	}
 
 	if gid != 0 || uid != 0 {
-		if err := os.Chown(fp, uid, gid); err != nil {
+		if err := root.Chown(name, uid, gid); err != nil {
 			return nil, "", err
 		}
 	}
@@ -557,7 +811,7 @@ func (hs *httpSourceHandler) save(ctx context.Context, resp *http.Response, s se
 		}
 	}
 
-	if err := os.Chtimes(fp, mTime, mTime); err != nil {
+	if err := root.Chtimes(name, mTime, mTime); err != nil {
 		return nil, "", err
 	}
 
@@ -606,34 +860,17 @@ func (hs *httpSourceHandler) Snapshot(ctx context.Context, jobCtx solver.JobCont
 			if err != nil {
 				return nil, err
 			}
-			vals, release, err := rc.Lock(uh)
+			refID, err = hs.snapshotRefIDFromResolverCache(rc, uh)
 			if err != nil {
 				return nil, err
-			}
-			for _, v := range vals {
-				v2, ok := v.(*metadataWithRef)
-				if !ok {
-					return nil, errors.Errorf("invalid HTTP resolver cache value: %T", vals[0])
-				}
-				if hs.src.Checksum != "" && v2.Digest != hs.src.Checksum {
-					continue
-				}
-				if v2.refID != "" {
-					hs.resolved = v2
-					refID = v2.refID
-				}
-			}
-			release(nil)
-			if hs.src.Checksum != "" && len(vals) > 0 && refID == "" {
-				return nil, errors.Errorf("digest mismatch for %s: %s (expected: %s)", hs.src.URL, vals[0], hs.src.Checksum)
 			}
 		}
 	}
 
 	if refID != "" {
-		ref, err := hs.cache.Get(ctx, hs.resolved.refID, nil)
+		ref, err := hs.cache.Get(ctx, refID, nil)
 		if err != nil {
-			bklog.G(ctx).WithError(err).Warnf("failed to get HTTP snapshot for ref %s (%s)", hs.resolved.refID, hs.src.URL)
+			bklog.G(ctx).WithError(err).Warnf("failed to get HTTP snapshot for ref %s (%s)", refID, hs.src.URL)
 		} else {
 			return ref, nil
 		}
@@ -671,8 +908,35 @@ func (hs *httpSourceHandler) Snapshot(ctx context.Context, jobCtx solver.JobCont
 	return ref, nil
 }
 
+func (hs *httpSourceHandler) snapshotRefIDFromResolverCache(rc solver.ResolverCache, uh digest.Digest) (string, error) {
+	vals, release, err := rc.Lock(uh)
+	if err != nil {
+		return "", err
+	}
+	defer release(nil)
+
+	refID := ""
+	for _, v := range vals {
+		v2, ok := v.(*metadataWithRef)
+		if !ok || v2 == nil {
+			return "", errors.Errorf("invalid HTTP resolver cache value: %T", v)
+		}
+		if hs.src.Checksum != "" && v2.Digest != hs.src.Checksum {
+			continue
+		}
+		if v2.refID != "" {
+			hs.resolved = v2
+			refID = v2.refID
+		}
+	}
+	if hs.src.Checksum != "" && len(vals) > 0 && refID == "" {
+		return "", errors.Errorf("digest mismatch for %s: %s (expected: %s)", hs.src.URL, vals[0], hs.src.Checksum)
+	}
+	return refID, nil
+}
+
 func (hs *httpSourceHandler) newHTTPRequest(ctx context.Context, g session.Group) (*http.Request, error) {
-	req, err := http.NewRequest(http.MethodGet, hs.src.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hs.src.URL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -716,19 +980,19 @@ func (hs *httpSourceHandler) newHTTPRequest(ctx context.Context, g session.Group
 		}
 	}
 
-	return req.WithContext(ctx), nil
+	return req, nil
 }
 
 func getFileName(urlStr, manualFilename string, resp *http.Response) string {
 	if manualFilename != "" {
-		return manualFilename
+		return pathutil.SafeFileName(manualFilename)
 	}
 	if resp != nil {
 		if contentDisposition := resp.Header.Get("Content-Disposition"); contentDisposition != "" {
 			if _, params, err := mime.ParseMediaType(contentDisposition); err == nil {
 				if params["filename"] != "" && !strings.HasSuffix(params["filename"], "/") {
 					if filename := filepath.Base(filepath.FromSlash(params["filename"])); filename != "" {
-						return filename
+						return pathutil.SafeFileName(filename)
 					}
 				}
 			}
@@ -737,10 +1001,10 @@ func getFileName(urlStr, manualFilename string, resp *http.Response) string {
 	u, err := url.Parse(urlStr)
 	if err == nil {
 		if base := path.Base(u.Path); base != "." && base != "/" {
-			return base
+			return pathutil.SafeFileName(base)
 		}
 	}
-	return "download"
+	return pathutil.SafeFileName("")
 }
 
 func searchHTTPURLDigest(ctx context.Context, store cache.MetadataStore, dgst digest.Digest) ([]cacheRefMetadata, error) {

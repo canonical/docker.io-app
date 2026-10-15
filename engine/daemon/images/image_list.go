@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/moby/moby/v2/daemon/internal/layer"
 	"github.com/moby/moby/v2/daemon/internal/timestamp"
 	"github.com/moby/moby/v2/daemon/server/imagebackend"
+	"github.com/moby/moby/v2/errdefs"
 )
 
 var acceptedImageFilterTags = map[string]bool{
@@ -61,17 +63,14 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 		return nil, err
 	}
 
+	now := time.Now()
 	err = opts.Filters.WalkValues("until", func(value string) error {
-		ts, err := timestamp.GetTimestamp(value, time.Now())
+		ts, err := timestamp.Parse(value, now)
 		if err != nil {
-			return err
+			return errdefs.InvalidParameter(fmt.Errorf("invalid value for 'until' filter: %w", err))
 		}
-		seconds, nanoseconds, err := timestamp.ParseTimestamps(ts, 0)
-		if err != nil {
-			return err
-		}
-		if tsUnix := time.Unix(seconds, nanoseconds); beforeFilter.IsZero() || beforeFilter.After(tsUnix) {
-			beforeFilter = tsUnix
+		if beforeFilter.IsZero() || beforeFilter.After(ts) {
+			beforeFilter = ts
 		}
 		return nil
 	})
@@ -158,12 +157,28 @@ func (i *ImageService) Images(ctx context.Context, opts imagebackend.ListOptions
 
 		for _, ref := range i.referenceStore.References(id.Digest()) {
 			if opts.Filters.Contains("reference") {
+				// Match the filter pattern against both the familiar
+				// and canonical forms of the image reference (with
+				// and without tag), so that e.g. "alpine" and
+				// "docker.io/library/alpine" (and their glob
+				// variants) both match.
+				targets := []string{
+					reference.FamiliarString(ref),
+					reference.FamiliarName(ref),
+					reference.TagNameOnly(ref).String(),
+					ref.Name(),
+				}
 				var found bool
-				var matchErr error
 				for _, pattern := range opts.Filters.Get("reference") {
-					found, matchErr = reference.FamiliarMatch(pattern, ref)
-					if matchErr != nil {
-						return nil, matchErr
+					for _, target := range targets {
+						matched, err := path.Match(pattern, target)
+						if err != nil {
+							return nil, err
+						}
+						if matched {
+							found = true
+							break
+						}
 					}
 					if found {
 						break

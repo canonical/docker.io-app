@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"strconv"
@@ -269,22 +269,6 @@ func (r *Resolver) filterExtServers(extDNS []extDNSEntry) []extDNSEntry {
 	return result
 }
 
-//nolint:gosec // The RNG is not used in a security-sensitive context.
-var (
-	shuffleRNG   = rand.New(rand.NewSource(time.Now().Unix()))
-	shuffleRNGMu sync.Mutex
-)
-
-func shuffleAddr(addr []net.IP) []net.IP {
-	shuffleRNGMu.Lock()
-	defer shuffleRNGMu.Unlock()
-	for i := len(addr) - 1; i > 0; i-- {
-		r := shuffleRNG.Intn(i + 1) //nolint:gosec // gosec complains about the use of rand here. It should be fine.
-		addr[i], addr[r] = addr[r], addr[i]
-	}
-	return addr
-}
-
 func createRespMsg(query *dns.Msg) *dns.Msg {
 	resp := &dns.Msg{}
 	resp.SetReply(query)
@@ -320,9 +304,9 @@ func (r *Resolver) handleIPQuery(ctx context.Context, query *dns.Msg, ipType typ
 	r.log(ctx).Debugf("[resolver] lookup for %s: IP %v", name, addr)
 
 	resp := createRespMsg(query)
-	if len(addr) > 1 {
-		addr = shuffleAddr(addr)
-	}
+	rand.Shuffle(len(addr), func(i, j int) {
+		addr[i], addr[j] = addr[j], addr[i]
+	})
 	if ipType == types.IPv4 {
 		for _, ip := range addr {
 			resp.Answer = append(resp.Answer, &dns.A{
@@ -397,11 +381,6 @@ func (r *Resolver) handleSRVQuery(ctx context.Context, query *dns.Msg) (*dns.Msg
 }
 
 func (r *Resolver) serveDNS(w dns.ResponseWriter, query *dns.Msg) {
-	var (
-		resp *dns.Msg
-		err  error
-	)
-
 	if query == nil || len(query.Question) == 0 {
 		return
 	}
@@ -414,6 +393,11 @@ func (r *Resolver) serveDNS(w dns.ResponseWriter, query *dns.Msg) {
 		attribute.String("libnet.resolver.query.type", dns.TypeToString[queryType]),
 	))
 	defer span.End()
+
+	var (
+		resp *dns.Msg
+		err  error
+	)
 
 	switch queryType {
 	case dns.TypeA:
@@ -431,7 +415,7 @@ func (r *Resolver) serveDNS(w dns.ResponseWriter, query *dns.Msg) {
 	}
 
 	reply := func(msg *dns.Msg) {
-		if err = w.WriteMsg(msg); err != nil {
+		if err := w.WriteMsg(msg); err != nil {
 			r.log(ctx).WithError(err).Error("[resolver] failed to write response")
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "WriteMsg failed")
@@ -542,9 +526,9 @@ func (r *Resolver) forwardExtDNS(ctx context.Context, proto string, remoteAddr n
 		}
 
 		// limits the number of outstanding concurrent queries.
-		ctx, cancel := context.WithTimeout(ctx, extIOTimeout)
-		err := r.fwdSem.Acquire(ctx, 1)
-		cancel()
+		semAcqCtx, cancelSemAcqCtx := context.WithTimeout(ctx, extIOTimeout)
+		err := r.fwdSem.Acquire(semAcqCtx, 1)
+		cancelSemAcqCtx()
 
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
