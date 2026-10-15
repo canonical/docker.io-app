@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package system
 
@@ -393,6 +393,13 @@ func prettyPrintServerInfo(streams command.Streams, info *dockerInfo) {
 	if info.FirewallBackend != nil {
 		fprintln(output, " Firewall Backend:", info.FirewallBackend.Driver)
 		for _, v := range info.FirewallBackend.Info {
+			fprintf(output, "  %s: %s\n", v[0], v[1])
+		}
+	}
+
+	if info.NRI != nil {
+		fprintln(output, " NRI:")
+		for _, v := range info.NRI.Info {
 			fprintf(output, "  %s: %s\n", v[0], v[1])
 		}
 	}

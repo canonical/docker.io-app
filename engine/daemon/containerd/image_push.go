@@ -140,7 +140,9 @@ func (i *ImageService) pushRef(ctx context.Context, targetRef reference.Named, p
 		}
 	}()
 
-	var limiter *semaphore.Weighted // TODO: Respect max concurrent downloads/uploads
+	i.transferLimitMu.Lock()
+	limiter := i.uploadLimiter
+	i.transferLimitMu.Unlock()
 
 	mountableBlobs, err := findMissingMountable(ctx, store, jobsQueue, target, targetRef, limiter)
 	if err != nil {
@@ -403,8 +405,8 @@ func extractDistributionSources(labels map[string]string) []distributionSource {
 	// Check if this blob has a distributionSource label
 	// if yes, read it as source
 	for k, v := range labels {
-		if reg := strings.TrimPrefix(k, containerdlabels.LabelDistributionSource); reg != k {
-			for _, repo := range strings.Split(v, ",") {
+		if reg, ok := strings.CutPrefix(k, containerdlabels.LabelDistributionSource); ok {
+			for repo := range strings.SplitSeq(v, ",") {
 				ref, err := reference.ParseNamed(reg + "/" + repo)
 				if err != nil {
 					continue

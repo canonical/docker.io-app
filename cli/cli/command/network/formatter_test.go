@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package network
 
@@ -68,9 +68,7 @@ func TestNetworkContext(t *testing.T) {
 	for _, c := range cases {
 		ctx = c.networkCtx
 		v := c.call()
-		if strings.Contains(v, ",") {
-			test.CompareMultipleValues(t, v, c.expValue)
-		} else if v != c.expValue {
+		if v != c.expValue {
 			t.Fatalf("Expected %s, was %s\n", c.expValue, v)
 		}
 	}

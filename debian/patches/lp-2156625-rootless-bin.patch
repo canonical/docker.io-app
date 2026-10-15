@@ -1,0 +1,91 @@
+Description: Fix rootless setuptool script
+  The dockerd-rootless-setuptool script assumes the docker binary is in the same
+  directory. This is true for Docker's docker-ce-rootless-extras but is not true
+  here.
+  .
+  This patch uses raw `docker` invocation, which should always be on PATH.
+Author: Grayson Wolf <grayson.wolf@canonical.com>
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/docker.io-app/+bug/2156625
+Forwarded: not-needed
+Last-Update: 2026-07-01
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/engine/contrib/dockerd-rootless-setuptool.sh
++++ b/engine/contrib/dockerd-rootless-setuptool.sh
+@@ -21,7 +21,7 @@ ERROR() {
+ }
+ 
+ # constants
+-DOCKERD_ROOTLESS_SH="dockerd-rootless.sh"
++DOCKERD_ROOTLESS_SH="/usr/share/docker.io/contrib/dockerd-rootless.sh"
+ SYSTEMD_UNIT="docker.service"
+ CLI_CONTEXT="rootless"
+ 
+@@ -59,10 +59,7 @@ init() {
+ 	fi
+ 
+ 	# set BIN
+-	if ! BIN="$(command -v "$DOCKERD_ROOTLESS_SH" 2> /dev/null)"; then
+-		ERROR "$DOCKERD_ROOTLESS_SH needs to be present under \$PATH"
+-		exit 1
+-	fi
++	BIN="$(command -v "$DOCKERD_ROOTLESS_SH" 2> /dev/null)"
+ 	BIN=$(dirname "$BIN")
+ 
+ 	# set SYSTEMD
+@@ -311,7 +308,7 @@ cmd_entrypoint_nsenter() {
+ show_systemd_error() {
+ 	n="20"
+ 	ERROR "Failed to start ${SYSTEMD_UNIT}. Run \`journalctl -n ${n} --no-pager --user --unit ${SYSTEMD_UNIT}\` to show the error log."
+-	ERROR "Before retrying installation, you might need to uninstall the current setup: \`$0 uninstall -f ; ${BIN}/rootlesskit rm -rf ${HOME}/.local/share/docker\`"
++	ERROR "Before retrying installation, you might need to uninstall the current setup: \`$0 uninstall -f ; /usr/bin/rootlesskit rm -rf ${HOME}/.local/share/docker\`"
+ 	if journalctl -q -n ${n} --user --unit ${SYSTEMD_UNIT} | grep -qF "/run/xtables.lock: Permission denied"; then
+ 		ERROR "Failure likely related to https://github.com/moby/moby/issues/41230"
+ 		ERROR "This may work as a workaround: \`sudo dnf install -y policycoreutils-python-utils && sudo semanage permissive -a iptables_t\`"
+@@ -374,7 +371,7 @@ install_systemd() {
+ 			show_systemd_error
+ 			exit 1
+ 		fi
+-		DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock" $BIN/docker version
++		DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock" /usr/bin/docker version
+ 		systemctl --user enable "${SYSTEMD_UNIT}"
+ 	)
+ 	INFO "Installed ${SYSTEMD_UNIT} successfully."
+@@ -393,24 +390,24 @@ install_nonsystemd() {
+ 
+ cli_ctx_exists() {
+ 	name="$1"
+-	"${BIN}/docker" --context=default context inspect -f "{{.Name}}" "${name}" > /dev/null 2>&1
++	/usr/bin/docker --context=default context inspect -f "{{.Name}}" "${name}" > /dev/null 2>&1
+ }
+ 
+ cli_ctx_create() {
+ 	name="$1"
+ 	host="$2"
+ 	description="$3"
+-	"${BIN}/docker" --context=default context create "${name}" --docker "host=${host}" --description "${description}" > /dev/null
++	/usr/bin/docker --context=default context create "${name}" --docker "host=${host}" --description "${description}" > /dev/null
+ }
+ 
+ cli_ctx_use() {
+ 	name="$1"
+-	"${BIN}/docker" --context=default context use "${name}" > /dev/null
++	/usr/bin/docker --context=default context use "${name}" > /dev/null
+ }
+ 
+ cli_ctx_rm() {
+ 	name="$1"
+-	"${BIN}/docker" --context=default context rm -f "${name}" > /dev/null
++	/usr/bin/docker --context=default context rm -f "${name}" > /dev/null
+ }
+ 
+ # CLI subcommand: "install"
+@@ -491,7 +488,7 @@ cmd_entrypoint_uninstall() {
+ 	INFO
+ 	INFO 'Make sure to unset or update the environment PATH, DOCKER_HOST, and DOCKER_CONTEXT environment variables if you have added them to `~/.bashrc`.'
+ 	INFO "This uninstallation tool does NOT remove Docker binaries and data."
+-	INFO "To remove data, run: \`$BIN/rootlesskit rm -rf $HOME/.local/share/docker\`"
++	INFO "To remove data, run: \`/usr/bin/rootlesskit rm -rf $HOME/.local/share/docker\`"
+ }
+ 
+ # text for --help

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -29,7 +30,6 @@ import (
 func TestRunContainerWithBridgeNone(t *testing.T) {
 	skip.If(t, testEnv.IsRemoteDaemon, "cannot start daemon on remote test run")
 	skip.If(t, testEnv.IsUserNamespace)
-	skip.If(t, testEnv.IsRootless, "rootless mode has different view of network")
 
 	ctx := testutil.StartSpan(baseContext, t)
 
@@ -145,7 +145,7 @@ func TestDefaultNetworkOpts(t *testing.T) {
 				network.CreateNoError(ctx, t, c, "from-net", func(create *client.NetworkCreateOptions) {
 					create.ConfigOnly = true
 					create.Options = map[string]string{
-						"com.docker.network.driver.mtu": fmt.Sprint(tc.mtu),
+						"com.docker.network.driver.mtu": strconv.Itoa(tc.mtu),
 					}
 				})
 				defer c.NetworkRemove(ctx, "from-net", client.NetworkRemoveOptions{})
@@ -392,7 +392,7 @@ func checkCtrRoutes(t *testing.T, ctx context.Context, apiClient client.APIClien
 		fam = "-6"
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	res, err := container.Exec(ctx, apiClient, ctrID, []string{"ip", "-o", fam, "route", "show"})
 	assert.NilError(t, err)

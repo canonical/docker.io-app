@@ -1,12 +1,15 @@
 package container
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/common"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/moby/moby/v2/integration/internal/container"
+	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -38,8 +41,13 @@ func TestStopContainerWithRestartPolicyAlways(t *testing.T) {
 		assert.NilError(t, err)
 	}
 
+	var pollOpts []poll.SettingOp
+	if testEnv.DaemonInfo.OSType == "windows" {
+		pollOpts = append(pollOpts, poll.WithTimeout(StopContainerWindowsPollTimeout))
+	}
+
 	for _, name := range names {
-		poll.WaitOn(t, container.IsStopped(ctx, apiClient, name))
+		poll.WaitOn(t, container.IsStopped(ctx, apiClient, name), pollOpts...)
 	}
 }
 
@@ -59,7 +67,7 @@ func TestStopContainerWithTimeout(t *testing.T) {
 		forcefulKillExitCode = 0x40010004
 	}
 
-	testCmd := container.WithCmd("sh", "-c", "sleep 10 && exit 42")
+	testCmd := container.WithCmd("sh", "-c", "echo ready; sleep 10; exit 42")
 	testData := []struct {
 		doc              string
 		timeout          int
@@ -99,6 +107,7 @@ func TestStopContainerWithTimeout(t *testing.T) {
 			// TODO(vvoland): Investigate why it helps
 			// t.Parallel()
 			id := container.Run(ctx, t, apiClient, testCmd)
+			poll.WaitOn(t, logsContains(ctx, apiClient, id, "ready"))
 
 			_, err := apiClient.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &tc.timeout})
 			assert.NilError(t, err)
@@ -108,6 +117,62 @@ func TestStopContainerWithTimeout(t *testing.T) {
 			inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 			assert.NilError(t, err)
 			assert.Check(t, is.Equal(inspect.Container.State.ExitCode, tc.expectedExitCode))
+		})
+	}
+}
+
+func TestContainerAPIPostContainerStop(t *testing.T) {
+	apiClient := testEnv.APIClient()
+	ctx := setupTest(t)
+
+	tests := []struct {
+		testName            string
+		id                  string
+		expStatusCode       int
+		expError            string
+		checkContainerState bool
+		expStateRunning     bool
+	}{
+		{
+			testName:            "no error",
+			id:                  container.Run(ctx, t, apiClient),
+			expStatusCode:       http.StatusNoContent,
+			checkContainerState: true,
+			expStateRunning:     false,
+		},
+		{
+			testName:            "container already stopped",
+			id:                  container.Create(ctx, t, apiClient),
+			expStatusCode:       http.StatusNotModified,
+			checkContainerState: true,
+			expStateRunning:     false,
+		},
+		{
+			testName:            "no such container",
+			id:                  "test1234",
+			expStatusCode:       http.StatusNotFound,
+			expError:            `No such container: test1234`,
+			checkContainerState: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			res, _, err := request.Post(ctx, "/containers/"+tc.id+"/stop")
+
+			assert.Equal(t, res.StatusCode, tc.expStatusCode)
+			assert.NilError(t, err)
+
+			if tc.expError != "" {
+				var respErr common.ErrorResponse
+				assert.NilError(t, request.ReadJSONResponse(res, &respErr))
+				assert.ErrorContains(t, respErr, tc.expError)
+			}
+
+			if tc.checkContainerState {
+				inspectRes := container.Inspect(ctx, t, apiClient, tc.id)
+				assert.Equal(t, inspectRes.State.Running, tc.expStateRunning)
+			}
 		})
 	}
 }

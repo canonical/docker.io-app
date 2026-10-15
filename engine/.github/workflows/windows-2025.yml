@@ -1,17 +1,13 @@
 name: windows-2025
 
-# Default to 'contents: read', which grants actions to read commits.
-#
-# If any permission is set, any permission not included in the list is
-# implicitly set to "none".
-#
-# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
-permissions:
-  contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel stale PR runs without interrupting push, tag, scheduled, or
+  # manually dispatched validation.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
@@ -30,14 +26,20 @@ jobs:
     needs: validate-dco
     if: ${{ github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     uses: ./.github/workflows/.windows.yml
-    secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        storage:
-          - graphdriver
-          - snapshotter
+        include:
+          - storage: graphdriver
+            containerd: socket
+          - storage: snapshotter
+            containerd: socket
+          - storage: snapshotter
+            containerd: embedded
     with:
       os: windows-2025
       storage: ${{ matrix.storage }}
+      containerd: ${{ matrix.containerd }}
       send_coverage: false
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
