@@ -211,7 +211,7 @@ esac
 lxc exec docker -- docker run "${image_hello_world}"
 
 ubuntu_devel_suite=$(lxc exec docker -- docker run --rm "${image_ubuntu}" \
-                         /bin/bash -c 'source /etc/lsb-release && echo "$DISTRIB_CODENAME"')
+                         /bin/bash -c 'source /etc/os-release && echo "$VERSION_CODENAME"')
 
 # We also need to run some commands inside an ubuntu:devel container,
 # to make sure that docker.io can work correctly with the latest
