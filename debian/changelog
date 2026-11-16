@@ -1,3 +1,9 @@
+docker.io-app (29.7.2-0ubuntu2) tenacious; urgency=medium
+
+  * d/t/docker-in-lxd: do not rely on lsb-release
+
+ -- Athos Ribeiro <athos@ubuntu.com>  Mon, 16 Nov 2026 08:48:38 -0300
+
 docker.io-app (29.7.2-0ubuntu1) stonking; urgency=medium
 
   * New upstream version 29.7.2
