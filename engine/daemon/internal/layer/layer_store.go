@@ -228,18 +228,23 @@ func (ls *layerStore) applyTar(tx *fileMetadataTransaction, ts io.Reader, parent
 
 	// we're passing nil here for the file putter, because the ApplyDiff will
 	// handle the extraction of the archive
-	rdr, err := asm.NewInputTarStream(tr, metaPacker, nil)
+	rdr, done, err := asm.NewInputTarStreamWithDone(tr, metaPacker, nil)
 	if err != nil {
 		return err
 	}
 
-	applySize, err := ls.driver.ApplyDiff(layer.cacheID, parent, rdr)
-	// discard trailing data but ensure metadata is picked up to reconstruct stream
-	// unconditionally call io.Copy here before checking err to ensure the resources
-	// allocated by NewInputTarStream above are always released
-	io.Copy(io.Discard, rdr) // ignore error as reader may be closed
-	if err != nil {
-		return err
+	applySize, applyErr := ls.driver.ApplyDiff(layer.cacheID, parent, rdr)
+
+	// Discard trailing data but ensure metadata is picked up to reconstruct
+	// stream unconditionally call io.Copy here before checking applyErr to
+	// ensure the goroutine behind NewInputTarStreamWithDone finishes.
+	_, _ = io.Copy(io.Discard, rdr) // ignore error as reader may be closed
+
+	if doneErr := <-done; applyErr == nil {
+		applyErr = doneErr
+	}
+	if applyErr != nil {
+		return applyErr
 	}
 
 	layer.size = applySize
@@ -535,6 +540,9 @@ func (ls *layerStore) CreateRWLayer(name string, parent ChainID, opts *CreateRWL
 		return nil, err
 	}
 	if err := ls.saveMount(m); err != nil {
+		if removeErr := ls.driver.Remove(m.mountID); removeErr != nil {
+			log.G(context.TODO()).WithFields(log.Fields{"mount-id": m.mountID, "error": removeErr}).Error("Failed to clean up RW layer after mount save failure")
+		}
 		return nil, err
 	}
 
@@ -645,12 +653,12 @@ func (ls *layerStore) saveMount(mount *mountedLayer) error {
 	return nil
 }
 
-func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc MountInit, storageOpt map[string]string) (string, error) {
+func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc MountInit, storageOpt map[string]string) (_ string, retErr error) {
 	// Use "<graph-id>-init" to maintain compatibility with graph drivers
 	// which are expecting this layer with this special name. If all
 	// graph drivers can be updated to not rely on knowing about this layer
 	// then the initID should be randomly generated.
-	initID := fmt.Sprintf("%s-init", graphID)
+	initID := graphID + "-init"
 
 	createOpts := &graphdriver.CreateOpts{
 		MountLabel: mountLabel,
@@ -660,6 +668,16 @@ func (ls *layerStore) initMount(graphID, parent, mountLabel string, initFunc Mou
 	if err := ls.driver.CreateReadWrite(initID, parent, createOpts); err != nil {
 		return "", err
 	}
+
+	// Clean up init layer if any subsequent operation fails
+	defer func() {
+		if retErr != nil {
+			if err := ls.driver.Remove(initID); err != nil {
+				log.G(context.TODO()).WithFields(log.Fields{"init-id": initID, "error": err}).Error("Failed to clean up init layer after error")
+			}
+		}
+	}()
+
 	p, err := ls.driver.Get(initID, "")
 	if err != nil {
 		return "", err

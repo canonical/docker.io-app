@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func (s *DockerCLICreateSuite) TestCreateArgs(c *testing.T) {
 	assert.Equal(c, len(containers), 1)
 
 	cont := containers[0]
-	assert.Equal(c, cont.Path, "command", fmt.Sprintf("Unexpected container path. Expected command, received: %s", cont.Path))
+	assert.Equal(c, cont.Path, "command", "Unexpected container path. Expected command, received: "+cont.Path)
 
 	b := false
 	expected := []string{"arg1", "arg2", "arg with space", "-c", "flags"}
@@ -106,7 +107,7 @@ func (s *DockerCLICreateSuite) TestCreateWithPortRange(c *testing.T) {
 
 	for k, v := range cont.HostConfig.PortBindings {
 		assert.Equal(c, len(v), 1, fmt.Sprintf("Expected 1 ports binding, for the port %s but found %s", k, v))
-		assert.Equal(c, fmt.Sprintf("%d", k.Num()), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
+		assert.Equal(c, strconv.FormatUint(uint64(k.Num()), 10), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
 	}
 }
 
@@ -132,7 +133,7 @@ func (s *DockerCLICreateSuite) TestCreateWithLargePortRange(c *testing.T) {
 
 	for k, v := range cont.HostConfig.PortBindings {
 		assert.Equal(c, len(v), 1)
-		assert.Equal(c, fmt.Sprintf("%d", k.Num()), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
+		assert.Equal(c, strconv.FormatUint(uint64(k.Num()), 10), v[0].HostPort, fmt.Sprintf("Expected host port %d to match published port %s", k.Num(), v[0].HostPort))
 	}
 }
 
@@ -147,12 +148,11 @@ func (s *DockerCLICreateSuite) TestCreateEchoStdout(c *testing.T) {
 
 func (s *DockerCLICreateSuite) TestCreateVolumesCreated(c *testing.T) {
 	testRequires(c, testEnv.IsLocalDaemon)
-	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
 
 	const name = "test_create_volume"
-	cli.DockerCmd(c, "create", "--name", name, "-v", prefix+slash+"foo", "busybox")
+	cli.DockerCmd(c, "create", "--name", name, "-v", dPath("/foo"), "busybox")
 
-	mnt, err := inspectMountPoint(name, prefix+slash+"foo")
+	mnt, err := inspectMountPoint(name, dPath("/foo"))
 	assert.Assert(c, err == nil, "Error getting volume host path: %q", err)
 
 	if _, err := os.Stat(mnt.Source); err != nil && os.IsNotExist(err) {
@@ -225,7 +225,7 @@ func (s *DockerCLICreateSuite) TestCreateModeIpcContainer(c *testing.T) {
 	id := cli.DockerCmd(c, "create", "busybox").Stdout()
 	id = strings.TrimSpace(id)
 
-	cli.DockerCmd(c, "create", fmt.Sprintf("--ipc=container:%s", id), "busybox")
+	cli.DockerCmd(c, "create", "--ipc=container:"+id, "busybox")
 }
 
 func (s *DockerCLICreateSuite) TestCreateStopSignal(c *testing.T) {
@@ -239,8 +239,7 @@ func (s *DockerCLICreateSuite) TestCreateStopSignal(c *testing.T) {
 func (s *DockerCLICreateSuite) TestCreateWithWorkdir(c *testing.T) {
 	const name = "foo"
 
-	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
-	dir := prefix + slash + "home" + slash + "foo" + slash + "bar"
+	dir := dPath("/home/foo/bar")
 
 	cli.DockerCmd(c, "create", "--name", name, "-w", dir, "busybox")
 	// Windows does not create the workdir until the container is started
@@ -255,7 +254,7 @@ func (s *DockerCLICreateSuite) TestCreateWithWorkdir(c *testing.T) {
 		}
 	}
 	// TODO: rewrite this test to not use `docker cp` for verifying that the WORKDIR was created
-	cli.DockerCmd(c, "cp", fmt.Sprintf("%s:%s", name, dir), prefix+slash+"tmp")
+	cli.DockerCmd(c, "cp", fmt.Sprintf("%s:%s", name, dir), dPath("/tmp"))
 }
 
 func (s *DockerCLICreateSuite) TestCreateWithInvalidLogOpts(c *testing.T) {

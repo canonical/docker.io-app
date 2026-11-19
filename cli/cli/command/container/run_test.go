@@ -16,8 +16,6 @@ import (
 	"github.com/moby/moby/api/types"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
-	"github.com/moby/moby/client/pkg/progress"
-	"github.com/moby/moby/client/pkg/streamformatter"
 	"github.com/spf13/pflag"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -33,6 +31,11 @@ func TestRunValidateFlags(t *testing.T) {
 			name:        "with conflicting --attach, --detach",
 			args:        []string{"--attach", "stdin", "--detach", "myimage"},
 			expectedErr: "conflicting options: cannot specify both --attach and --detach",
+		},
+		{
+			name:        "with invalid --detach-keys",
+			args:        []string{"--detach-keys", "shift-a", "myimage"},
+			expectedErr: "invalid detach keys (shift-a):",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,7 +127,7 @@ func TestRunAttach(t *testing.T) {
 	}
 
 	// end stream from "container" so that we'll detach
-	conn.Close()
+	assert.NilError(t, conn.Close())
 
 	select {
 	case cmdErr := <-cmdErrC:
@@ -204,7 +207,7 @@ func TestRunAttachTermination(t *testing.T) {
 	}
 
 	assert.NilError(t, syscall.Kill(syscall.Getpid(), syscall.SIGTERM))
-	conn.Close()
+	assert.NilError(t, conn.Close())
 
 	select {
 	case <-killCh:
@@ -240,20 +243,12 @@ func TestRunPullTermination(t *testing.T) {
 				_ = server.Close()
 			})
 			go func() {
-				id := test.RandomID()[:12] // short-ID
-				progressOutput := streamformatter.NewJSONProgressOutput(server, true)
-				for i := 0; i < 100; i++ {
+				for range 100 {
 					select {
 					case <-ctx.Done():
 						assert.NilError(t, server.Close(), "failed to close imageCreateFunc server")
 						return
 					default:
-						assert.NilError(t, progressOutput.WriteProgress(progress.Progress{
-							ID:      id,
-							Message: "Downloading",
-							Current: int64(i),
-							Total:   100,
-						}))
 						time.Sleep(100 * time.Millisecond)
 					}
 				}

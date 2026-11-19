@@ -14,6 +14,7 @@ import (
 
 	intoto "github.com/in-toto/in-toto-golang/in_toto"
 	"github.com/moby/buildkit/cache"
+	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/exporter"
 	"github.com/moby/buildkit/exporter/attestation"
 	"github.com/moby/buildkit/exporter/util/epoch"
@@ -33,10 +34,11 @@ const (
 	// keyPlatformSplit is an exporter option which can be used to split result
 	// in subfolders when multiple platform references are exported.
 	keyPlatformSplit = "platform-split"
+	keyMode          = "mode"
 )
 
 type CreateFSOpts struct {
-	Epoch             *time.Time
+	Epoch             *epoch.Epoch
 	AttestationPrefix string
 	PlatformSplit     *bool
 }
@@ -67,6 +69,10 @@ func (c *CreateFSOpts) Load(opt map[string]string) (map[string]string, error) {
 				return nil, errors.Wrapf(err, "non-bool value for %s: %s", keyPlatformSplit, v)
 			}
 			c.PlatformSplit = &b
+		case keyMode:
+			if _, err := client.ParseLocalExporterMode(v); err != nil {
+				return nil, err
+			}
 		default:
 			rest[k] = v
 		}
@@ -129,9 +135,9 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 			// apply host uid/gid
 			res = idMapFunc(p, st)
 		}
-		if opt.Epoch != nil {
+		if opt.Epoch != nil && opt.Epoch.Value != nil {
 			// apply used-specified epoch time
-			st.ModTime = opt.Epoch.UnixNano()
+			st.ModTime = opt.Epoch.Value.UnixNano()
 		}
 		return res
 	}
@@ -205,8 +211,8 @@ func CreateFS(ctx context.Context, sessionID string, k string, ref cache.Immutab
 				Path:    name,
 				ModTime: defaultTime.UnixNano(),
 			}
-			if opt.Epoch != nil {
-				st.ModTime = opt.Epoch.UnixNano()
+			if opt.Epoch != nil && opt.Epoch.Value != nil {
+				st.ModTime = opt.Epoch.Value.UnixNano()
 			}
 			stmtFS.Add(name, st, dt)
 		}

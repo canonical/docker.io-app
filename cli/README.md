@@ -3,7 +3,6 @@
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/docker/cli)](https://pkg.go.dev/github.com/docker/cli)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/docker/cli/build.yml?branch=master&label=build&logo=github)](https://github.com/docker/cli/actions?query=workflow%3Abuild)
 [![Test Status](https://img.shields.io/github/actions/workflow/status/docker/cli/test.yml?branch=master&label=test&logo=github)](https://github.com/docker/cli/actions?query=workflow%3Atest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/docker/cli)](https://goreportcard.com/report/github.com/docker/cli)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/docker/cli/badge)](https://scorecard.dev/viewer/?uri=github.com/docker/cli)
 [![Codecov](https://img.shields.io/codecov/c/github/docker/cli?logo=codecov)](https://codecov.io/gh/docker/cli)
 
@@ -51,6 +50,18 @@ Run test:
 docker buildx bake test
 ```
 
+Run the unit test:
+
+```
+$ make -f docker.Makefile test-unit
+```
+
+Run the full test suite:
+
+```
+$ make -f docker.Makefile test
+```
+
 List all the available targets:
 
 ```shell
@@ -62,7 +73,7 @@ make help
 Start an interactive development environment:
 
 ```shell
-make -f docker.Makefile shell
+make shell
 ```
 
 ## Legal

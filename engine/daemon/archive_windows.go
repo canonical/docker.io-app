@@ -8,6 +8,7 @@ import (
 
 	"github.com/moby/go-archive"
 	"github.com/moby/go-archive/chrootarchive"
+	"github.com/moby/go-archive/compression"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/v2/daemon/container"
@@ -204,7 +205,7 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 	// TODO(thaJeztah): add check for writable path once windows supports read-only rootFS and (read-only) volumes during copy
 	//
 	// - e5261d6e4a1e96d4c0fa4b4480042046b695eda1 added "FIXME Post-TP4 / TP5"; check whether this would be possible to implement on Windows.
-	// - e5261d6e4a1e96d4c0fa4b4480042046b695eda1 added "or extracting to a mount point inside a volume"; check whether this is is still true, and adjust this check accordingly
+	// - e5261d6e4a1e96d4c0fa4b4480042046b695eda1 added "or extracting to a mount point inside a volume"; check whether this is still true, and adjust this check accordingly
 	//
 	// This comment is left in-place as a reminder :)
 	//
@@ -278,7 +279,7 @@ func (daemon *Daemon) containerCopy(container *container.Container, resource str
 		filter = []string{f}
 	}
 	archv, err := chrootarchive.Tar(basePath, &archive.TarOptions{
-		Compression:  archive.Uncompressed,
+		Compression:  compression.None,
 		IncludeFiles: filter,
 	}, container.BaseFS)
 	if err != nil {

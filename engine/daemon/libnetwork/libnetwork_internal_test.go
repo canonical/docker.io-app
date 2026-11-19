@@ -171,7 +171,7 @@ func printIpamConf(list []*IpamConf) string {
 	for _, i := range list {
 		s = fmt.Sprintf("%s %v,", s, i)
 	}
-	s = fmt.Sprintf("%s}", s)
+	s = s + "}"
 	return s
 }
 
@@ -180,7 +180,7 @@ func printIpamInfo(list []*IpamInfo) string {
 	for _, i := range list {
 		s = fmt.Sprintf("%s\n{\n%s\n}", s, i)
 	}
-	s = fmt.Sprintf("%s\n}", s)
+	s = s + "\n}"
 	return s
 }
 
@@ -249,7 +249,7 @@ func compareIpamConfList(listA, listB []*IpamConf) bool {
 	if len(listA) != len(listB) {
 		return false
 	}
-	for i := 0; i < len(listA); i++ {
+	for i := range listA {
 		a = listA[i]
 		b = listB[i]
 		if a.PreferredPool != b.PreferredPool ||
@@ -266,7 +266,7 @@ func compareIpamInfoList(listA, listB []*IpamInfo) bool {
 	if len(listA) != len(listB) {
 		return false
 	}
-	for i := 0; i < len(listA); i++ {
+	for i := range listA {
 		a = listA[i]
 		b = listB[i]
 		if a.PoolID != b.PoolID || !compareStringMaps(a.Meta, b.Meta) ||

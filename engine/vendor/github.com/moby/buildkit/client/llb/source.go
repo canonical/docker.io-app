@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -94,6 +95,123 @@ func (s *SourceOp) Output() Output {
 
 func (s *SourceOp) Inputs() []Output {
 	return nil
+}
+
+type ImageBlobInfo struct {
+	constraintsWrapper
+	fileinfoWrapper
+	sessionID string
+	storeID   string
+}
+
+type ImageBlobOption interface {
+	SetImageBlobOption(*ImageBlobInfo)
+}
+
+type FileInfoOption interface {
+	HTTPOption
+	ImageBlobOption
+}
+
+func ImageBlob(ref string, opts ...ImageBlobOption) State {
+	bi := &ImageBlobInfo{}
+	for _, o := range opts {
+		o.SetImageBlobOption(bi)
+	}
+	attrs := map[string]string{}
+
+	if bi.Filename != "" {
+		attrs[pb.AttrHTTPFilename] = bi.Filename
+	}
+	if bi.Perm != 0 {
+		attrs[pb.AttrHTTPPerm] = "0" + strconv.FormatInt(int64(bi.Perm), 8)
+	}
+	if bi.UID != 0 {
+		attrs[pb.AttrHTTPUID] = strconv.Itoa(bi.UID)
+	}
+	if bi.GID != 0 {
+		attrs[pb.AttrHTTPGID] = strconv.Itoa(bi.GID)
+	}
+
+	addCap(&bi.Constraints, pb.CapSourceImageBlob)
+
+	var digested reference.Digested
+
+	r, err := reference.ParseNormalizedNamed(ref)
+	if err == nil {
+		if _, tagged := r.(reference.Tagged); tagged {
+			err = errors.Errorf("tagged image reference not allowed for blob reference")
+		} else if ref, ok := r.(reference.Digested); !ok {
+			err = errors.Errorf("checksum required in blob reference")
+		} else {
+			digested = ref
+		}
+	}
+
+	repoName := "invalid"
+	if digested != nil {
+		repoName = digested.String()
+	}
+
+	source := NewSource("docker-image+blob://"+repoName, attrs, bi.Constraints)
+	if err != nil {
+		source.err = err
+	}
+	return NewState(source.Output())
+}
+
+// OCILayoutBlob returns a state that represents a single digest-addressed blob from an OCI layout store.
+func OCILayoutBlob(ref string, opts ...ImageBlobOption) State {
+	bi := &ImageBlobInfo{}
+	for _, o := range opts {
+		o.SetImageBlobOption(bi)
+	}
+	attrs := map[string]string{}
+
+	if bi.Filename != "" {
+		attrs[pb.AttrHTTPFilename] = bi.Filename
+	}
+	if bi.Perm != 0 {
+		attrs[pb.AttrHTTPPerm] = "0" + strconv.FormatInt(int64(bi.Perm), 8)
+	}
+	if bi.UID != 0 {
+		attrs[pb.AttrHTTPUID] = strconv.Itoa(bi.UID)
+	}
+	if bi.GID != 0 {
+		attrs[pb.AttrHTTPGID] = strconv.Itoa(bi.GID)
+	}
+	if bi.sessionID != "" {
+		attrs[pb.AttrOCILayoutSessionID] = bi.sessionID
+	}
+	if bi.storeID != "" {
+		attrs[pb.AttrOCILayoutStoreID] = bi.storeID
+	}
+
+	addCap(&bi.Constraints, pb.CapSourceImageBlob)
+
+	var digested reference.Digested
+
+	r, err := reference.ParseNormalizedNamed(ref)
+	if err == nil {
+		if _, tagged := r.(reference.Tagged); tagged {
+			err = errors.Errorf("tagged image reference not allowed for blob reference")
+		} else if ref, ok := r.(reference.Digested); !ok {
+			err = errors.Errorf("checksum required in blob reference")
+		} else {
+			digested = ref
+		}
+	}
+
+	repoName := "invalid"
+	if digested != nil {
+		repoName = digested.String()
+	}
+
+	source := NewSource("oci-layout+blob://"+repoName, attrs, bi.Constraints)
+	if err != nil {
+		source.err = err
+	}
+	return NewState(source.Output())
 }
 
 // Image returns a state that represents a docker image in a registry.
@@ -197,6 +315,12 @@ func (fn imageOptionFunc) SetImageOption(ii *ImageInfo) {
 	fn(ii)
 }
 
+type imageBlobOptionFunc func(*ImageBlobInfo)
+
+func (fn imageBlobOptionFunc) SetImageBlobOption(ib *ImageBlobInfo) {
+	fn(ib)
+}
+
 var MarkImageInternal = imageOptionFunc(func(ii *ImageInfo) {
 	ii.RecordType = "internal"
 })
@@ -274,6 +398,8 @@ func Git(url, fragment string, opts ...GitOption) State {
 		AuthTokenSecret:  GitAuthTokenKey,
 	}
 	ref, subdir, ok := strings.Cut(fragment, ":")
+	subdir = path.Join("/", subdir)
+	subdir = strings.TrimPrefix(subdir, "/")
 	if ref != "" {
 		GitRef(ref).SetGitOption(gi)
 	}
@@ -352,6 +478,31 @@ func Git(url, fragment string, opts ...GitOption) State {
 		addCap(&gi.Constraints, pb.CapSourceGitSkipSubmodules)
 	}
 
+	if gi.MTime != "" {
+		attrs[pb.AttrGitMTime] = gi.MTime
+		addCap(&gi.Constraints, pb.CapSourceGitMTime)
+	}
+
+	if gi.FetchByCommit {
+		attrs[pb.AttrGitFetchByCommit] = "true"
+		addCap(&gi.Constraints, pb.CapSourceGitFetchByCommit)
+	}
+	if gi.Bundle != "" {
+		attrs[pb.AttrGitBundle] = gi.Bundle
+		addCap(&gi.Constraints, pb.CapSourceGitBundle)
+	}
+	if gi.BundleOCISessionID != "" {
+		attrs[pb.AttrOCILayoutSessionID] = gi.BundleOCISessionID
+	}
+	if gi.BundleOCIStoreID != "" {
+		attrs[pb.AttrOCILayoutStoreID] = gi.BundleOCIStoreID
+	}
+
+	if gi.CheckoutBundle {
+		attrs[pb.AttrGitCheckoutBundle] = "true"
+		addCap(&gi.Constraints, pb.CapSourceGitCheckoutBundle)
+	}
+
 	addCap(&gi.Constraints, pb.CapSourceGit)
 
 	source := NewSource("git://"+id, attrs, gi.Constraints)
@@ -369,16 +520,22 @@ func (fn gitOptionFunc) SetGitOption(gi *GitInfo) {
 
 type GitInfo struct {
 	constraintsWrapper
-	KeepGitDir       bool
-	AuthTokenSecret  string
-	AuthHeaderSecret string
-	addAuthCap       bool
-	KnownSSHHosts    string
-	MountSSHSock     string
-	Checksum         string
-	Ref              string
-	SubDir           string
-	SkipSubmodules   bool
+	KeepGitDir         bool
+	AuthTokenSecret    string
+	AuthHeaderSecret   string
+	addAuthCap         bool
+	KnownSSHHosts      string
+	MountSSHSock       string
+	Checksum           string
+	Ref                string
+	SubDir             string
+	SkipSubmodules     bool
+	MTime              string
+	Bundle             string
+	BundleOCISessionID string
+	BundleOCIStoreID   string
+	CheckoutBundle     bool
+	FetchByCommit      bool
 }
 
 func GitRef(v string) GitOption {
@@ -396,6 +553,20 @@ func GitSubDir(v string) GitOption {
 func GitSkipSubmodules() GitOption {
 	return gitOptionFunc(func(gi *GitInfo) {
 		gi.SkipSubmodules = true
+	})
+}
+
+// GitMTimeCommit sets file modification times to the commit timestamp
+// of the resolved commit, rather than the checkout time.
+func GitMTimeCommit() GitOption {
+	return GitMTime("commit")
+}
+
+// GitMTime sets the file modification time policy for git sources.
+// Valid values are "checkout" (default) and "commit".
+func GitMTime(v string) GitOption {
+	return gitOptionFunc(func(gi *GitInfo) {
+		gi.MTime = v
 	})
 }
 
@@ -428,6 +599,99 @@ func MountSSHSock(sshID string) GitOption {
 func GitChecksum(v string) GitOption {
 	return gitOptionFunc(func(gi *GitInfo) {
 		gi.Checksum = v
+	})
+}
+
+// GitFetchByCommit makes the git source trust the provided checksum as the
+// commit to fetch, without resolving the ref against the remote. The ref, if
+// set, is applied locally after the commit is fetched so that cache keys
+// still depend on it. This is useful when the remote ref may have moved
+// since the original resolution.
+//
+// Unqualified ref names are canonicalized to "refs/heads/<name>" to match
+// the normal path's cache keys for branches. Tags must be passed fully
+// qualified ("refs/tags/<name>").
+func GitFetchByCommit() GitOption {
+	return gitOptionFunc(func(gi *GitInfo) {
+		gi.FetchByCommit = true
+	})
+}
+
+// GitBundleInfo carries scheme-specific configuration for [GitBundleURL].
+// It is populated by [GitBundleOption] values and consumed by GitBundleURL.
+type GitBundleInfo struct {
+	// OCISessionID pins the OCI-layout bundle fetch to a specific client
+	// session. Only meaningful when the locator uses the
+	// "oci-layout+blob://" scheme.
+	OCISessionID string
+	// OCIStoreID overrides the OCI-layout store name derived from the
+	// bundle locator body. Only meaningful when the locator uses the
+	// "oci-layout+blob://" scheme.
+	OCIStoreID string
+}
+
+// GitBundleOption configures bundle-specific behavior for [GitBundleURL].
+type GitBundleOption interface {
+	SetGitBundleOption(*GitBundleInfo)
+}
+
+type gitBundleOptionFunc func(*GitBundleInfo)
+
+func (fn gitBundleOptionFunc) SetGitBundleOption(bi *GitBundleInfo) {
+	fn(bi)
+}
+
+// GitBundleURL configures the git source to import the commit history from a
+// pre-built git bundle instead of fetching from the upstream Git remote. The
+// locator must use one of the following schemes:
+//
+//	docker-image+blob://<registry-ref>@sha256:<digest>
+//	oci-layout+blob://<ref>@sha256:<digest>
+//
+// [GitChecksum] is required when GitBundleURL is used and the commit it
+// identifies must be reachable from a ref inside the bundle (i.e. the bundle
+// must contain that commit; BuildKit validates this after import). Auth and
+// SSH options are ignored in bundle mode. Submodules, if present, still fetch
+// from their own remotes. See [GitCheckoutBundle] for the checkout side; it
+// is mutually exclusive with [KeepGitDir] and [GitSubDir].
+//
+// Scheme-specific behavior can be tuned via [GitBundleOption] values, e.g.
+// [GitBundleOCIStore] for the "oci-layout+blob://" scheme.
+func GitBundleURL(locator string, opts ...GitBundleOption) GitOption {
+	bi := &GitBundleInfo{}
+	for _, o := range opts {
+		o.SetGitBundleOption(bi)
+	}
+	return gitOptionFunc(func(gi *GitInfo) {
+		gi.Bundle = locator
+		gi.BundleOCISessionID = bi.OCISessionID
+		gi.BundleOCIStoreID = bi.OCIStoreID
+	})
+}
+
+// GitBundleOCIStore configures the OCI-layout session and store id used to
+// resolve a bundle locator with the "oci-layout+blob://" scheme. When unset,
+// the locator body (the part before "@digest") is used as the store id and no
+// session is pinned. This mirrors [ImageBlobOCIStore] for regular OCI-layout
+// blobs.
+//
+// Only meaningful when passed to [GitBundleURL] together with a locator that
+// uses the "oci-layout+blob://" scheme.
+func GitBundleOCIStore(sessionID, storeID string) GitBundleOption {
+	return gitBundleOptionFunc(func(bi *GitBundleInfo) {
+		bi.OCISessionID = sessionID
+		bi.OCIStoreID = storeID
+	})
+}
+
+// GitCheckoutBundle produces a single-file git bundle at the checkout mount
+// root (filename "bundle") containing the resolved commit, instead of a
+// worktree. Mutually exclusive with [KeepGitDir] and [GitSubDir]. Submodules
+// are not included in the bundle. Pair with [GitBundleURL] to re-import the
+// bundle back into a later build.
+func GitCheckoutBundle() GitOption {
+	return gitOptionFunc(func(gi *GitInfo) {
+		gi.CheckoutBundle = true
 	})
 }
 
@@ -623,6 +887,14 @@ func OCIStore(sessionID string, storeID string) OCILayoutOption {
 	})
 }
 
+// ImageBlobOCIStore returns an [ImageBlobOption] that configures the OCI layout session/store used by [OCILayoutBlob].
+func ImageBlobOCIStore(sessionID string, storeID string) ImageBlobOption {
+	return imageBlobOptionFunc(func(ib *ImageBlobInfo) {
+		ib.sessionID = sessionID
+		ib.storeID = storeID
+	})
+}
+
 func OCILayerLimit(limit int) OCILayoutOption {
 	return ociLayoutOptionFunc(func(oi *OCILayoutInfo) {
 		oi.layerLimit = &limit
@@ -705,21 +977,58 @@ func HTTP(url string, opts ...HTTPOption) State {
 		hi.Header.setAttrs(attrs)
 		addCap(&hi.Constraints, pb.CapSourceHTTPHeader)
 	}
+	if hi.Signature != nil {
+		if len(hi.Signature.PubKey) > 0 {
+			attrs[pb.AttrHTTPSignatureVerifyPubKey] = string(hi.Signature.PubKey)
+		}
+		if len(hi.Signature.Signature) > 0 {
+			attrs[pb.AttrHTTPSignatureVerify] = string(hi.Signature.Signature)
+		}
+		addCap(&hi.Constraints, pb.CapSourceHTTPSignatureVerify)
+	}
 
 	addCap(&hi.Constraints, pb.CapSourceHTTP)
 	source := NewSource(url, attrs, hi.Constraints)
 	return NewState(source.Output())
 }
 
+type fileInfo struct {
+	Filename string
+	Perm     int
+	UID      int
+	GID      int
+}
+
+type fileinfoWrapper struct {
+	fileInfo
+}
+
+type fileInfoOptFunc func(f *fileInfo)
+
+func (fn fileInfoOptFunc) SetHTTPOption(hi *HTTPInfo) {
+	fn(&hi.fileInfo)
+}
+
+func (fn fileInfoOptFunc) SetImageBlobOption(ib *ImageBlobInfo) {
+	fn(&ib.fileInfo)
+}
+
+// HTTPSignatureInfo configures detached-signature verification for HTTP
+// sources. The current implementation uses inline armored signatures.
+type HTTPSignatureInfo struct {
+	PubKey []byte
+
+	// Signature is an inline detached armored OpenPGP signature.
+	Signature []byte
+}
+
 type HTTPInfo struct {
 	constraintsWrapper
+	fileinfoWrapper
 	Checksum         digest.Digest
-	Filename         string
-	Perm             int
-	UID              int
-	GID              int
 	AuthHeaderSecret string
 	Header           *HTTPHeader
+	Signature        *HTTPSignatureInfo
 }
 
 type HTTPOption interface {
@@ -738,22 +1047,33 @@ func Checksum(dgst digest.Digest) HTTPOption {
 	})
 }
 
-func Chmod(perm os.FileMode) HTTPOption {
-	return httpOptionFunc(func(hi *HTTPInfo) {
-		hi.Perm = int(perm) & 0777
+func Chmod(perm os.FileMode) FileInfoOption {
+	return fileInfoOptFunc(func(fi *fileInfo) {
+		fi.Perm = int(perm) & 0777
 	})
 }
 
-func Filename(name string) HTTPOption {
-	return httpOptionFunc(func(hi *HTTPInfo) {
-		hi.Filename = name
+func Filename(name string) FileInfoOption {
+	return fileInfoOptFunc(func(fi *fileInfo) {
+		fi.Filename = name
 	})
 }
 
-func Chown(uid, gid int) HTTPOption {
+func Chown(uid, gid int) FileInfoOption {
+	return fileInfoOptFunc(func(fi *fileInfo) {
+		fi.UID = uid
+		fi.GID = gid
+	})
+}
+
+// VerifyPGPSignature returns an [HTTPOption] for detached OpenPGP signature
+// verification of the downloaded HTTP payload.
+func VerifyPGPSignature(info HTTPSignatureInfo) HTTPOption {
 	return httpOptionFunc(func(hi *HTTPInfo) {
-		hi.UID = uid
-		hi.GID = gid
+		hi.Signature = &HTTPSignatureInfo{
+			PubKey:    slices.Clone(info.PubKey),
+			Signature: slices.Clone(info.Signature),
+		}
 	})
 }
 

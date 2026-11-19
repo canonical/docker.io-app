@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -97,6 +99,10 @@ type Opt struct {
 	UseSnapshotter      bool
 	Snapshotter         string
 	ContainerdAddress   string
+	// ContainerdDialer, when set (embedded mode), connects to the in-process
+	// containerd over an in-memory pipe so BuildKit avoids socket syscalls.
+	// ContainerdAddress is still the gRPC target.
+	ContainerdDialer    func(ctx context.Context, address string) (net.Conn, error)
 	ContainerdNamespace string
 	HyperVIsolation     bool
 	Callbacks           exporter.BuildkitCallbacks
@@ -213,9 +219,7 @@ func (b *Builder) Prune(ctx context.Context, opts buildbackend.CachePruneOptions
 	validFilters["until"] = true
 	validFilters["label"] = true  // TODO(tiborvass): handle label
 	validFilters["label!"] = true // TODO(tiborvass): handle label!
-	for k, v := range cacheFields {
-		validFilters[k] = v
-	}
+	maps.Copy(validFilters, cacheFields)
 	if err := opts.Filters.Validate(validFilters); err != nil {
 		return 0, nil, err
 	}
@@ -675,20 +679,13 @@ func toBuildkitPruneInfo(opts buildbackend.CachePruneOptions) (client.PruneInfo,
 	case 0:
 		// nothing to do
 	case 1:
-		ts, err := timestamp.GetTimestamp(untilValues[0], time.Now())
+		parsed, err := timestamp.Parse(untilValues[0], time.Now())
 		if err != nil {
 			return client.PruneInfo{}, errInvalidFilterValue{
 				errors.Wrapf(err, "%q filter expects a duration (e.g., '24h') or a timestamp", filterKey),
 			}
 		}
-		seconds, nanoseconds, err := timestamp.ParseTimestamps(ts, 0)
-		if err != nil {
-			return client.PruneInfo{}, errInvalidFilterValue{
-				errors.Wrapf(err, "failed to parse timestamp %q", ts),
-			}
-		}
-
-		until = time.Since(time.Unix(seconds, nanoseconds))
+		until = time.Since(parsed)
 	default:
 		return client.PruneInfo{}, errMultipleFilterValues{}
 	}

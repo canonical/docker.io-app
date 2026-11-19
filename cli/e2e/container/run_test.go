@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/rand"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -160,6 +161,36 @@ func TestMountSubvolume(t *testing.T) {
 	}
 }
 
+func TestMountBindCreateMountpoint(t *testing.T) {
+	environment.SkipIfDaemonNotLinux(t)
+
+	for _, tc := range []struct {
+		name          string
+		value         string
+		expectSuccess bool
+	}{
+		{name: "flag only", value: "bind-create-src", expectSuccess: true},
+		{name: "true", value: "bind-create-src=true", expectSuccess: true},
+		{name: "1", value: "bind-create-src=1", expectSuccess: true},
+		{name: "false", value: "bind-create-src=false", expectSuccess: false},
+		{name: "0", value: "bind-create-src=0", expectSuccess: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srcPath := filepath.Join("/tmp", t.Name(), "does", "not", "exist")
+			result := icmd.RunCommand("docker", "run", "--rm",
+				"--mount", "type=bind,src="+srcPath+",dst=/mnt,"+tc.value,
+				fixtures.AlpineImage, "cat", "/proc/mounts")
+			if tc.expectSuccess {
+				result.Assert(t, icmd.Success)
+				assert.Check(t, is.Contains(result.Stdout(), "/mnt"))
+			} else {
+				result.Assert(t, icmd.Expected{ExitCode: 125})
+				assert.Check(t, is.Contains(result.Stderr(), srcPath))
+			}
+		})
+	}
+}
+
 func TestProcessTermination(t *testing.T) {
 	var out bytes.Buffer
 	cmd := icmd.Command("docker", "run", "--rm", "-i", fixtures.AlpineImage,
@@ -178,7 +209,11 @@ func TestProcessTermination(t *testing.T) {
 
 	assert.NilError(t, result.Cmd.Process.Signal(syscall.SIGTERM))
 
-	icmd.WaitOnCmd(time.Second*10, result).Assert(t, icmd.Expected{
+	// Use a generous timeout (20s) because when run through SSH connhelper,
+	// the Docker engine may take longer to close the attach stream after
+	// the container exits. This is a known timing difference across engine
+	// versions (e.g. engine 25 over SSH connhelper).
+	icmd.WaitOnCmd(time.Second*20, result).Assert(t, icmd.Expected{
 		ExitCode: 0,
 	})
 }

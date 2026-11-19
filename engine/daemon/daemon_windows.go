@@ -167,7 +167,7 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, isHyp
 
 // verifyPlatformContainerSettings performs platform-specific validation of the
 // hostconfig and config structures.
-func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hostConfig *containertypes.HostConfig, update bool) (warnings []string, _ error) {
+func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) (warnings []string, _ error) {
 	if hostConfig == nil {
 		return nil, nil
 	}
@@ -569,4 +569,8 @@ func setupResolvConf(config *config.Config) {}
 
 func getSysInfo(*config.Config) *sysinfo.SysInfo {
 	return sysinfo.New()
+}
+
+func (daemon *Daemon) runInNetNS(f func() error) error {
+	return f()
 }

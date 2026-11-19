@@ -49,7 +49,7 @@ func (nft *Nftabler) NewNetwork(ctx context.Context, nc firewaller.NetworkConfig
 	return n, nil
 }
 
-func (n *network) configure(ctx context.Context, table nftables.Table, conf firewaller.NetworkConfigFam) (*nftables.Modifier, error) {
+func (n *network) configure(ctx context.Context, table *nftables.Table, conf firewaller.NetworkConfigFam) (*nftables.Modifier, error) {
 	if !conf.Prefix.IsValid() {
 		return nil, nil
 	}
@@ -67,31 +67,31 @@ func (n *network) configure(ctx context.Context, table nftables.Table, conf fire
 	tm.Create(nftables.Chain{Name: fwdInChain})
 	tm.Create(nftables.Chain{Name: fwdOutChain})
 
-	tm.Create(nftables.VMapElement{
-		VmapName: filtFwdInVMap,
-		Key:      n.config.IfName,
-		Verdict:  "jump " + fwdInChain,
+	tm.Create(nftables.MapElement{
+		MapName: filtFwdInVMap,
+		Key:     n.config.IfName,
+		Value:   "jump " + fwdInChain,
 	})
-	tm.Create(nftables.VMapElement{
-		VmapName: filtFwdOutVMap,
-		Key:      n.config.IfName,
-		Verdict:  "jump " + fwdOutChain,
+	tm.Create(nftables.MapElement{
+		MapName: filtFwdOutVMap,
+		Key:     n.config.IfName,
+		Value:   "jump " + fwdOutChain,
 	})
 
 	// NAT chain
 
 	tm.Create(nftables.Chain{Name: natPostRtInChain})
-	tm.Create(nftables.VMapElement{
-		VmapName: natPostroutingInVMap,
-		Key:      n.config.IfName,
-		Verdict:  "jump " + natPostRtInChain,
+	tm.Create(nftables.MapElement{
+		MapName: natPostroutingInVMap,
+		Key:     n.config.IfName,
+		Value:   "jump " + natPostRtInChain,
 	})
 
 	tm.Create(nftables.Chain{Name: chainNatPostRtOut(n.config.IfName)})
-	tm.Create(nftables.VMapElement{
-		VmapName: natPostroutingOutVMap,
-		Key:      n.config.IfName,
-		Verdict:  "jump " + chainNatPostRtOut(n.config.IfName),
+	tm.Create(nftables.MapElement{
+		MapName: natPostroutingOutVMap,
+		Key:     n.config.IfName,
+		Value:   "jump " + chainNatPostRtOut(n.config.IfName),
 	})
 
 	// Conntrack
@@ -233,7 +233,7 @@ func (n *network) ReapplyNetworkLevelRules(ctx context.Context) error {
 }
 
 func (n *network) DelNetworkLevelRules(ctx context.Context) error {
-	remove := func(t nftables.Table, remover *nftables.Modifier) {
+	remove := func(t *nftables.Table, remover *nftables.Modifier) {
 		if remover != nil {
 			ctx := log.WithLogger(ctx, log.G(ctx).WithFields(log.Fields{"bridge": n.config.IfName}))
 			if err := t.Apply(ctx, *remover); err != nil {

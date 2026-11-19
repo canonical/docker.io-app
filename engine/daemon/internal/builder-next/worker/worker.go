@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	nethttp "net/http"
+	"slices"
 	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	c8dimages "github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/gc"
 	"github.com/containerd/containerd/v2/pkg/rootfs"
 	cerrdefs "github.com/containerd/errdefs"
@@ -19,6 +21,7 @@ import (
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/executor"
+	resourcestypes "github.com/moby/buildkit/executor/resources/types"
 	"github.com/moby/buildkit/exporter"
 	localexporter "github.com/moby/buildkit/exporter/local"
 	tarexporter "github.com/moby/buildkit/exporter/tar"
@@ -28,6 +31,7 @@ import (
 	containerdsnapshot "github.com/moby/buildkit/snapshot/containerd"
 	"github.com/moby/buildkit/solver"
 	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
+	"github.com/moby/buildkit/solver/llbsolver/linuxresources"
 	"github.com/moby/buildkit/solver/llbsolver/mounts"
 	"github.com/moby/buildkit/solver/llbsolver/ops"
 	"github.com/moby/buildkit/solver/pb"
@@ -39,14 +43,16 @@ import (
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/contentutil"
 	"github.com/moby/buildkit/util/leaseutil"
+	"github.com/moby/buildkit/util/network"
 	"github.com/moby/buildkit/util/progress"
 	"github.com/moby/buildkit/version"
+	bkworker "github.com/moby/buildkit/worker"
 	imageadapter "github.com/moby/moby/v2/daemon/internal/builder-next/adapters/containerimage"
 	mobyexporter "github.com/moby/moby/v2/daemon/internal/builder-next/exporter"
-	"github.com/moby/moby/v2/daemon/internal/builder-next/worker/mod"
 	distmetadata "github.com/moby/moby/v2/daemon/internal/distribution/metadata"
 	"github.com/moby/moby/v2/daemon/internal/distribution/xfer"
 	"github.com/moby/moby/v2/daemon/internal/layer"
+	"github.com/moby/moby/v2/daemon/internal/mod"
 	pkgprogress "github.com/moby/moby/v2/daemon/internal/progress"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -83,11 +89,13 @@ type Opt struct {
 
 	DownloadManager   *xfer.LayerDownloadManager
 	V2MetadataService distmetadata.V2MetadataService
+	RegistryHosts     docker.RegistryHosts
 	Transport         nethttp.RoundTripper
 	Exporter          exporter.Exporter
 	Layers            LayerAccess
 	Platforms         []ocispec.Platform
 	CDIManager        *cdidevices.Manager
+	ProxyProvider     network.ProxyProvider
 }
 
 // Worker is a local worker instance with dedicated snapshotter, cache, and so on.
@@ -115,6 +123,7 @@ func NewWorker(opt Opt) (*Worker, error) {
 
 	gs, err := git.NewSource(git.Opt{
 		CacheAccessor: cm,
+		RegistryHosts: opt.RegistryHosts,
 	})
 	if err == nil {
 		sm.Register(gs)
@@ -218,6 +227,9 @@ func (w *Worker) GarbageCollect(ctx context.Context) error {
 
 // Close closes the worker and releases all resources
 func (w *Worker) Close() error {
+	if w.Opt.ProxyProvider != nil {
+		return w.Opt.ProxyProvider.Close()
+	}
 	return nil
 }
 
@@ -246,6 +258,10 @@ func (w *Worker) LoadRef(ctx context.Context, id string, hidden bool) (cache.Imm
 	return w.CacheManager().Get(ctx, id, nil, opts...)
 }
 
+func (w *Worker) ParseSource(op *pb.SourceOp, platform *pb.Platform) (source.Identifier, error) {
+	return w.SourceManager.Identifier(&pb.Op_Source{Source: op}, platform)
+}
+
 func (w *Worker) ResolveSourceMetadata(ctx context.Context, op *pb.SourceOp, opt sourceresolver.Opt, sm *session.Manager, jobCtx solver.JobContext) (*sourceresolver.MetaResponse, error) {
 	if opt.SourcePolicies != nil {
 		return nil, errors.New("source policies can not be set for worker")
@@ -267,7 +283,7 @@ func (w *Worker) ResolveSourceMetadata(ctx context.Context, op *pb.SourceOp, opt
 		}
 	}
 
-	id, err := w.SourceManager.Identifier(&pb.Op_Source{Source: op}, platform)
+	id, err := w.ParseSource(op, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -323,16 +339,31 @@ func (w *Worker) ResolveSourceMetadata(ctx context.Context, op *pb.SourceOp, opt
 		if w.HTTPSource == nil {
 			return nil, errors.New("http source is not supported")
 		}
-		md, err := w.HTTPSource.ResolveMetadata(ctx, idt, sm, jobCtx)
+		mdOpt := http.MetadataOpts{}
+		if opt.HTTPOpt != nil && opt.HTTPOpt.ChecksumReq != nil {
+			mdOpt.ChecksumReq = &http.MetadataChecksumRequest{
+				Algo:   http.MetadataChecksumAlgo(opt.HTTPOpt.ChecksumReq.Algo),
+				Suffix: slices.Clone(opt.HTTPOpt.ChecksumReq.Suffix),
+			}
+		}
+		md, err := w.HTTPSource.ResolveMetadata(ctx, idt, sm, jobCtx, mdOpt)
 		if err != nil {
 			return nil, err
+		}
+		var checksumResponse *sourceresolver.ResolveHTTPChecksumResponse
+		if md.ChecksumResponse != nil {
+			checksumResponse = &sourceresolver.ResolveHTTPChecksumResponse{
+				Digest: md.ChecksumResponse.Digest,
+				Suffix: slices.Clone(md.ChecksumResponse.Suffix),
+			}
 		}
 		return &sourceresolver.MetaResponse{
 			Op: op,
 			HTTP: &sourceresolver.ResolveHTTPResponse{
-				Digest:       md.Digest,
-				Filename:     md.Filename,
-				LastModified: md.LastModified,
+				Digest:           md.Digest,
+				Filename:         md.Filename,
+				LastModified:     md.LastModified,
+				ChecksumResponse: checksumResponse,
 			},
 		}, nil
 	}
@@ -342,8 +373,43 @@ func (w *Worker) ResolveSourceMetadata(ctx context.Context, op *pb.SourceOp, opt
 	}, nil
 }
 
+type proxyPolicyExecutor struct {
+	executor.Executor
+	getProxyPolicy func() (network.ProxyPolicy, error)
+}
+
+func (e *proxyPolicyExecutor) Run(ctx context.Context, id string, rootfs executor.Mount, mounts []executor.Mount, process executor.ProcessInfo, started chan<- struct{}) (resourcestypes.Recorder, error) {
+	if process.Meta.Proxy != nil {
+		policy, err := e.proxyPolicy()
+		if err != nil {
+			return nil, err
+		}
+		process.Meta.Proxy.Policy = policy
+	}
+	return e.Executor.Run(ctx, id, rootfs, mounts, process, started)
+}
+
+func (e *proxyPolicyExecutor) Exec(ctx context.Context, id string, process executor.ProcessInfo) error {
+	if process.Meta.Proxy != nil {
+		policy, err := e.proxyPolicy()
+		if err != nil {
+			return err
+		}
+		process.Meta.Proxy.Policy = policy
+	}
+	return e.Executor.Exec(ctx, id, process)
+}
+
+func (e *proxyPolicyExecutor) proxyPolicy() (network.ProxyPolicy, error) {
+	policy, err := e.getProxyPolicy()
+	if err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
 // ResolveOp converts a LLB vertex into a LLB operation
-func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *session.Manager) (solver.Op, error) {
+func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *session.Manager, proxyOpt bkworker.ProxyOpt) (solver.Op, error) {
 	if baseOp, ok := v.Sys().(*pb.Op); ok {
 		// TODO do we need to pass a value here? Where should it come from? https://github.com/moby/buildkit/commit/b3cf7c43cfefdfd7a945002c0e76b54e346ab6cf
 		var parallelism *semaphore.Weighted
@@ -351,7 +417,16 @@ func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *se
 		case *pb.Op_Source:
 			return ops.NewSourceOp(v, op, baseOp.Platform, w.SourceManager, parallelism, sm, w)
 		case *pb.Op_Exec:
-			return ops.NewExecOp(v, op, baseOp.Platform, w.CacheManager(), parallelism, sm, w.Executor(), w)
+			var linuxResources *pb.LinuxResources
+			if m, ok := v.Options().Metadata.(*linuxresources.Metadata); ok && m != nil {
+				linuxResources = m.LinuxResources
+			}
+			exec := w.Executor()
+			proxyNetwork := proxyOpt.Network && op.Exec.Network != pb.NetMode_NONE
+			if proxyNetwork && proxyOpt.Policy != nil {
+				exec = &proxyPolicyExecutor{Executor: exec, getProxyPolicy: proxyOpt.Policy}
+			}
+			return ops.NewExecOp(v, op, baseOp.Platform, w.CacheManager(), parallelism, sm, exec, w, linuxResources, proxyNetwork)
 		case *pb.Op_File:
 			return ops.NewFileOp(v, op, w.CacheManager(), parallelism, w)
 		case *pb.Op_Build:
@@ -360,6 +435,8 @@ func (w *Worker) ResolveOp(v solver.Vertex, s frontend.FrontendLLBBridge, sm *se
 			return ops.NewMergeOp(v, op, w)
 		case *pb.Op_Diff:
 			return ops.NewDiffOp(v, op, w)
+		case *pb.Op_Passthrough:
+			return ops.NewPassthroughOp(v, op)
 		}
 	}
 	return nil, errors.Errorf("could not resolve %v", v)
@@ -587,7 +664,7 @@ func (ld *layerDescriptor) DiffID() (layer.DiffID, error) {
 }
 
 func (ld *layerDescriptor) Download(ctx context.Context, progressOutput pkgprogress.Output) (io.ReadCloser, int64, error) {
-	done := oneOffProgress(ld.pctx, fmt.Sprintf("pulling %s", ld.desc.Digest))
+	done := progress.OneOff(ld.pctx, fmt.Sprintf("pulling %s", ld.desc.Digest))
 
 	// TODO should this write output to progressOutput? Or use something similar to loggerFromContext()? see https://github.com/moby/buildkit/commit/aa29e7729464f3c2a773e27795e584023c751cb8
 	discardLogs := func(_ []byte) {}
@@ -635,23 +712,6 @@ func getLayers(ctx context.Context, descs []ocispec.Descriptor) ([]rootfs.Layer,
 		}
 	}
 	return layers, nil
-}
-
-func oneOffProgress(ctx context.Context, id string) func(err error) error {
-	pw, _, _ := progress.NewFromContext(ctx)
-	s := time.Now()
-	st := progress.Status{
-		Started: &s,
-	}
-	_ = pw.Write(id, st)
-	return func(err error) error {
-		// TODO: set error on status
-		c := time.Now()
-		st.Completed = &c
-		_ = pw.Write(id, st)
-		_ = pw.Close()
-		return err
-	}
 }
 
 type emptyProvider struct{}

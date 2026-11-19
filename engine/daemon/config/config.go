@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -43,6 +44,8 @@ const (
 	DefaultNetworkMtu = 1500
 	// DisableNetworkBridge is the default value of the option to disable network bridge
 	DisableNetworkBridge = "none"
+	// DefaultLogDriver is the default log-driver.
+	DefaultLogDriver = "json-file"
 	// DefaultShutdownTimeout is the default shutdown timeout (in seconds) for
 	// the daemon for containers to stop when it is shutting down.
 	DefaultShutdownTimeout = 15
@@ -58,12 +61,12 @@ const (
 	// MaxAPIVersion is the highest REST API version supported by the daemon.
 	//
 	// This version may be lower than the version of the api library module used.
-	MaxAPIVersion = "1.52"
+	MaxAPIVersion = "1.55"
 	// defaultMinAPIVersion is the minimum API version supported by the API.
 	// This version can be overridden through the "DOCKER_MIN_API_VERSION"
 	// environment variable. The minimum allowed version is determined
 	// by [MinAPIVersion].
-	defaultMinAPIVersion = "1.44"
+	defaultMinAPIVersion = "1.40"
 	// MinAPIVersion is the minimum API version supported by the daemon.
 	MinAPIVersion = "1.24"
 	// SeccompProfileDefault is the built-in default seccomp profile.
@@ -88,6 +91,7 @@ var flatOptions = map[string]bool{
 	"default-ulimits":      true,
 	"features":             true,
 	"builder":              true,
+	"nri-opts":             true,
 }
 
 // skipValidateOptions contains configuration keys
@@ -114,6 +118,10 @@ var skipValidateOptions = map[string]bool{
 var skipDuplicates = map[string]bool{
 	"runtimes": true,
 }
+
+// errEmbeddedContainerdWithCRI is returned when both the "embedded-containerd"
+// feature and CRI support are enabled.
+var errEmbeddedContainerdWithCRI = errors.New(`conflicting options: cannot use the "embedded-containerd" feature and CRI support (--cri-containerd) at the same time`)
 
 // migratedNamedConfig describes legacy configuration file keys that have been migrated
 // from simple entries equivalent to command line flags, to a named option.
@@ -151,7 +159,7 @@ type commonBridgeConfig struct {
 // NetworkConfig stores the daemon-wide networking configurations
 type NetworkConfig struct {
 	// Default address pools for docker networks
-	DefaultAddressPools opts.PoolsOpt `json:"default-address-pools,omitempty"`
+	DefaultAddressPools opts.PoolsOpt `json:"default-address-pools"`
 	// NetworkControlPlaneMTU allows to specify the control plane MTU, this will allow to optimize the network use in some components
 	NetworkControlPlaneMTU int `json:"network-control-plane-mtu,omitempty"`
 	// Default options for newly created networks
@@ -178,6 +186,13 @@ type DNSConfig struct {
 	DNSSearch      []string     `json:"dns-search,omitempty"`
 	HostGatewayIP  net.IP       `json:"host-gateway-ip,omitempty"` // Deprecated: this single-IP is migrated to HostGatewayIPs
 	HostGatewayIPs []netip.Addr `json:"host-gateway-ips,omitempty"`
+}
+
+// ContainerDefaults defines daemon defaults for containers.
+type ContainerDefaults struct {
+	// DefaultStopTimeout is the timeout, in seconds, used for containers that
+	// do not have a container-specific timeout set.
+	DefaultStopTimeout int `json:"default-stop-timeout,omitempty"`
 }
 
 // CommonConfig defines the configuration of a docker daemon which is
@@ -207,11 +222,11 @@ type CommonConfig struct {
 	LiveRestoreEnabled bool `json:"live-restore,omitempty"`
 
 	// MaxConcurrentDownloads is the maximum number of downloads that
-	// may take place at a time for each pull.
+	// may take place at a time across all pulls.
 	MaxConcurrentDownloads int `json:"max-concurrent-downloads,omitempty"`
 
 	// MaxConcurrentUploads is the maximum number of uploads that
-	// may take place at a time for each push.
+	// may take place at a time across all pushes.
 	MaxConcurrentUploads int `json:"max-concurrent-uploads,omitempty"`
 
 	// MaxDownloadAttempts is the maximum number of attempts that
@@ -250,6 +265,7 @@ type CommonConfig struct {
 	DaemonLogConfig         // DaemonLogConfig holds options for configuring the daemon's logging.
 	TLSOptions              // TLSOptions defines TLS configuration for the API server.
 	DNSConfig               // DNSConfig defines default DNS options for containers.
+	ContainerDefaults       // ContainerDefaults defines daemon defaults for containers.
 	LogConfig               // LogConfig defines default log configuration for containers.
 	BridgeConfig            // BridgeConfig holds bridge network specific configuration.
 	NetworkConfig           // NetworkConfig stores the daemon-wide networking configurations.
@@ -274,7 +290,7 @@ type CommonConfig struct {
 	// If a certain feature doesn't appear in this list then it's unset (i.e. neither true nor false).
 	Features map[string]bool `json:"features,omitempty"`
 
-	Builder BuilderConfig `json:"builder,omitempty"`
+	Builder BuilderConfig `json:"builder"`
 
 	ContainerdNamespace       string `json:"containerd-namespace,omitempty"`
 	ContainerdPluginNamespace string `json:"containerd-plugin-namespace,omitempty"`
@@ -283,6 +299,9 @@ type CommonConfig struct {
 
 	// CDISpecDirs is a list of directories in which CDI specifications can be found.
 	CDISpecDirs []string `json:"cdi-spec-dirs,omitempty"`
+
+	// NRIOpts defines configuration for NRI (Node Resource Interface).
+	NRIOpts opts.NRIOpts `json:"nri-opts"`
 
 	// The minimum API version provided by the daemon. Defaults to [defaultMinAPIVersion].
 	//
@@ -330,7 +349,11 @@ func New() (*Config, error) {
 	cfg := &Config{
 		CommonConfig: CommonConfig{
 			ShutdownTimeout: DefaultShutdownTimeout,
+			ContainerDefaults: ContainerDefaults{
+				DefaultStopTimeout: defaultStopTimeout,
+			},
 			LogConfig: LogConfig{
+				Type:   DefaultLogDriver,
 				Config: make(map[string]string),
 			},
 			DaemonLogConfig: DaemonLogConfig{
@@ -464,8 +487,18 @@ func MergeDaemonConfigurations(flagsConfig *Config, flags *pflag.FlagSet, config
 	}
 
 	// merge flags configuration on top of the file configuration
+	//
+	// mergo does not distinguish "unset" from a zero value, so a
+	// "default-stop-timeout" of 0 in the config file would be overwritten by
+	// the (non-zero) default of the flag. Remember whether the file set the
+	// option, and restore its value after merging.
+	defaultStopTimeout := fileConfig.DefaultStopTimeout
+	defaultStopTimeoutSet := fileConfig.IsValueSet("default-stop-timeout")
 	if err := mergo.Merge(fileConfig, flagsConfig); err != nil {
 		return nil, err
+	}
+	if defaultStopTimeoutSet {
+		fileConfig.DefaultStopTimeout = defaultStopTimeout
 	}
 
 	// validate the merged fileConfig and flagsConfig
@@ -525,7 +558,7 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 	if flags != nil {
 		var jsonConfig map[string]any
 		if err := json.Unmarshal(b, &jsonConfig); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid JSON: %w", err)
 		}
 
 		configSet := configValuesSet(jsonConfig)
@@ -548,7 +581,7 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 			}
 
 			if _, ok := f.Value.(boolValue); ok {
-				f.Value.Set(fmt.Sprintf("%v", value))
+				_ = f.Value.Set(fmt.Sprint(value))
 			}
 		}
 		if len(namedOptions) > 0 {
@@ -558,7 +591,7 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 					v, set := namedOptions[opt.Name()]
 					_, boolean := f.Value.(boolValue)
 					if set && boolean {
-						f.Value.Set(fmt.Sprintf("%v", v))
+						_ = f.Value.Set(fmt.Sprint(v))
 					}
 				}
 			})
@@ -568,7 +601,7 @@ func getConflictFreeConfiguration(configFile string, flags *pflag.FlagSet) (*Con
 	}
 
 	if err := json.Unmarshal(b, &config); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
 	for _, mc := range migratedNamedConfig {
@@ -583,9 +616,7 @@ func configValuesSet(config map[string]any) map[string]any {
 	flatten := make(map[string]any)
 	for k, v := range config {
 		if m, isMap := v.(map[string]any); isMap && !flatOptions[k] {
-			for km, vm := range m {
-				flatten[km] = vm
-			}
+			maps.Copy(flatten, m)
 			continue
 		}
 
@@ -704,6 +735,10 @@ func Validate(config *Config) error {
 		return err
 	}
 
+	if config.Features["embedded-containerd"] && config.CriContainerd {
+		return errEmbeddedContainerdWithCRI
+	}
+
 	// validate DNSSearch
 	for _, dnsSearch := range config.DNSSearch {
 		if _, err := opts.ValidateDNSSearch(dnsSearch); err != nil {
@@ -735,6 +770,9 @@ func Validate(config *Config) error {
 	}
 	if config.MaxDownloadAttempts < 0 {
 		return errors.Errorf("invalid max download attempts: %d", config.MaxDownloadAttempts)
+	}
+	if config.DefaultStopTimeout < 0 {
+		return errors.Errorf("invalid default stop timeout: %d", config.DefaultStopTimeout)
 	}
 	if config.NetworkDiagnosticPort < 0 || config.NetworkDiagnosticPort > 65535 {
 		return errors.Errorf("invalid network-diagnostic-port (%d): value must be between 0 and 65535", config.NetworkDiagnosticPort)

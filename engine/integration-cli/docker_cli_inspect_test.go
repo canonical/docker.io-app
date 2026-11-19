@@ -176,9 +176,6 @@ func (s *DockerCLIInspectSuite) TestInspectContainerFilterInt(c *testing.T) {
 }
 
 func (s *DockerCLIInspectSuite) TestInspectBindMountPoint(c *testing.T) {
-	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
-	mopt := prefix + slash + "data:" + prefix + slash + "data"
-
 	mode := ""
 	if testEnv.DaemonInfo.OSType == "windows" {
 		// Linux creates the host directory if it doesn't exist. Windows does not.
@@ -187,11 +184,12 @@ func (s *DockerCLIInspectSuite) TestInspectBindMountPoint(c *testing.T) {
 		mode = "z" // Relabel
 	}
 
+	var modifier string
 	if mode != "" {
-		mopt += ":" + mode
+		modifier += ":" + mode
 	}
 
-	cli.DockerCmd(c, "run", "-d", "--name", "test", "-v", mopt, "busybox", "cat")
+	cli.DockerCmd(c, "run", "-d", "--name", "test", "-v", dPath("/data")+":"+dPath("/data")+modifier, "busybox", "cat")
 
 	vol := inspectFieldJSON(c, "test", "Mounts")
 
@@ -206,16 +204,14 @@ func (s *DockerCLIInspectSuite) TestInspectBindMountPoint(c *testing.T) {
 
 	assert.Equal(c, m.Name, "")
 	assert.Equal(c, m.Driver, "")
-	assert.Equal(c, m.Source, prefix+slash+"data")
-	assert.Equal(c, m.Destination, prefix+slash+"data")
+	assert.Equal(c, m.Source, dPath("/data"))
+	assert.Equal(c, m.Destination, dPath("/data"))
 	assert.Equal(c, m.Mode, mode)
 	assert.Equal(c, m.RW, true)
 }
 
 func (s *DockerCLIInspectSuite) TestInspectNamedMountPoint(c *testing.T) {
-	prefix, slash := getPrefixAndSlashFromDaemonPlatform()
-
-	cli.DockerCmd(c, "run", "-d", "--name", "test", "-v", "data:"+prefix+slash+"data", "busybox", "cat")
+	cli.DockerCmd(c, "run", "-d", "--name", "test", "-v", "data:"+dPath("/data"), "busybox", "cat")
 
 	vol := inspectFieldJSON(c, "test", "Mounts")
 
@@ -231,7 +227,7 @@ func (s *DockerCLIInspectSuite) TestInspectNamedMountPoint(c *testing.T) {
 	assert.Equal(c, m.Name, "data")
 	assert.Equal(c, m.Driver, "local")
 	assert.Assert(c, m.Source != "")
-	assert.Equal(c, m.Destination, prefix+slash+"data")
+	assert.Equal(c, m.Destination, dPath("/data"))
 	assert.Equal(c, m.RW, true)
 }
 
@@ -267,7 +263,7 @@ func (s *DockerCLIInspectSuite) TestInspectLogConfigNoType(c *testing.T) {
 	assert.Assert(c, err == nil, "%v", out)
 
 	assert.Equal(c, logConfig.Type, "json-file")
-	assert.Equal(c, logConfig.Config["max-file"], "42", fmt.Sprintf("%v", logConfig))
+	assert.Equal(c, logConfig.Config["max-file"], "42", fmt.Sprint(logConfig))
 }
 
 func (s *DockerCLIInspectSuite) TestInspectNoSizeFlagContainer(c *testing.T) {
@@ -278,7 +274,7 @@ func (s *DockerCLIInspectSuite) TestInspectNoSizeFlagContainer(c *testing.T) {
 
 	formatStr := "--format={{.SizeRw}},{{.SizeRootFs}}"
 	out := cli.DockerCmd(c, "inspect", "--type=container", formatStr, "busybox").Stdout()
-	assert.Equal(c, strings.TrimSpace(out), "<nil>,<nil>", fmt.Sprintf("Expected not to display size info: %s", out))
+	assert.Equal(c, strings.TrimSpace(out), "<nil>,<nil>", "Expected not to display size info: "+out)
 }
 
 func (s *DockerCLIInspectSuite) TestInspectSizeFlagContainer(c *testing.T) {

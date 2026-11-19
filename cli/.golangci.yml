@@ -5,7 +5,7 @@ run:
   # which causes it to fallback to go1.17 semantics.
   #
   # TODO(thaJeztah): update "usetesting" settings to enable go1.24 features once our minimum version is go1.24
-  go: "1.25.5"
+  go: "1.26.5"
 
   timeout: 5m
 
@@ -110,8 +110,15 @@ linters:
       excludes:
         - G104 # G104: Errors unhandled; (TODO: reduce unhandled errors, or explicitly ignore)
         - G115 # G115: integer overflow conversion; (TODO: verify these: https://github.com/docker/cli/issues/5584)
+        - G117 # G117: Exported struct field matches secret pattern (false positives for legitimate field names)
+        - G118 # G118: Goroutine uses context.Background/TODO while request-scoped context is available (TODO: evaluate these)
+        - G122 # G122: Filesystem operation in filepath.Walk/WalkDir callback uses race-prone path (TODO: evaluate these)
         - G306 # G306: Expect WriteFile permissions to be 0600 or less (too restrictive; also flags "0o644" permissions)
         - G307 # G307: Deferring unsafe method "*os.File" on type "Close" (also EXC0008); (TODO: evaluate these and fix where needed: G307: Deferring unsafe method "*os.File" on type "Close")
+        - G702 # G702: Command injection via taint analysis (TODO: evaluate these)
+        - G703 # G703: Path traversal via taint analysis (TODO: evaluate these)
+        - G704 # G704: SSRF via taint analysis (TODO: evaluate these)
+        - G705 # G705: XSS via taint analysis (TODO: evaluate these)
 
     govet:
       enable:
@@ -157,11 +164,6 @@ linters:
         - name: unused-receiver   # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unused-receiver
         - name: use-any           # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#use-any
         - name: use-errors-new    # https://github.com/mgechev/revive/blob/HEAD/RULES_DESCRIPTIONS.md#use-errors-new
-
-    usetesting:
-      os-chdir: false           # FIXME(thaJeztah): Disable `os.Chdir()` detections; should be automatically disabled on Go < 1.24; see https://github.com/docker/cli/pull/5835#issuecomment-2665302478
-      context-background: false # FIXME(thaJeztah): Disable `context.Background()` detections; should be automatically disabled on Go < 1.24; see https://github.com/docker/cli/pull/5835#issuecomment-2665302478
-      context-todo: false       # FIXME(thaJeztah): Disable `context.TODO()` detections; should be automatically disabled on Go < 1.24; see https://github.com/docker/cli/pull/5835#issuecomment-2665302478
 
   exclusions:
     # We prefer to use an "linters.exclusions.rules" so that new "default" exclusions are not
@@ -225,13 +227,10 @@ linters:
         linters:
           - staticcheck
 
-      # Ignore deprecation linting for cli/command/stack/*.
-      #
-      # FIXME(thaJeztah): remove exception once these functions are un-exported or internal; see https://github.com/docker/cli/pull/6389
-      - text: '^(SA1019): '
-        path: "cli/command/stack"
+      # TODO(thaJeztah): remove once https://github.com/leighmcculloch/gocheckcompilerdirectives/issues/7 is fixed.
+      - text: "compiler directive unrecognized: //go:fix"
         linters:
-          - staticcheck
+          - gocheckcompilerdirectives
 
     # Log a warning if an exclusion rule is unused.
     # Default: false

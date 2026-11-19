@@ -7,15 +7,16 @@ set -eu
 if ! command -v "$GO_MD2MAN" > /dev/null; then
   (
     set -x
-    go build -mod=vendor -modfile=vendor.mod -o ./build/tools/go-md2man ./vendor/github.com/cpuguy83/go-md2man/v2
+    # note: this installs all tools defined in go.mod/vendor.mod
+    GOBIN="$(pwd)/build/tools" go install -mod=vendor tool
   )
-  GO_MD2MAN=$(realpath ./build/tools/go-md2man)
+  GO_MD2MAN="$(pwd)/build/tools/go-md2man"
 fi
 
 mkdir -p man/man1
 (
   set -x
-  go run -mod=vendor -modfile=vendor.mod -tags manpages ./man/generate.go --source "./man/src" --target "./man/man1"
+  go run -mod=vendor -tags manpages ./man/generate.go --source "./man/src" --target "./man/man1"
 )
 
 (

@@ -2,8 +2,7 @@
 #
 # zsh completion for docker (http://docker.com)
 #
-# version:  0.3.0
-# github:   https://github.com/felixr/docker-zsh-completion
+# github:   https://github.com/docker/cli
 #
 # contributors:
 #   - Felix Riedel
@@ -675,7 +674,6 @@ __docker_container_subcommand() {
         "($help)--cpu-rt-runtime=[Limit the CPU real-time runtime]:CPU real-time runtime in microseconds: "
         "($help)--cpuset-cpus=[CPUs in which to allow execution]:CPUs: "
         "($help)--cpuset-mems=[MEMs in which to allow execution]:MEMs: "
-        "($help)--kernel-memory=[Kernel memory limit in bytes]:Memory limit: "
         "($help -m --memory)"{-m=,--memory=}"[Memory limit]:Memory limit: "
         "($help)--memory-reservation=[Memory soft limit]:Memory limit: "
         "($help)--memory-swap=[Total memory limit with swap]:Memory limit: "
@@ -707,7 +705,7 @@ __docker_container_subcommand() {
             local state
             _arguments $(__docker_arguments) \
                 $opts_help \
-                "($help -L --follow-link)"{-L,--follow-link}"[Always follow symbol link]" \
+                "($help -L --follow-link)"{-L,--follow-link}"[Always follow symlinks]" \
                 "($help -)1:container:->container" \
                 "($help -)2:hostpath:_files" && ret=0
             case $state in
@@ -938,11 +936,7 @@ __docker_container_subcommand() {
                 "($help -)*: :->values" && ret=0
             case $state in
                 (values)
-                    if [[ ${words[(r)--kernel-memory*]} = (--kernel-memory*) ]]; then
-                        __docker_complete_stopped_containers && ret=0
-                    else
-                        __docker_complete_containers && ret=0
-                    fi
+                    __docker_complete_containers && ret=0
                     ;;
             esac
             ;;

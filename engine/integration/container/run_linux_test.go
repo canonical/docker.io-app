@@ -18,6 +18,7 @@ import (
 	containertypes "github.com/moby/moby/api/types/container"
 	networktypes "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/moby/moby/v2/integration/internal/container"
 	net "github.com/moby/moby/v2/integration/internal/network"
 	"github.com/moby/moby/v2/internal/testutil"
@@ -32,6 +33,7 @@ import (
 
 func TestNISDomainname(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	skip.If(t, testEnv.IsUserNamespace, "user namespaces cannot write the kernel domainname sysctl")
 
 	// Rootless supports custom Hostname but doesn't support custom Domainname
 	//  OCI runtime create failed: container_linux.go:349: starting container process caused "process_linux.go:449: container init caused \
@@ -82,7 +84,7 @@ func TestHostnameDnsResolution(t *testing.T) {
 		hostname = "foobar"
 	)
 
-	// using user defined network as we want to use internal DNS
+	// using user-defined network as we want to use internal DNS
 	netName := "foobar-net"
 	net.CreateNoError(ctx, t, apiClient, netName, net.WithDriver("bridge"))
 
@@ -104,7 +106,7 @@ func TestHostnameDnsResolution(t *testing.T) {
 
 func TestUnprivilegedPortsAndPing(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
-	skip.If(t, testEnv.IsRootless, "rootless mode doesn't support setting net.ipv4.ping_group_range and net.ipv4.ip_unprivileged_port_start")
+	skip.If(t, testEnv.IsRootless, "rootless mode doesn't support setting net.ipv4.ping_group_range")
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
@@ -113,15 +115,17 @@ func TestUnprivilegedPortsAndPing(t *testing.T) {
 		c.Config.User = "1000:1000"
 	})
 
-	// Check net.ipv4.ping_group_range.
-	res, err := container.Exec(ctx, apiClient, cID, []string{"cat", "/proc/sys/net/ipv4/ping_group_range"})
-	assert.NilError(t, err)
-	assert.Assert(t, is.Len(res.Stderr(), 0))
-	assert.Equal(t, 0, res.ExitCode)
-	assert.Equal(t, `0	2147483647`, strings.TrimSpace(res.Stdout()))
+	if !testEnv.IsUserNamespace() {
+		// Check net.ipv4.ping_group_range.
+		res, err := container.Exec(ctx, apiClient, cID, []string{"cat", "/proc/sys/net/ipv4/ping_group_range"})
+		assert.NilError(t, err)
+		assert.Assert(t, is.Len(res.Stderr(), 0))
+		assert.Equal(t, 0, res.ExitCode)
+		assert.Equal(t, `0	2147483647`, strings.TrimSpace(res.Stdout()))
+	}
 
 	// Check net.ipv4.ip_unprivileged_port_start.
-	res, err = container.Exec(ctx, apiClient, cID, []string{"cat", "/proc/sys/net/ipv4/ip_unprivileged_port_start"})
+	res, err := container.Exec(ctx, apiClient, cID, []string{"cat", "/proc/sys/net/ipv4/ip_unprivileged_port_start"})
 	assert.NilError(t, err)
 	assert.Assert(t, is.Len(res.Stderr(), 0))
 	assert.Equal(t, 0, res.ExitCode)
@@ -133,6 +137,7 @@ func TestPrivilegedHostDevices(t *testing.T) {
 	// so needs to be same host.
 	skip.If(t, testEnv.IsRemoteDaemon)
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	skip.If(t, testEnv.IsUserNamespace, "privileged mode is incompatible with user namespaces")
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
@@ -178,6 +183,7 @@ func TestPrivilegedHostDevices(t *testing.T) {
 
 func TestRunConsoleSize(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.42"), "requires API v1.42")
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
@@ -205,6 +211,11 @@ func TestRunConsoleSize(t *testing.T) {
 func TestRunWithAlternativeContainerdShim(t *testing.T) {
 	skip.If(t, testEnv.IsRemoteDaemon)
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	// The daemon only passes the SystemdCgroup option to the stock runc
+	// runtime; with an ad-hoc shim name, runc falls back to the cgroupfs
+	// driver and treats the systemd-style cgroupsPath ("user.slice:docker:ID")
+	// as a literal path, which cannot be created by a rootless daemon.
+	skip.If(t, testEnv.IsRootless() && testEnv.DaemonInfo.CgroupDriver == "systemd", "alternative shims do not support the systemd cgroup driver in rootless mode")
 
 	ctx := testutil.StartSpan(baseContext, t)
 
@@ -366,6 +377,7 @@ func TestWorkingDirNormalization(t *testing.T) {
 
 func TestSeccomp(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	skip.If(t, testEnv.IsUserNamespace, "privileged test cases are incompatible with user namespaces")
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
@@ -502,7 +514,7 @@ func TestCgroupRW(t *testing.T) {
 func TestContainerShmSize(t *testing.T) {
 	ctx := setupTest(t)
 
-	const defaultSize = "1000k"
+	const defaultSize = "1024k"
 	defaultSizeBytes, err := units.RAMInBytes(defaultSize)
 	assert.NilError(t, err)
 
@@ -531,7 +543,7 @@ func TestContainerShmSize(t *testing.T) {
 		{
 			doc:     "custom shmSize",
 			opt:     container.WithHostConfig(&containertypes.HostConfig{ShmSize: defaultSizeBytes * 2}),
-			expSize: "2000k",
+			expSize: "2048k",
 		},
 		{
 			doc:    "negative shmSize",
@@ -568,7 +580,7 @@ func TestContainerShmSize(t *testing.T) {
 			out, err := container.Output(ctx, apiClient, cID)
 			assert.NilError(t, err)
 
-			// e.g., "218 213 0:87 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=1000k"
+			// e.g., "218 213 0:87 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=1024k"
 			assert.Assert(t, is.Contains(out.Stdout, "/dev/shm "), "shm mount not found in output: \n%v", out.Stdout)
 			assert.Check(t, is.Contains(out.Stdout, "size="+tc.expSize))
 		})

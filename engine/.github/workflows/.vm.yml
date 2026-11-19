@@ -3,12 +3,6 @@ name: .vm
 
 # TODO: hide reusable workflow from the UI. Tracked in https://github.com/community/community/discussions/12025
 
-# Default to 'contents: read', which grants actions to read commits.
-#
-# If any permission is set, any permission not included in the list is
-# implicitly set to "none".
-#
-# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
 permissions:
   contents: read
 
@@ -18,10 +12,16 @@ on:
       template:
         required: true
         type: string
+      integration_dir:
+        description: If set, only run integration tests from these directories (space-separated)
+        required: false
+        type: string
+        default: ""
 
 env:
-  GO_VERSION: "1.25.5"
+  GO_VERSION: "1.26.5"
   TESTSTAT_VERSION: v0.1.25
+  TEMPLATE_NAME: ${{ inputs.template }}
 
 jobs:
   integration:
@@ -39,29 +39,41 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       -
         name: Set up Lima
-        uses: lima-vm/lima-actions/setup@03b96d61959e83b2c737e44162c3088e81de0886  # v1.0.1
+        uses: lima-vm/lima-actions/setup@55627e31b78637bf254a8b2a14da8ea7d12564e5  # v1.1.0
         id: lima-actions-setup
         with:
-          version: v1.2.2
+          version: v2.0.2
       -
         name: Cache ~/.cache/lima
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/lima
           key: lima-${{ steps.lima-actions-setup.outputs.version }}-${{ inputs.template }}
       -
         name: Start the guest VM
         run: |
+          set -eux -o pipefail
+          host_memory_gib=$(awk '/MemTotal/ { print int($2 / 1024 / 1024) }' /proc/meminfo)
+          lima_memory=$((host_memory_gib - 2))
+
+          echo "Lima memory: ${lima_memory} GiB (${host_memory_gib} GiB detected)" >>"${GITHUB_STEP_SUMMARY}"
+
+          if [ $lima_memory -lt 1 ]; then
+            echo "::error::Too little memory!"
+            exit 2
+          fi
+
           # --plain is set because the built-in containerd support conflicts with Docker
           limactl start \
             --name=default \
-            --cpus=4 \
-            --memory=12 \
+            --memory=${lima_memory} \
             --plain \
-            ${{ inputs.template }}
+            ${INPUTS_TEMPLATE}
+        env:
+          INPUTS_TEMPLATE: ${{ inputs.template }}
       -
         name: Load kernel modules in the guest VM
         run: |
@@ -102,7 +114,7 @@ jobs:
           EOF
           # TODO: use native packages for AlmaLinux: https://github.com/docker/packaging/pull/138
           lima sudo dnf config-manager --add-repo=https://download.docker.com/linux/rhel/docker-ce.repo
-          lima sudo dnf -q -y install --nobest docker-ce make
+          lima sudo dnf -q -y install --nobest docker-ce make git
           lima sudo systemctl enable --now docker
           lima docker info
       -
@@ -136,18 +148,23 @@ jobs:
           # TODO: enable GHA cache?
           LIMA_WORKDIR=/tmp/docker lima \
             TEST_SKIP_INTEGRATION_CLI=1 \
+            TEST_INTEGRATION_DIR="${INPUTS_INTEGRATION_DIR}" \
             TEST_INTEGRATION_USE_GRAPHDRIVER=1 \
             DOCKER_ROOTLESS=${DOCKER_ROOTLESS} \
             DOCKER_GRAPHDRIVER=${DOCKER_GRAPHDRIVER} \
             DOCKER_IGNORE_BR_NETFILTER_ERROR=${DOCKER_IGNORE_BR_NETFILTER_ERROR} \
+            TIMEOUT=15m \
             make test-integration
+        env:
+          INPUTS_INTEGRATION_DIR: ${{ inputs.integration_dir }}
       -
         name: Prepare reports
         if: always()
         run: |
           set -eux -o pipefail
           limactl cp -v -r default:/tmp/docker/bundles . || true
-          reportsName="$(basename ${{ inputs.template }})"
+          reportsName="${{ env.TEMPLATE_NAME }}"
+          reportsName="${reportsName#template:}"
           if [ -n "${{ matrix.mode }}" ]; then
             reportsName="$reportsName-${{ matrix.mode }}"
           fi
@@ -155,7 +172,7 @@ jobs:
           echo "TESTREPORTS_NAME=$reportsName" >> $GITHUB_ENV
 
           mkdir -p bundles $reportsPath
-          find bundles -path '*/root/*overlay2' -prune -o -type f \( -name '*-report.json' -o -name '*.log' -o -name '*.out' -o -name '*.prof' -o -name '*-report.xml' \) -print | xargs sudo tar -czf /tmp/reports.tar.gz
+          find bundles \( -path '*/root' -o -path '*/root/*' \) -prune -o -type f \( -name '*-report.json' -o -name '*.log' -o -name '*.out' -o -name '*.prof' -o -name '*-report.xml' \) -print0 | sudo tar --null --files-from=- -czf /tmp/reports.tar.gz
           tar -xzf /tmp/reports.tar.gz -C $reportsPath
           sudo chown -R $(id -u):$(id -g) $reportsPath
           tree -nh $reportsPath
@@ -167,7 +184,7 @@ jobs:
       -
         name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-reports-integration-${{ env.TESTREPORTS_NAME }}
           path: /tmp/reports/*
@@ -183,16 +200,19 @@ jobs:
     steps:
       -
         name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
       -
         name: Prepare reports
-        run: echo "TESTREPORTS_NAME=$(basename ${{ inputs.template }})*" >> $GITHUB_ENV
+        run: |
+          TEMPLATE="${{ env.TEMPLATE_NAME }}"
+          TEMPLATE="${TEMPLATE#template:}"
+          echo "TESTREPORTS_NAME=${TEMPLATE}*" >> $GITHUB_ENV
       -
         name: Download reports
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: /tmp/reports
           pattern: test-reports-integration-${{ env.TESTREPORTS_NAME }}
@@ -204,4 +224,6 @@ jobs:
       -
         name: Create summary
         run: |
-          find /tmp/reports -type f -name '*-go-test-report.json' -exec teststat -markdown {} \+ >> $GITHUB_STEP_SUMMARY
+          if [ -d /tmp/reports ]; then
+            find /tmp/reports -type f -name '*-go-test-report.json' -exec teststat -markdown {} \+ >> "$GITHUB_STEP_SUMMARY"
+          fi

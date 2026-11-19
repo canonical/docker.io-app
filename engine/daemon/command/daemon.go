@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +30,7 @@ import (
 	"github.com/moby/moby/v2/daemon/config"
 	buildkit "github.com/moby/moby/v2/daemon/internal/builder-next"
 	"github.com/moby/moby/v2/daemon/internal/builder-next/exporter"
-	"github.com/moby/moby/v2/daemon/internal/libcontainerd/supervisor"
+	"github.com/moby/moby/v2/daemon/internal/containerd/server/supervisor"
 	"github.com/moby/moby/v2/daemon/internal/otelutil"
 	"github.com/moby/moby/v2/daemon/internal/rootless"
 	"github.com/moby/moby/v2/daemon/listeners"
@@ -44,7 +44,7 @@ import (
 	"github.com/moby/moby/v2/daemon/server/router/container"
 	debugrouter "github.com/moby/moby/v2/daemon/server/router/debug"
 	distributionrouter "github.com/moby/moby/v2/daemon/server/router/distribution"
-	grpcrouter "github.com/moby/moby/v2/daemon/server/router/grpc"
+	grpcrouter "github.com/moby/moby/v2/daemon/server/router/grpc" //nolint:staticcheck // Deprecated endpoint kept for backward compatibility
 	"github.com/moby/moby/v2/daemon/server/router/image"
 	"github.com/moby/moby/v2/daemon/server/router/network"
 	pluginrouter "github.com/moby/moby/v2/daemon/server/router/plugin"
@@ -57,6 +57,7 @@ import (
 	"github.com/moby/moby/v2/pkg/homedir"
 	"github.com/moby/moby/v2/pkg/pidfile"
 	"github.com/moby/moby/v2/pkg/plugingetter"
+	"github.com/moby/sys/userns"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -75,6 +76,10 @@ type daemonCLI struct {
 	d               *daemon.Daemon
 	authzMiddleware *authorization.Middleware // authzMiddleware enables to dynamically reload the authorization plugins
 
+	// containerdDialer is the in-memory dialer for the embedded containerd. It
+	// is set in embedded mode and nil otherwise. See [daemon.ContainerdDialer].
+	containerdDialer daemon.ContainerdDialer
+
 	stopOnce     sync.Once
 	apiShutdown  chan struct{}
 	apiTLSConfig *tls.Config
@@ -92,6 +97,19 @@ func newDaemonCLI(opts *daemonOptions) (*daemonCLI, error) {
 		return nil, err
 	}
 
+	if opts.Validate {
+		// Verify platform-specific requirements. This is checked early so
+		// that `dockerd --validate` also validates system requirements.
+		// We only validate when explicitly asked, to allow (un)registering
+		// the service (`dockerd --register-service`, `dockerd --unregister-service`)
+		// on Windows to succeed. See https://github.com/moby/moby/issues/51997
+		//
+		// The same check is also performed on start.
+		if err := daemon.CheckSystem(); err != nil {
+			return nil, fmt.Errorf("system requirements not met: %w", err)
+		}
+	}
+
 	return &daemonCLI{
 		Config:       cfg,
 		configFile:   &opts.configFile,
@@ -101,13 +119,23 @@ func newDaemonCLI(opts *daemonOptions) (*daemonCLI, error) {
 	}, nil
 }
 
-func (cli *daemonCLI) start(ctx context.Context) (err error) {
+func (cli *daemonCLI) start(ctx context.Context) (retErr error) {
+	if err := daemon.CheckSystem(); err != nil {
+		return fmt.Errorf("system requirements not met: %w", err)
+	}
 	configureProxyEnv(ctx, cli.Config.Proxies)
 	if err := configureDaemonLogs(ctx, cli.Config.DaemonLogConfig); err != nil {
 		return fmt.Errorf("failed to configure daemon logging: %w", err)
 	}
 
 	log.G(ctx).Info("Starting up")
+	defer func() {
+		l := log.G(ctx)
+		if retErr != nil && !errors.Is(retErr, context.Canceled) {
+			l = l.WithError(retErr)
+		}
+		l.Info("Daemon shutdown complete")
+	}()
 
 	if cli.Config.Debug {
 		debug.Enable()
@@ -139,10 +167,10 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 	potentiallyUnderRuntimeDir := []string{cli.Config.ExecRoot}
 
 	if cli.Pidfile != "" {
-		if err = os.MkdirAll(filepath.Dir(cli.Pidfile), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(cli.Pidfile), 0o755); err != nil {
 			return errors.Wrap(err, "failed to create pidfile directory")
 		}
-		if err = pidfile.Write(cli.Pidfile, os.Getpid()); err != nil {
+		if err := pidfile.Write(cli.Pidfile, os.Getpid()); err != nil {
 			return errors.Wrapf(err, "failed to start daemon, ensure docker is not running or delete %s", cli.Pidfile)
 		}
 		potentiallyUnderRuntimeDir = append(potentiallyUnderRuntimeDir, cli.Pidfile)
@@ -261,13 +289,16 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 		cdiCache = daemon.RegisterCDIDriver(cli.Config.CDISpecDirs...)
 	}
 
+	daemon.RegisterGPUDeviceDrivers(cdiCache)
+
 	var apiServer apiserver.Server
-	cli.authzMiddleware, err = initMiddlewares(ctx, &apiServer, cli.Config, pluginStore)
+	authz, err := initMiddlewares(ctx, &apiServer, cli.Config, pluginStore)
 	if err != nil {
 		return errors.Wrap(err, "failed to start API server")
 	}
+	cli.authzMiddleware = authz
 
-	d, err := daemon.NewDaemon(ctx, cli.Config, pluginStore, cli.authzMiddleware)
+	d, err := daemon.NewDaemon(ctx, cli.Config, pluginStore, cli.authzMiddleware, cli.containerdDialer)
 	if err != nil {
 		return errors.Wrap(err, "failed to start daemon")
 	}
@@ -295,7 +326,7 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 	// initialized the cluster.
 	d.RestartSwarmContainers()
 
-	b, shutdownBuildKit, err := initBuildkit(ctx, d, cdiCache)
+	b, shutdownBuildKit, err := initBuildkit(ctx, d, cdiCache, cli.containerdDialer)
 	if err != nil {
 		return fmt.Errorf("error initializing buildkit: %w", err)
 	}
@@ -306,34 +337,44 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 		}
 	}
 
+	// Enable HTTP/1, HTTP/2 and h2c on the HTTP server. h2c won't be used for *tls.Conn listeners, and HTTP/2 won't be
+	// used for non-TLS connections.
+	var p http.Protocols
+	p.SetHTTP1(true)
+	p.SetHTTP2(true)
+	p.SetUnencryptedHTTP2(true)
+
 	routers := buildRouters(routerOptions{
 		features: d.Features,
 		daemon:   d,
 		cluster:  c,
 		builder:  b,
 	})
-	httpServer.Handler = apiServer.CreateMux(ctx, routers...)
+	gs := newGRPCServer(ctx)
+	b.backend.RegisterGRPC(gs)
+	httpServer.Protocols = &p
+	httpServer.Handler = newHTTPHandler(ctx, gs, apiServer.CreateMux(ctx, routers...))
 
 	go d.ProcessClusterNotifications(ctx, c.GetWatchStream())
 
 	cli.setupConfigReloadTrap()
 
-	// after the daemon is done setting up we can notify systemd api
-	notifyReady()
 	log.G(ctx).Info("Daemon has completed initialization")
 
 	// Daemon is fully initialized. Start handling API traffic
 	// and wait for serve API to complete.
 	var (
-		apiWG  sync.WaitGroup
-		errAPI = make(chan error, 1)
+		apiWG      sync.WaitGroup
+		errAPI     = make(chan error, 1)
+		apiStartWG sync.WaitGroup
 	)
+
+	apiStartWG.Add(len(lss))
 	for _, ls := range lss {
-		apiWG.Add(1)
-		go func(ls net.Listener) {
-			defer apiWG.Done()
+		apiWG.Go(func() {
 			log.G(ctx).Infof("API listen on %s", ls.Addr())
-			if err := httpServer.Serve(ls); err != http.ErrServerClosed {
+			apiStartWG.Done()
+			if err := httpServer.Serve(ls); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.G(ctx).WithFields(log.Fields{
 					"error":    err,
 					"listener": ls.Addr(),
@@ -344,8 +385,20 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 				default:
 				}
 			}
-		}(ls)
+		})
 	}
+
+	// Wait for all API listeners to start handling requests.
+	apiStartWG.Wait()
+
+	select {
+	case <-errAPI:
+		// An API listener failed to start; skip notifying systemd that we're ready.
+	default:
+		// All API listeners started handling requests; notify systemd that we're ready.
+		notifyReady()
+	}
+
 	apiWG.Wait()
 	close(errAPI)
 
@@ -369,7 +422,6 @@ func (cli *daemonCLI) start(ctx context.Context) (err error) {
 		log.G(ctx).WithError(err).Error("Failed to shutdown OTEL tracing")
 	}
 
-	log.G(ctx).Info("Daemon shutdown complete")
 	return nil
 }
 
@@ -396,7 +448,7 @@ func setOTLPProtoDefault() {
 	}
 }
 
-func initBuildkit(ctx context.Context, d *daemon.Daemon, cdiCache *cdi.Cache) (_ builderOptions, closeFn func(), _ error) {
+func initBuildkit(ctx context.Context, d *daemon.Daemon, cdiCache *cdi.Cache, containerdDialer daemon.ContainerdDialer) (_ builderOptions, closeFn func(), _ error) {
 	log.G(ctx).Info("Initializing buildkit")
 	closeFn = func() {}
 
@@ -429,6 +481,7 @@ func initBuildkit(ctx context.Context, d *daemon.Daemon, cdiCache *cdi.Cache) (_
 		UseSnapshotter:      d.UsesSnapshotter(),
 		Snapshotter:         d.ImageService().StorageDriver(),
 		ContainerdAddress:   cfg.ContainerdAddr,
+		ContainerdDialer:    containerdDialer,
 		ContainerdNamespace: cfg.ContainerdNamespace,
 		HyperVIsolation:     d.DefaultIsolation().IsHyperV(),
 		Callbacks: exporter.BuildkitCallbacks{
@@ -503,6 +556,13 @@ func (cli *daemonCLI) reloadConfig() {
 			}
 		}
 	}
+
+	// On Linux, we use sd_notify to indicate we're reloading config. We send
+	// this signal as early as possible to let systemd know we're reloading,
+	// but must signal "ready" after this completes (even on failure), which
+	// is done by the reload function defined above.
+	done := notifyReloading()
+	defer done()
 
 	if err := config.Reload(*cli.configFile, cli.flags, reload); err != nil {
 		log.G(ctx).WithError(err).Error("Error reloading configuration")
@@ -622,6 +682,30 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 		}
 	}
 
+	// TODO(thaJeztah): consider making empty strings an error. Existing behavior allowed for empty strings to be used as default, even if explicitly set (`dockerd -H ""`).
+	conf.Hosts = slices.DeleteFunc(conf.Hosts, func(h string) bool {
+		return strings.TrimSpace(h) == ""
+	})
+	if len(conf.Hosts) == 0 {
+		// Set the default host if no hosts are configured.
+		// TODO(thaJeztah) can set defaults in config.New() instead?
+		if conf.TLS != nil && *conf.TLS {
+			// If no host is configured, but the "--tls" flag is set, we
+			// default to using a TCP connection instead of a unix-socket
+			// or named pipe.
+			//
+			// See https://github.com/moby/moby/commit/0906195fbbd6f379c163b80f23e4c5a60bcfc5f0
+			conf.Hosts = append(conf.Hosts, dopts.DefaultTLSHost)
+		} else {
+			// Otherwise use the default unix-socket (Linux) or named pipe (Windows).
+			h, err := defaultAPISocketPath(honorXDG)
+			if err != nil {
+				return nil, err
+			}
+			conf.Hosts = append(conf.Hosts, h)
+		}
+	}
+
 	if err := normalizeHosts(conf); err != nil {
 		return nil, err
 	}
@@ -656,7 +740,35 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 	if conf.CDISpecDirs == nil {
 		// If the CDISpecDirs is not set at this stage, we set it to the default.
 		conf.CDISpecDirs = append([]string(nil), cdi.DefaultSpecDirs...)
-	} else if len(conf.CDISpecDirs) == 1 && conf.CDISpecDirs[0] == "" {
+		if rootless.RunningWithRootlessKit() {
+			// In rootless mode, we add the user-specific CDI spec directory.
+			xch, err := homedir.GetConfigHome()
+			if err != nil {
+				return nil, err
+			}
+			xrd, err := homedir.GetRuntimeDir()
+			if err != nil {
+				return nil, err
+			}
+			conf.CDISpecDirs = append(conf.CDISpecDirs, filepath.Join(xch, "cdi"), filepath.Join(xrd, "cdi"))
+		}
+	}
+	// Filter out CDI spec directories that are not readable, and log appropriately
+	var cdiSpecDirs []string
+	for _, dir := range conf.CDISpecDirs {
+		// Non-existing directories are not filtered out here, as CDI spec directories are allowed to not exist.
+		if _, err := os.ReadDir(dir); err == nil || errors.Is(err, os.ErrNotExist) {
+			cdiSpecDirs = append(cdiSpecDirs, dir)
+		} else {
+			logLevel := log.ErrorLevel
+			if userns.RunningInUserNS() && errors.Is(err, os.ErrPermission) {
+				logLevel = log.DebugLevel
+			}
+			log.L.WithField("dir", dir).WithError(err).Log(logLevel, "CDI spec directory cannot be accessed, skipping")
+		}
+	}
+	conf.CDISpecDirs = cdiSpecDirs
+	if len(conf.CDISpecDirs) == 1 && conf.CDISpecDirs[0] == "" {
 		// If CDISpecDirs is set to an empty string, we clear it to ensure that CDI is disabled.
 		conf.CDISpecDirs = nil
 	}
@@ -673,38 +785,44 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 	return conf, nil
 }
 
-// normalizeHosts normalizes the configured config.Hosts and remove duplicates.
+// defaultAPISocketPath returns the default path for the Unix socket (Linux)
+// or named pipe (Windows).
+//
+// When running with rootlessKit, XDG dirs should be preferred, and the
+// default is to listen on an unprivileged socket in [XDG_RUNTIME_DIR].
+//
+// [XDG_RUNTIME_DIR]: https://specifications.freedesktop.org/basedir/0.8/#variables
+func defaultAPISocketPath(honorXDG bool) (string, error) {
+	if honorXDG {
+		runtimeDir, err := homedir.GetRuntimeDir()
+		if err != nil {
+			return "", err
+		}
+		return "unix://" + filepath.Join(runtimeDir, "docker.sock"), nil
+	}
+
+	// default unix-socket (Linux) or named pipe (Windows).
+	return dopts.DefaultHost, nil
+}
+
+// normalizeHosts normalizes the configured config.Hosts and removes duplicates.
 // It returns an error if it fails to parse a host.
 func normalizeHosts(cfg *config.Config) error {
 	if len(cfg.Hosts) == 0 {
-		// if no hosts are configured, create a single entry slice, so that the
-		// default is used.
-		//
-		// TODO(thaJeztah) implement a cleaner way for this; this depends on a
-		//                 side-effect of how we parse empty/partial hosts.
-		cfg.Hosts = make([]string, 1)
-	}
-	hosts := make([]string, 0, len(cfg.Hosts))
-	seen := make(map[string]struct{}, len(cfg.Hosts))
-
-	useTLS := DefaultTLSValue
-	if cfg.TLS != nil {
-		useTLS = *cfg.TLS
+		return errors.New("no hosts specified")
 	}
 
-	for _, h := range cfg.Hosts {
-		host, err := dopts.ParseHost(useTLS, honorXDG, h)
+	hosts := slices.Clone(cfg.Hosts)
+	for i, h := range hosts {
+		var err error
+		hosts[i], err = dopts.ParseDaemonHost(h)
 		if err != nil {
 			return err
 		}
-		if _, ok := seen[host]; ok {
-			continue
-		}
-		seen[host] = struct{}{}
-		hosts = append(hosts, host)
 	}
-	sort.Strings(hosts)
-	cfg.Hosts = hosts
+
+	slices.Sort(hosts)
+	cfg.Hosts = slices.Compact(hosts)
 	return nil
 }
 
@@ -720,7 +838,7 @@ func buildRouters(opts routerOptions) []router.Router {
 		systemrouter.NewRouter(opts.daemon, opts.cluster, opts.builder.buildkit, opts.daemon.Features),
 		volume.NewRouter(opts.daemon.VolumesService(), opts.cluster),
 		build.NewRouter(opts.builder.backend, opts.daemon),
-		sessionrouter.NewRouter(opts.builder.sessionManager),
+		sessionrouter.NewRouter(opts.builder.sessionManager), //nolint:staticcheck // Deprecated endpoint kept for backward compatibility
 		swarmrouter.NewRouter(opts.cluster),
 		pluginrouter.NewRouter(opts.daemon.PluginManager()),
 		distributionrouter.NewRouter(opts.daemon.ImageBackend()),
@@ -729,7 +847,7 @@ func buildRouters(opts routerOptions) []router.Router {
 	}
 
 	if opts.builder.backend != nil {
-		routers = append(routers, grpcrouter.NewRouter(opts.builder.backend))
+		routers = append(routers, grpcrouter.NewRouter(opts.builder.backend)) //nolint:staticcheck // Deprecated endpoint kept for backward compatibility
 	}
 
 	if opts.daemon.HasExperimental() {
@@ -816,6 +934,7 @@ func newAPIServerTLSConfig(cfg *config.Config) (*tls.Config, error) {
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid TLS configuration")
 		}
+		tlsConfig.NextProtos = []string{"h2", "http/1.1"}
 	}
 
 	return tlsConfig, nil
@@ -1045,7 +1164,11 @@ func (cli *daemonCLI) initializeContainerd(ctx context.Context) (func(time.Durat
 		return nil, errors.Wrap(err, "failed to generate containerd options")
 	}
 
-	r, err := supervisor.Start(ctx, filepath.Join(cli.Config.Root, "containerd"), filepath.Join(cli.Config.ExecRoot, "containerd"), opts...)
+	rootDir, err := containerdRootDir(ctx, cli.Config)
+	if err != nil {
+		return nil, err
+	}
+	r, err := supervisor.Start(ctx, rootDir, filepath.Join(cli.Config.ExecRoot, "containerd"), opts...)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to start containerd")
 	}
@@ -1053,6 +1176,24 @@ func (cli *daemonCLI) initializeContainerd(ctx context.Context) (func(time.Durat
 
 	// Try to wait for containerd to shutdown
 	return r.WaitTimeout, nil
+}
+
+// containerdRootEnv is a temporary testing override for reusing a standalone
+// containerd data root with embedded or supervised containerd.
+const containerdRootEnv = "DOCKER_CONTAINERD_ROOT"
+
+func containerdRootDir(ctx context.Context, cfg *config.Config) (string, error) {
+	if root := os.Getenv(containerdRootEnv); root != "" {
+		if !filepath.IsAbs(root) {
+			return "", fmt.Errorf("%s must be an absolute path: %q", containerdRootEnv, root)
+		}
+		log.G(ctx).WithFields(log.Fields{
+			"environment-variable": containerdRootEnv,
+			"root":                 root,
+		}).Warn("overriding containerd root from environment")
+		return root, nil
+	}
+	return filepath.Join(cfg.Root, "containerd", "daemon"), nil
 }
 
 // cdiEnabled returns true if CDI feature wasn't explicitly disabled via

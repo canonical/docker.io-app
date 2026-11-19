@@ -13,14 +13,14 @@ import (
 )
 
 func RandomSinglePlatform(dir string, platform ocispec.Platform, source rand.Source) (*ocispec.Index, error) {
-	r := rand.New(source) //nolint:gosec // Ignore G404: Use of weak random number generator (math/rand instead of crypto/rand)
+	r := rand.New(source) // #nosec G404 -- Use of weak random number generator (math/rand instead of crypto/rand)
 
 	imageRef := "random-" + strconv.FormatInt(r.Int63(), 10) + ":latest"
 
 	layerCount := r.Intn(8)
 
 	var layers []ocispec.Descriptor
-	for i := 0; i < layerCount; i++ {
+	for i := range layerCount {
 		layerDesc, err := writeLayerWithOneFile(dir, "layer-"+strconv.Itoa(i), []byte(strconv.Itoa(i)))
 		if err != nil {
 			return nil, err

@@ -30,15 +30,15 @@ jobs:
     steps:
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       -
         name: Test
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         with:
           targets: test-coverage
       -
         name: Send to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: ./build/coverage/coverage.txt
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -60,24 +60,29 @@ jobs:
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: ${{ env.GOPATH }}/src/github.com/docker/cli
+          persist-credentials: false
       -
         name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.5"
+          go-version: "1.26.5"
+          cache: false
       -
         name: Test
         run: |
-          go test -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/|/cmd/docker-trust')
+          # run in go modules mode to prevent traversing to nested modules
+          ln -s vendor.mod go.mod
+          ln -s vendor.sum go.sum
+          go test -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '^github.com/docker/cli/e2e/')
           go tool cover -func=/tmp/coverage.txt
         working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli
         shell: bash
       -
         name: Send to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: /tmp/coverage.txt
           working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli

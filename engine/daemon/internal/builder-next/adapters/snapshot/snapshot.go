@@ -60,12 +60,19 @@ type snapshotter struct {
 }
 
 // NewSnapshotter creates a new snapshotter
-func NewSnapshotter(opt Opt, prevLM leases.Manager, ns string) (snapshot.Snapshotter, *leaseutil.Manager, error) {
+func NewSnapshotter(opt Opt, prevLM leases.Manager, ns string) (_ snapshot.Snapshotter, _ *leaseutil.Manager, retErr error) {
 	dbPath := filepath.Join(opt.Root, "snapshots.db")
-	db, err := bolt.Open(dbPath, 0o600, nil)
+	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{
+		FreelistType: bolt.FreelistMapType,
+	})
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to open database file %s", dbPath)
 	}
+	defer func() {
+		if retErr != nil {
+			_ = db.Close()
+		}
+	}()
 
 	reg, ok := opt.LayerStore.(graphIDRegistrar)
 	if !ok {

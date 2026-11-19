@@ -84,7 +84,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
-			expOut:       []string{"container-c", "container-c/link-b", "container-b", "container-a"},
+			expOut:       []string{"container-c", "container-b", "container-a"},
 			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
@@ -97,7 +97,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
-			expOut:       []string{"id-c", "container-c", "container-c/link-b", "id-b", "container-b", "id-a", "container-a"},
+			expOut:       []string{"id-c", "container-c", "id-b", "container-b", "id-a", "container-a"},
 			expOpts:      client.ContainerListOptions{All: true},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
@@ -107,7 +107,7 @@ func TestCompleteContainerNames(t *testing.T) {
 			containers: []container.Summary{
 				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
 			},
-			expOut:       []string{"container-c", "container-c/link-b"},
+			expOut:       []string{"container-c"},
 			expDirective: cobra.ShellCompDirectiveNoFileComp,
 		},
 		{
@@ -117,7 +117,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				func(ctr container.Summary) bool { return ctr.State == container.StateCreated },
 			},
 			containers: []container.Summary{
-				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c"}},
 				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
 				{ID: "id-a", State: container.StateExited, Names: []string{"/container-a"}},
 			},
@@ -133,7 +133,7 @@ func TestCompleteContainerNames(t *testing.T) {
 				func(ctr container.Summary) bool { return ctr.State == container.StateCreated },
 			},
 			containers: []container.Summary{
-				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c", "/container-c/link-b"}},
+				{ID: "id-c", State: container.StateRunning, Names: []string{"/container-c"}},
 				{ID: "id-b", State: container.StateCreated, Names: []string{"/container-b"}},
 				{ID: "id-a", State: container.StateCreated, Names: []string{"/container-a"}},
 			},
@@ -194,6 +194,18 @@ func TestCompleteFromList(t *testing.T) {
 	values, directives := FromList(expected...)(nil, nil, "")
 	assert.Check(t, is.Equal(directives&cobra.ShellCompDirectiveNoFileComp, cobra.ShellCompDirectiveNoFileComp), "Should not perform file completion")
 	assert.Check(t, is.DeepEqual(values, expected))
+}
+
+func TestWithPrefix(t *testing.T) {
+	assert.Check(t, is.DeepEqual(WithPrefix("node=", []string{"n1", "n2"}), []string{"node=n1", "node=n2"}))
+	assert.Check(t, is.DeepEqual(WithPrefix("node=", []string{}), []string{}))
+	assert.Check(t, is.DeepEqual(WithPrefix("", []string{"n1"}), []string{"n1"}))
+}
+
+func TestWithSuffix(t *testing.T) {
+	assert.Check(t, is.DeepEqual(WithSuffix("=", []string{"id", "name"}), []string{"id=", "name="}))
+	assert.Check(t, is.DeepEqual(WithSuffix("=", []string{}), []string{}))
+	assert.Check(t, is.DeepEqual(WithSuffix("", []string{"id"}), []string{"id"}))
 }
 
 func TestCompleteImageNames(t *testing.T) {
@@ -350,4 +362,24 @@ func TestCompleteVolumeNames(t *testing.T) {
 			assert.Check(t, is.DeepEqual(volumes, tc.expOut))
 		})
 	}
+}
+
+func TestUnique(t *testing.T) {
+	base := []string{"alpha", "beta", "gamma"}
+
+	comp := Unique(func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return base, cobra.ShellCompDirectiveNoFileComp
+	})
+
+	values, directives := comp(&cobra.Command{}, []string{"beta"}, "")
+	assert.Check(t, is.Equal(directives&cobra.ShellCompDirectiveNoFileComp, cobra.ShellCompDirectiveNoFileComp))
+	assert.Check(t, is.DeepEqual(values, []string{"alpha", "gamma"}))
+
+	assert.Check(t, is.DeepEqual(base, []string{"alpha", "beta", "gamma"}))
+
+	values, directives = comp(&cobra.Command{}, []string{"gamma"}, "")
+	assert.Check(t, is.Equal(directives&cobra.ShellCompDirectiveNoFileComp, cobra.ShellCompDirectiveNoFileComp))
+	assert.Check(t, is.DeepEqual(values, []string{"alpha", "beta"}))
+
+	assert.Check(t, is.DeepEqual(base, []string{"alpha", "beta", "gamma"}))
 }

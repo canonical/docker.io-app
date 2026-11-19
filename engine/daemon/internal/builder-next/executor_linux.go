@@ -2,30 +2,30 @@ package buildkit
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/containerd/log"
 	"github.com/moby/buildkit/executor"
-	"github.com/moby/buildkit/executor/oci"
 	"github.com/moby/buildkit/executor/resources"
 	"github.com/moby/buildkit/executor/runcexecutor"
-	"github.com/moby/buildkit/solver/llbsolver/cdidevices"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/network"
+	"github.com/moby/buildkit/util/network/proxyprovider"
 	"github.com/moby/moby/v2/daemon/internal/stringid"
-	"github.com/moby/moby/v2/daemon/libnetwork"
-	"github.com/moby/sys/user"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/pkg/errors"
 )
 
 const networkName = "bridge"
 
-func newExecutor(root, cgroupParent string, net *libnetwork.Controller, dnsConfig *oci.DNSConfig, rootless bool, idmap user.IdentityMapping, apparmorProfile string, cdiManager *cdidevices.Manager, _, _ string, _ bool) (executor.Executor, error) {
-	netRoot := filepath.Join(root, "net")
+func newExecutor(opts executorOpts) (executor.Executor, network.ProxyProvider, error) {
+	netRoot := filepath.Join(opts.root, "net")
 	networkProviders := map[pb.NetMode]network.Provider{
-		pb.NetMode_UNSET: &bridgeProvider{Controller: net, Root: netRoot},
+		pb.NetMode_UNSET: &bridgeProvider{Controller: opts.networkController, Root: netRoot},
 		pb.NetMode_HOST:  network.NewHostProvider(),
 		pb.NetMode_NONE:  network.NewNoneProvider(),
 	}
@@ -43,53 +43,121 @@ func newExecutor(root, cgroupParent string, net *libnetwork.Controller, dnsConfi
 
 	// Returning a non-nil but empty *IdentityMapping breaks BuildKit:
 	// https://github.com/moby/moby/pull/39444
-	pidmap := &idmap
-	if idmap.Empty() {
-		pidmap = nil
+	idmap := &opts.identityMapping
+	if opts.identityMapping.Empty() {
+		idmap = nil
 	}
 
 	rm, err := resources.NewMonitor()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	runcCmds := []string{"runc"}
-
 	// TODO: FIXME: testing env var, replace with something better or remove in a major version or two
+	runcCmds := []string{"runc"}
 	if runcOverride := os.Getenv("DOCKER_BUILDKIT_RUNC_COMMAND"); runcOverride != "" {
 		runcCmds = []string{runcOverride}
 	}
 
-	return runcexecutor.New(runcexecutor.Opt{
-		Root:                filepath.Join(root, "executor"),
+	proxyProvider := opts.proxyProvider
+	ownsProxyProvider := false
+	if proxyProvider == nil && proxyprovider.Supported() {
+		hostProvider := networkProviders[pb.NetMode_HOST]
+		egressProviders := map[pb.NetMode]network.Provider{
+			pb.NetMode_UNSET: loopbackFilteredProvider{provider: hostProvider},
+			pb.NetMode_HOST:  hostProvider,
+		}
+		proxyProvider, err = proxyprovider.New(proxyprovider.Opt{
+			Root:            filepath.Join(opts.root, "proxy"),
+			EgressProviders: egressProviders,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		ownsProxyProvider = true
+	}
+
+	exec, err := runcexecutor.New(runcexecutor.Opt{
+		Root:                filepath.Join(opts.root, "executor"),
 		CommandCandidates:   runcCmds,
-		DefaultCgroupParent: cgroupParent,
-		Rootless:            rootless,
+		DefaultCgroupParent: opts.cgroupParent,
+		Rootless:            opts.rootless,
 		NoPivot:             os.Getenv("DOCKER_RAMDISK") != "",
-		IdentityMapping:     pidmap,
-		DNS:                 dnsConfig,
-		ApparmorProfile:     apparmorProfile,
+		IdentityMapping:     idmap,
+		DNS:                 opts.dnsConfig,
+		ApparmorProfile:     opts.apparmorProfile,
 		ResourceMonitor:     rm,
-		CDIManager:          cdiManager,
+		CDIManager:          opts.cdiManager,
+		ProxyProvider:       proxyProvider,
 	}, networkProviders)
+	if err != nil {
+		if ownsProxyProvider {
+			_ = proxyProvider.Close()
+		}
+		return nil, nil, err
+	}
+	return exec, proxyProvider, nil
 }
 
-// newExecutorGD calls newExecutor() on Linux.
-// Created for symmetry with the non-linux platforms, esp. Windows.
-func newExecutorGD(root, cgroupParent string, net *libnetwork.Controller, dnsConfig *oci.DNSConfig, rootless bool, idmap user.IdentityMapping, apparmorProfile string, cdiManager *cdidevices.Manager, _, _ string) (executor.Executor, error) {
-	return newExecutor(
-		root,
-		cgroupParent,
-		net,
-		dnsConfig,
-		rootless,
-		idmap,
-		apparmorProfile,
-		cdiManager,
-		"",
-		"",
-		false,
-	)
+// newExecutorGD calls newExecutor() on Linux. It returns a stubExecutor on
+// other platforms.
+func newExecutorGD(opts executorOpts) (executor.Executor, network.ProxyProvider, error) {
+	return newExecutor(opts)
+}
+
+type loopbackFilteredProvider struct {
+	provider network.Provider
+}
+
+func (p loopbackFilteredProvider) New(ctx context.Context, hostname string, opt network.NamespaceOptions) (network.Namespace, error) {
+	ns, err := p.provider.New(ctx, hostname, opt)
+	if err != nil {
+		return nil, err
+	}
+	return loopbackFilteredNS{Namespace: ns}, nil
+}
+
+func (p loopbackFilteredProvider) Close() error {
+	return nil
+}
+
+type loopbackFilteredNS struct {
+	network.Namespace
+}
+
+func (n loopbackFilteredNS) DialContext(ctx context.Context, networkName, address string) (net.Conn, error) {
+	if isLoopbackAddress(ctx, address) {
+		return nil, errors.Errorf("proxy egress to loopback address %s is not allowed", address)
+	}
+	dialer, ok := n.Namespace.(network.Dialer)
+	if !ok {
+		return nil, errors.Errorf("proxy egress network does not support dialing")
+	}
+	return dialer.DialContext(ctx, networkName, address)
+}
+
+func isLoopbackAddress(ctx context.Context, address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if addr.IP.IsLoopback() {
+			return true
+		}
+	}
+	return false
 }
 
 func (iface *lnInterface) Set(s *specs.Spec) error {

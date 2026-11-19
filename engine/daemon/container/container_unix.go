@@ -21,10 +21,6 @@ import (
 )
 
 const (
-	// defaultStopTimeout sets the default time, in seconds, to wait
-	// for the graceful container stop before forcefully terminating it.
-	defaultStopTimeout = 10
-
 	containerConfigMountPath = "/"
 	containerSecretMountPath = "/run/secrets"
 )
@@ -32,20 +28,19 @@ const (
 // TrySetNetworkMount attempts to set the network mounts given a provided destination and
 // the path to use for it; return true if the given destination was a network mount file
 func (container *Container) TrySetNetworkMount(destination string, path string) bool {
-	if destination == "/etc/resolv.conf" {
+	switch destination {
+	case "/etc/resolv.conf":
 		container.ResolvConfPath = path
 		return true
-	}
-	if destination == "/etc/hostname" {
+	case "/etc/hostname":
 		container.HostnamePath = path
 		return true
-	}
-	if destination == "/etc/hosts" {
+	case "/etc/hosts":
 		container.HostsPath = path
 		return true
+	default:
+		return false
 	}
-
-	return false
 }
 
 // BuildHostnameFile writes the container's hostname file.
@@ -269,6 +264,21 @@ func (container *Container) UpdateContainer(hostConfig *containertypes.HostConfi
 
 	if resources.BlkioWeight != 0 {
 		cResources.BlkioWeight = resources.BlkioWeight
+	}
+	if resources.BlkioWeightDevice != nil {
+		cResources.BlkioWeightDevice = resources.BlkioWeightDevice
+	}
+	if resources.BlkioDeviceReadBps != nil {
+		cResources.BlkioDeviceReadBps = resources.BlkioDeviceReadBps
+	}
+	if resources.BlkioDeviceWriteBps != nil {
+		cResources.BlkioDeviceWriteBps = resources.BlkioDeviceWriteBps
+	}
+	if resources.BlkioDeviceReadIOps != nil {
+		cResources.BlkioDeviceReadIOps = resources.BlkioDeviceReadIOps
+	}
+	if resources.BlkioDeviceWriteIOps != nil {
+		cResources.BlkioDeviceWriteIOps = resources.BlkioDeviceWriteIOps
 	}
 	if resources.CPUShares != 0 {
 		cResources.CPUShares = resources.CPUShares

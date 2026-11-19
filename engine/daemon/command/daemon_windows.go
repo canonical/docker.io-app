@@ -56,13 +56,23 @@ func preNotifyReady() error {
 func notifyReady() {
 }
 
+// notifyReloading sends a message to the host when the server got signaled to
+// reloading its configuration. It is a no-op on Windows.
+func notifyReloading() func() { return func() {} }
+
 // notifyStopping sends a message to the host when the server is shutting down
 func notifyStopping() {
 }
 
 // notifyShutdown is called after the daemon shuts down but before the process exits.
-func notifyShutdown(err error) {
+func notifyShutdown(ctx context.Context, err error) {
 	if service != nil {
+		// log the error, so that it's sent to the event-log.
+		if err != nil {
+			log.G(ctx).WithError(err).Error("Stopping service")
+		} else {
+			log.G(ctx).Info("Stopping service")
+		}
 		service.stopped(err)
 	}
 }
@@ -100,6 +110,11 @@ func newCgroupParent(*config.Config) string {
 }
 
 func (cli *daemonCLI) initContainerd(ctx context.Context) (func(time.Duration) error, error) {
+	// Check embedded-containerd first so daemon.json can opt in even when
+	// packaged service units pass a default --containerd socket.
+	if cli.Config.Features["embedded-containerd"] {
+		return cli.initEmbeddedContainerd(ctx)
+	}
 	if cli.Config.ContainerdAddr != "" {
 		return nil, nil
 	}

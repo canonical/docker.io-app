@@ -14,7 +14,7 @@
 //	// Apply the updates with ...
 //	err := tm.Apply(ctx)
 //
-// The objects are any of: [BaseChain], [Chain], [Rule], [VMap], [VMapElement],
+// The objects are any of: [BaseChain], [Chain], [Rule], [Map], [MapElement],
 // [Set], [SetElement]
 //
 // The modifier can be reused to apply the same set of commands again or, more
@@ -46,16 +46,18 @@ package nftables
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"iter"
-	"os/exec"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
+	"time"
 
 	"github.com/containerd/log"
 )
@@ -64,16 +66,15 @@ import (
 const spanPrefix = "libnetwork.internal.nftables"
 
 var (
-	// nftPath is the path of the "nft" tool, set by [Enable] and left empty if the tool
-	// is not present - in which case, nftables is disabled.
-	nftPath string
+	// enabled is set by [Enable].
+	enabled bool
 	// Error returned by Enable if nftables could not be initialised.
 	nftEnableError error
 	// incrementalUpdateTempl is a parsed text/template, used to apply incremental updates.
 	incrementalUpdateTempl *template.Template
 	// reloadTempl is a parsed text/template, used to apply a whole table.
 	reloadTempl *template.Template
-	// enableOnce is used by [Enable] to avoid checking the path for "nft" more than once.
+	// enableOnce is used by [Enable] to avoid parsing the templates more than once.
 	enableOnce sync.Once
 )
 
@@ -93,6 +94,7 @@ type BaseChainHook string
 
 const (
 	BaseChainHookIngress     BaseChainHook = "ingress"
+	BaseChainHookEgress      BaseChainHook = "egress"
 	BaseChainHookPrerouting  BaseChainHook = "prerouting"
 	BaseChainHookInput       BaseChainHook = "input"
 	BaseChainHookForward     BaseChainHook = "forward"
@@ -124,30 +126,98 @@ const (
 type Family string
 
 const (
-	IPv4 Family = "ip"
-	IPv6 Family = "ip6"
+	IPv4   Family = "ip"
+	IPv6   Family = "ip6"
+	Netdev Family = "netdev"
 )
 
-// NftType enumerates nft types that can be used to define maps/sets etc.
-type NftType string
+type SetTyper interface {
+	setType() string
+}
+
+type MapTyper interface {
+	mapType() string
+}
+
+// SetType represents named nft types that can be used to define sets or
+// construct map types.
+type SetType string
 
 const (
-	NftTypeIPv4Addr    NftType = "ipv4_addr"
-	NftTypeIPv6Addr    NftType = "ipv6_addr"
-	NftTypeEtherAddr   NftType = "ether_addr"
-	NftTypeInetProto   NftType = "inet_proto"
-	NftTypeInetService NftType = "inet_service"
-	NftTypeMark        NftType = "mark"
-	NftTypeIfname      NftType = "ifname"
+	IPv4Addr    SetType = "ipv4_addr"
+	IPv6Addr    SetType = "ipv6_addr"
+	EtherAddr   SetType = "ether_addr"
+	InetProto   SetType = "inet_proto"
+	InetService SetType = "inet_service"
+	Mark        SetType = "mark"
+	Ifname      SetType = "ifname"
 )
+
+func (t SetType) setType() string {
+	return "type " + string(t)
+}
+
+// Concat returns the tuple type formed by concatenating t and u.
+func (t SetType) Concat(u SetType) SetType {
+	return SetType(string(t) + " . " + string(u))
+}
+
+// MapType represents the named type of a map element, which is a compound type
+// with a key and a value.
+type MapType string
+
+func (t MapType) mapType() string {
+	return "type " + string(t)
+}
+
+// MapTo returns the map type where t is the key type and v is the value type.
+func (t SetType) MapTo(v SetType) MapType {
+	return MapType(string(t) + " : " + string(v))
+}
+
+// VMap returns the map type whose elements have t as the key type and contain
+// a verdict as the value.
+func (t SetType) VMap() MapType {
+	return MapType(string(t) + " : verdict")
+}
+
+// Typeof represents an nft "typeof" expression.
+type Typeof string
+
+func (t Typeof) setType() string {
+	return "typeof " + string(t)
+}
+
+func (t Typeof) Concat(u Typeof) Typeof {
+	return Typeof(string(t) + " . " + string(u))
+}
+
+// MapTypeof represents the type of a map element defined by a "typeof"
+// expression.
+type MapTypeof string
+
+func (t MapTypeof) mapType() string {
+	return "typeof " + string(t)
+}
+
+// MapTo returns the map type where t is the key type and v is the value type.
+func (t Typeof) MapTo(v Typeof) MapTypeof {
+	return MapTypeof(string(t) + " : " + string(v))
+}
+
+// VMap returns the map type whose elements have t as the key type and contain
+// a verdict as the value.
+func (t Typeof) VMap() MapTypeof {
+	return MapTypeof(string(t) + " : verdict")
+}
 
 // Enable tries once to initialise nftables.
 func Enable() error {
 	enableOnce.Do(func() {
-		path, err := exec.LookPath("nft")
+		err := preflight()
 		if err != nil {
-			log.G(context.Background()).WithError(err).Warnf("Failed to find nft tool")
-			nftEnableError = fmt.Errorf("failed to find nft tool: %w", err)
+			log.G(context.Background()).WithError(err).Warnf("Failed to initialize nftables")
+			nftEnableError = err
 			return
 		}
 		if err := parseTemplate(); err != nil {
@@ -155,35 +225,49 @@ func Enable() error {
 			nftEnableError = fmt.Errorf("internal error while initialising nftables: %w", err)
 			return
 		}
-		nftPath = path
+		enabled = true
 	})
 	return nftEnableError
 }
 
-// Enabled returns true if the "nft" tool is available and [Enable] has been called.
+// Enabled returns true if [Enable] has been called and nftables was initialized successfully.
 func Enabled() bool {
-	return nftPath != ""
+	return enabled
 }
 
 // Disable undoes Enable. Intended for unit testing.
 func Disable() {
-	nftPath = ""
+	enabled = false
 	incrementalUpdateTempl = nil
 	reloadTempl = nil
 	enableOnce = sync.Once{}
 }
 
+// RunCmd runs arbitrary nftables ruleset commands, like `nft -f`, irrespective
+// of whether nftables is [Enabled].
+//
+// Most users of this package should use [Table] and [Modifier] to manage their
+// nftables ruleset.
+func RunCmd(ctx context.Context, nftCmd []byte) error {
+	h, err := newNftCtx()
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	return h.Apply(ctx, nftCmd)
+}
+
 //////////////////////////////
 // Tables
 
-// table is the internal representation of an nftables table.
-// Its elements need to be exported for use by text/template, but they should only be
-// manipulated via exported methods.
+// table is the internal representation of an nftables table, embedded in a
+// [Table]. Its elements need to be exported for use by text/template, but they
+// should only be manipulated via [Table]'s methods.
 type table struct {
 	Name   string
 	Family Family
 
-	VMaps  map[string]*vMap
+	Maps   map[string]*nftMap
 	Sets   map[string]*set
 	Chains map[string]*chain
 
@@ -191,20 +275,69 @@ type table struct {
 	MustFlush      bool
 
 	applyLock sync.Mutex
-	nftHandle nftHandle // applyLock must be held to access
+	nftHandle *nftCtx // applyLock must be held to access
+	// created is set by [NewTable] and never modified afterwards. It tells a
+	// real table apart from the zero value of a [Table], which is not usable.
+	created bool
+	// closed is set by [Table.Close] with applyLock held. It may be read without
+	// the lock, but a check that must not race with Close needs to hold it.
+	closed atomic.Bool
 }
 
-// Table is a handle for an nftables table.
+var (
+	// errInvalidTable is returned by operations on a [Table] that didn't come
+	// from [NewTable].
+	errInvalidTable = errors.New("invalid table")
+	// errTableClosed is returned by operations on a [Table] that has been closed.
+	errTableClosed = errors.New("nftables table is closed")
+)
+
+// nftApply executes the nftables commands in nftCmd.
+// Acquire t.applyLock before calling this function.
+func (t *table) nftApply(ctx context.Context, nftCmd []byte) error {
+	// Don't open a new handle for a table that's been closed.
+	if t.closed.Load() {
+		return errTableClosed
+	}
+	if t.nftHandle == nil {
+		h, err := newNftCtx()
+		if err != nil {
+			return err
+		}
+		t.nftHandle = h
+	}
+	return t.nftHandle.Apply(ctx, nftCmd)
+}
+
+// checkUsable returns an error describing why t can't be used - it didn't come
+// from [NewTable], or it has been closed.
+//
+// Acquire t.applyLock before calling, unless a stale answer will do: without the
+// lock, the table may be closed by the time the caller acts on a nil return.
+func (t *table) checkUsable() error {
+	if !t.created {
+		return errInvalidTable
+	}
+	if t.closed.Load() {
+		return errTableClosed
+	}
+	return nil
+}
+
+// Table is a handle for an nftables table. Create one using [NewTable], and
+// release it using [Table.Close].
 type Table struct {
-	t *table
+	t table
 }
 
-// IsValid returns true if t is a valid reference to a table.
-func (t Table) IsValid() bool {
-	return t.t != nil
+// IsValid returns true if t refers to a usable table, that is, if it was
+// returned by [NewTable] and has not been closed.
+func (t *Table) IsValid() bool {
+	return t != nil && t.t.checkUsable() == nil
 }
 
-// NewTable creates a new nftables table and returns a [Table]
+// NewTable creates a new nftables table and returns a [Table]. Close it to
+// release the resources it holds.
 //
 // See https://wiki.nftables.org/wiki-nftables/index.php/Configuring_tables
 //
@@ -220,147 +353,71 @@ func (t Table) IsValid() bool {
 //
 // To fully delete an underlying nftables table, if one already exists,
 // use [Table.Reload] after creating the table.
-func NewTable(family Family, name string) (Table, error) {
-	t := Table{
-		t: &table{
+func NewTable(family Family, name string) (*Table, error) {
+	return &Table{
+		t: table{
 			Name:      name,
 			Family:    family,
-			VMaps:     map[string]*vMap{},
+			Maps:      map[string]*nftMap{},
 			Sets:      map[string]*set{},
 			Chains:    map[string]*chain{},
 			MustFlush: true,
+			created:   true,
 		},
-	}
-	return t, nil
+	}, nil
 }
 
 // Close releases resources associated with the table. It does not modify or delete
 // the underlying nftables table.
-func (t Table) Close() error {
-	if t.IsValid() {
-		t.t.closeNftHandle()
-		t.t = nil
+func (t *Table) Close() error {
+	if !t.IsValid() {
+		return nil
 	}
+	t.t.applyLock.Lock()
+	defer t.t.applyLock.Unlock()
+	if t.t.nftHandle != nil {
+		t.t.nftHandle.Close()
+		t.t.nftHandle = nil
+	}
+	t.t.closed.Store(true)
 	return nil
 }
 
 // Name returns the name of the table, or an empty string if t is not valid.
-func (t Table) Name() string {
+func (t *Table) Name() string {
 	if !t.IsValid() {
 		return ""
 	}
 	return t.t.Name
 }
 
-// Family returns the address family of the nftables table described by [TableRef].
-func (t Table) Family() Family {
+// Family returns the address family of the nftables table, or an empty string if
+// t is not valid.
+func (t *Table) Family() Family {
 	if !t.IsValid() {
 		return ""
 	}
 	return t.t.Family
 }
 
-// incrementalUpdateTemplText is used with text/template to generate an nftables command file
-// (which will be applied atomically). Updates using this template are always incremental.
-// Steps are:
-//   - declare the table and its sets/maps with empty versions of modified chains, so that
-//     they can be flushed/deleted if they don't yet exist. (They need to be flushed in case
-//     a version of them was left behind by an old incarnation of the daemon. But, it's an
-//     error to flush or delete something that doesn't exist. So, avoid having to parse nft's
-//     stderr to work out what happened by making sure they do exist before flushing.)
-//   - if the table is newly declared, flush rules from its chains
-//   - flush each newly declared map/set
-//   - delete deleted map/set elements
-//   - flush modified chains
-//   - delete deleted chains
-//   - re-populate modified chains
-//   - add new map/set elements
-const incrementalUpdateTemplText = `{{$family := .Family}}{{$tableName := .Name}}
-table {{$family}} {{$tableName}} {
-	{{range .VMaps}}map {{.Name}} {
-		type {{.ElementType}} : verdict
-		{{if len .Flags}}flags{{range .Flags}} {{.}}{{end}}{{end}}
-	}
-	{{end}}
-	{{range .Sets}}set {{.Name}} {
-		type {{.ElementType}}
-		{{if len .Flags}}flags{{range .Flags}} {{.}}{{end}}{{end}}
-	}
-	{{end}}
-	{{range .Chains}}{{if .MustFlush}}chain {{.Name}} {
-		{{if .ChainType}}type {{.ChainType}} hook {{.Hook}} priority {{.Priority}}; policy {{.Policy}}{{end}}
-	} ; {{end}}{{end}}
-}
-{{if .MustFlush}}flush table {{$family}} {{$tableName}}{{end}}
-{{range .VMaps}}{{if .MustFlush}}flush map {{$family}} {{$tableName}} {{.Name}}
-{{end}}{{end}}
-{{range .Sets}}{{if .MustFlush}}flush set {{$family}} {{$tableName}} {{.Name}}
-{{end}}{{end}}
-{{range .Chains}}{{if .MustFlush}}flush chain {{$family}} {{$tableName}} {{.Name}}
-{{end}}{{end}}
-{{range .VMaps}}{{if .DeletedElements}}delete element {{$family}} {{$tableName}} {{.Name}} { {{range $k,$v := .DeletedElements}}{{$k}}, {{end}} }
-{{end}}{{end}}
-{{range .Sets}}{{if .DeletedElements}}delete element {{$family}} {{$tableName}} {{.Name}} { {{range $k,$v := .DeletedElements}}{{$k}}, {{end}} }
-{{end}}{{end}}
-{{range .DeleteCommands}}{{.}}
-{{end}}
-table {{$family}} {{$tableName}} {
-	{{range .Chains}}{{if .MustFlush}}chain {{.Name}} {
-		{{if .ChainType}}type {{.ChainType}} hook {{.Hook}} priority {{.Priority}}; policy {{.Policy}}{{end}}
-		{{range .Rules}}{{.}}
-		{{end}}
-	}
-	{{end}}{{end}}
-}
-{{range .VMaps}}{{if .AddedElements}}add element {{$family}} {{$tableName}} {{.Name}} { {{range $k,$v := .AddedElements}}{{$k}} : {{$v}}, {{end}} }
-{{end}}{{end}}
-{{range .Sets}}{{if .AddedElements}}add element {{$family}} {{$tableName}} {{.Name}} { {{range $k,$v := .AddedElements}}{{$k}}, {{end}} }
-{{end}}{{end}}
-`
-
-// reloadTemplText is used with text/template to generate an nftables command file
-// (which will be applied atomically), to fully re-create a table.
-//
-// It first declares the table so if it doesn't already exist, it can be deleted.
-// Then it deletes the table and re-creates it.
-const reloadTemplText = `{{$family := .Family}}{{$tableName := .Name}}
-table {{$family}} {{$tableName}} {}
-delete table {{$family}} {{$tableName}}
-table {{$family}} {{$tableName}} {
-	{{range .VMaps}}map {{.Name}} {
-		type {{.ElementType}} : verdict
-		{{if len .Flags}}flags{{range .Flags}} {{.}}{{end}}{{end}}
-        {{if .Elements}}elements = {
-			{{range $k,$v := .Elements}}{{$k}} : {{$v}},
-            {{end -}}
-		}{{end}}
-	}
-	{{end}}
-	{{range .Sets}}set {{.Name}} {
-		type {{.ElementType}}
-		{{if len .Flags}}flags{{range .Flags}} {{.}}{{end}}{{end}}
-        {{if .Elements}}elements = {
-			{{range $k,$v := .Elements}}{{$k}},
-            {{end -}}
-		}{{end}}
-	}
-	{{end}}
-	{{range .Chains}}chain {{.Name}} {
-		{{if .ChainType}}type {{.ChainType}} hook {{.Hook}} priority {{.Priority}}; policy {{.Policy}}{{end}}
-		{{range .Rules}}{{.}}
-		{{end}}
-	}
-	{{end}}
-}
-`
-
 // SetBaseChainPolicy sets the default policy for a base chain. The update
 // is applied immediately, unlike creation/deletion of objects via a [Modifier]
-// which are not applied until [Modifier.Apply] is called.
-func (t Table) SetBaseChainPolicy(ctx context.Context, chainName string, policy BaseChainPolicy) error {
-	if !t.IsValid() {
-		return errors.New("invalid table")
+// which are not applied until [Table.Apply] is called.
+func (t *Table) SetBaseChainPolicy(ctx context.Context, chainName string, policy BaseChainPolicy) error {
+	if !Enabled() {
+		return errors.New("nftables is not enabled")
 	}
+	if t == nil {
+		return errInvalidTable
+	}
+	// Hold applyLock for the whole update, the chain must not be modified by a
+	// concurrent [Table.Apply] between here and the update.
+	t.t.applyLock.Lock()
+	defer t.t.applyLock.Unlock()
+	if err := t.t.checkUsable(); err != nil {
+		return err
+	}
+
 	c := t.t.Chains[chainName]
 	if c == nil {
 		return fmt.Errorf("cannot set base chain policy for '%s', it does not exist", chainName)
@@ -372,7 +429,7 @@ func (t Table) SetBaseChainPolicy(ctx context.Context, chainName string, policy 
 	c.Policy = policy
 	c.MustFlush = true
 
-	if err := t.Apply(ctx, Modifier{}); err != nil {
+	if err := t.t.apply(ctx); err != nil {
 		c.Policy = oldPolicy
 		return err
 	}
@@ -393,7 +450,11 @@ type Modifier struct {
 
 // Create enqueues creation of object o, to be applied by tm.Apply.
 func (tm *Modifier) Create(o Obj) {
-	_, f, l, _ := runtime.Caller(1)
+	tm.create(o, 1)
+}
+
+func (tm *Modifier) create(o Obj, skipFrames int) {
+	_, f, l, _ := runtime.Caller(skipFrames + 1)
 	tm.cmds = append(tm.cmds, command{
 		obj:        o,
 		callerFile: f,
@@ -439,44 +500,60 @@ func (tm *Modifier) Reverse() Modifier {
 // Apply makes incremental updates to nftables. If there's a validation
 // error in any of the enqueued objects, or an error applying the updates
 // to the underlying nftables, the [Table] will be unmodified.
-func (t *Table) Apply(ctx context.Context, tm Modifier) (retErr error) {
+func (t *Table) Apply(ctx context.Context, tm ...Modifier) error {
 	if !Enabled() {
 		return errors.New("nftables is not enabled")
 	}
+	if t == nil {
+		return errInvalidTable
+	}
 	t.t.applyLock.Lock()
 	defer t.t.applyLock.Unlock()
+	// Check under the lock, so that the table can't be closed between here and
+	// the update. Bail out before touching the in-memory table, an update that
+	// can't be applied to nftables must not be recorded as applied.
+	if err := t.t.checkUsable(); err != nil {
+		return err
+	}
+	return t.t.apply(ctx, tm...)
+}
 
+// apply makes the incremental updates described by tm.
+// Acquire t.applyLock before calling this function.
+func (t *table) apply(ctx context.Context, tm ...Modifier) (retErr error) {
 	var rollback []command
 	defer func() {
 		if retErr == nil {
 			return
 		}
 		for _, c := range slices.Backward(rollback) {
-			if _, err := c.rollback(ctx, t.t); err != nil {
+			if _, err := c.rollback(ctx, t); err != nil {
 				log.G(ctx).WithError(err).Error("Failed to roll back nftables updates")
 			}
 		}
-		t.t.updatesApplied()
+		t.updatesApplied()
 	}()
 
 	// Apply tm's updates to the Table.
-	for _, cmd := range tm.cmds {
-		applied, err := cmd.apply(ctx, t.t)
-		if err != nil {
-			return fmt.Errorf("rule from %s:%d: %w", cmd.callerFile, cmd.callerLine, err)
-		}
-		if applied {
-			rollback = append(rollback, cmd)
+	for _, tmm := range tm {
+		for _, cmd := range tmm.cmds {
+			applied, err := cmd.apply(ctx, t)
+			if err != nil {
+				return fmt.Errorf("rule from %s:%d: %w", cmd.callerFile, cmd.callerLine, err)
+			}
+			if applied {
+				rollback = append(rollback, cmd)
+			}
 		}
 	}
 
 	// Update nftables.
 	var buf bytes.Buffer
-	if err := incrementalUpdateTempl.Execute(&buf, t.t); err != nil {
+	if err := incrementalUpdateTempl.Execute(&buf, t); err != nil {
 		return fmt.Errorf("failed to execute template nft ruleset: %w", err)
 	}
 
-	if err := t.t.nftApply(ctx, buf.Bytes()); err != nil {
+	if err := t.nftApply(ctx, buf.Bytes()); err != nil {
 		// On error, log a line-numbered version of the generated "nft" input (because
 		// nft error messages refer to line numbers).
 		var sb strings.Builder
@@ -493,24 +570,27 @@ func (t *Table) Apply(ctx context.Context, tm Modifier) (retErr error) {
 		// behind networks for the test infrastructure to clean up between tests. Starting
 		// a daemon flushes the "docker-bridges" table, so the cleanup fails to delete a
 		// rule that's been flushed. So, try reloading the whole table to get back in-sync.
-		return t.t.reload(ctx)
+		return t.reload(ctx)
 	}
 
 	// Note that updates have been applied.
-	t.t.updatesApplied()
+	t.updatesApplied()
 	return nil
 }
 
 // Reload deletes the table, then re-creates it, atomically.
-func (t Table) Reload(ctx context.Context) error {
+func (t *Table) Reload(ctx context.Context) error {
 	if !Enabled() {
 		return errors.New("nftables is not enabled")
 	}
-	if !t.IsValid() {
-		return errors.New("invalid table")
+	if t == nil {
+		return errInvalidTable
 	}
 	t.t.applyLock.Lock()
 	defer t.t.applyLock.Unlock()
+	if err := t.t.checkUsable(); err != nil {
+		return err
+	}
 	return t.t.reload(ctx)
 }
 
@@ -562,6 +642,7 @@ type chain struct {
 	Name       string
 	ChainType  BaseChainType
 	Hook       BaseChainHook
+	Device     string
 	Priority   int
 	Policy     BaseChainPolicy
 	MustFlush  bool
@@ -579,6 +660,7 @@ type BaseChain struct {
 	Name      string
 	ChainType BaseChainType
 	Hook      BaseChainHook
+	Device    string
 	Priority  int
 	Policy    BaseChainPolicy // Defaults to BaseChainPolicyAccept
 }
@@ -603,6 +685,7 @@ func (cd BaseChain) create(ctx context.Context, t *table) (bool, error) {
 		Name:       cd.Name,
 		ChainType:  cd.ChainType,
 		Hook:       cd.Hook,
+		Device:     cd.Device,
 		Priority:   cd.Priority,
 		Policy:     cd.Policy,
 		MustFlush:  true,
@@ -615,6 +698,7 @@ func (cd BaseChain) create(ctx context.Context, t *table) (bool, error) {
 		"chain":  c.Name,
 		"type":   c.ChainType,
 		"hook":   c.Hook,
+		"device": c.Device,
 		"prio":   c.Priority,
 	}).Debug("nftables: created base chain")
 	return true, nil
@@ -736,141 +820,167 @@ func (ru Rule) delete(ctx context.Context, t *table) (bool, error) {
 }
 
 // ////////////////////////////
-// VMaps
+// Maps
 
-// vMap is the internal representation of an nftables verdict map.
+type mapValue struct {
+	Value   string
+	Comment string
+}
+
+// nftMap is the internal representation of an nftables map (including verdict maps).
 // Its elements need to be exported for use by text/template, but they should only be
 // manipulated via exported methods.
-type vMap struct {
+type nftMap struct {
 	table           *table
 	Name            string
-	ElementType     NftType
+	ElementTypeExpr string
 	Flags           []string
-	Elements        map[string]string
-	AddedElements   map[string]string
+	Size            int
+	Timeout         time.Duration
+	Elements        map[string]mapValue
+	AddedElements   map[string]mapValue
 	DeletedElements map[string]string
 	MustFlush       bool
 }
 
-// VMap implements the [Obj] interface, it can be passed to a
-// [Modifier] to create or delete a verdict map.
-type VMap struct {
+// Map implements the [Obj] interface, it can be passed to a
+// [Modifier] to create or delete a map.
+type Map struct {
 	Name        string
-	ElementType NftType
+	ElementType MapTyper
 	Flags       []string
+	Size        int
+	Timeout     time.Duration
 }
 
-func (vm VMap) create(ctx context.Context, t *table) (bool, error) {
-	if vm.Name == "" {
-		return false, errors.New("vmap must have a name")
+func (m Map) create(ctx context.Context, t *table) (bool, error) {
+	if m.Name == "" {
+		return false, errors.New("map must have a name")
 	}
-	if _, ok := t.VMaps[vm.Name]; ok {
-		return false, fmt.Errorf("vmap '%s' already exists", vm.Name)
+	if _, ok := t.Maps[m.Name]; ok {
+		return false, fmt.Errorf("map '%s' already exists", m.Name)
 	}
-	if vm.ElementType == "" {
-		return false, fmt.Errorf("vmap '%s' has no element type", vm.Name)
+	if m.ElementType == nil {
+		return false, fmt.Errorf("map '%s' has no element type", m.Name)
 	}
-	v := &vMap{
+	nm := &nftMap{
 		table:           t,
-		Name:            vm.Name,
-		ElementType:     vm.ElementType,
-		Flags:           slices.Clone(vm.Flags),
-		Elements:        map[string]string{},
-		AddedElements:   map[string]string{},
+		Name:            m.Name,
+		ElementTypeExpr: m.ElementType.mapType(),
+		Flags:           slices.Clone(m.Flags),
+		Size:            m.Size,
+		Timeout:         m.Timeout,
+		Elements:        map[string]mapValue{},
+		AddedElements:   map[string]mapValue{},
 		DeletedElements: map[string]string{},
 		MustFlush:       true,
 	}
-	t.VMaps[v.Name] = v
+	t.Maps[nm.Name] = nm
 	log.G(ctx).WithFields(log.Fields{
 		"family": t.Family,
 		"table":  t.Name,
-		"vmap":   v.Name,
-	}).Debug("nftables: created interface vmap")
+		"map":    nm.Name,
+	}).Debug("nftables: created map")
 	return true, nil
 }
 
-func (vm VMap) delete(ctx context.Context, t *table) (bool, error) {
-	v := t.VMaps[vm.Name]
-	if v == nil {
-		return false, fmt.Errorf("cannot delete vmap '%s', it does not exist", vm.Name)
+func (m Map) delete(ctx context.Context, t *table) (bool, error) {
+	nm := t.Maps[m.Name]
+	if nm == nil {
+		return false, fmt.Errorf("cannot delete map '%s', it does not exist", m.Name)
 	}
-	if len(v.Elements) != 0 {
-		return false, fmt.Errorf("cannot delete vmap '%s', it contains %d elements", v.Name, len(v.Elements))
+	if len(nm.Elements) != 0 {
+		return false, fmt.Errorf("cannot delete map '%s', it contains %d elements", nm.Name, len(nm.Elements))
 	}
-	delete(t.VMaps, v.Name)
+	delete(t.Maps, nm.Name)
 	t.DeleteCommands = append(t.DeleteCommands,
-		fmt.Sprintf("delete map %s %s %s", t.Family, t.Name, v.Name))
+		fmt.Sprintf("delete map %s %s %s", t.Family, t.Name, nm.Name))
 	log.G(ctx).WithFields(log.Fields{
 		"family": t.Family,
 		"table":  t.Name,
-		"vmap":   v.Name,
-	}).Debug("nftables: deleted vmap")
+		"map":    nm.Name,
+	}).Debug("nftables: deleted map")
 	return true, nil
 }
 
-// VMapElement implements the [Obj] interface, it can be passed to a
-// [Modifier] to create or delete an entry in a verdict map.
-type VMapElement struct {
-	VmapName string
-	Key      string
-	Verdict  string
+// MapElement implements the [Obj] interface, it can be passed to a
+// [Modifier] to create or delete an entry in a map.
+type MapElement struct {
+	MapName string
+	Key     string
+	Value   string
+	Comment string
 }
 
-func (ve VMapElement) create(ctx context.Context, t *table) (bool, error) {
-	if ve.VmapName == "" {
-		return false, errors.New("cannot add element to unnamed vmap")
+func (me MapElement) create(ctx context.Context, t *table) (bool, error) {
+	if me.MapName == "" {
+		return false, errors.New("cannot add element to unnamed map")
 	}
-	v := t.VMaps[ve.VmapName]
-	if v == nil {
-		return false, fmt.Errorf("cannot add to vmap '%s', it does not exist", ve.VmapName)
+	if bad := validateComment(me.Comment); bad != nil {
+		bad.kind = fmt.Sprintf("map '%s' element", me.MapName)
+		bad.name = me.Key
+		return false, bad
 	}
-	if ve.Key == "" || ve.Verdict == "" {
-		return false, fmt.Errorf("cannot add to vmap '%s', element must have key and verdict", ve.VmapName)
+	nm := t.Maps[me.MapName]
+	if nm == nil {
+		return false, fmt.Errorf("cannot add to map '%s', it does not exist", me.MapName)
 	}
-	if _, ok := v.Elements[ve.Key]; ok {
-		return false, fmt.Errorf("verdict map '%s' already contains element '%s'", ve.VmapName, ve.Key)
+	if me.Key == "" || me.Value == "" {
+		return false, fmt.Errorf("cannot add to map '%s', element must have key and value", me.MapName)
 	}
-	v.Elements[ve.Key] = ve.Verdict
-	v.AddedElements[ve.Key] = ve.Verdict
-	delete(v.DeletedElements, ve.Key)
+	if _, ok := nm.Elements[me.Key]; ok {
+		return false, fmt.Errorf("map '%s' already contains element '%s'", me.MapName, me.Key)
+	}
+	nm.Elements[me.Key] = mapValue{
+		Value:   me.Value,
+		Comment: me.Comment,
+	}
+	nm.AddedElements[me.Key] = nm.Elements[me.Key]
+	delete(nm.DeletedElements, me.Key)
 	log.G(ctx).WithFields(log.Fields{
 		"family":  t.Family,
 		"table":   t.Name,
-		"vmap":    ve.VmapName,
-		"key":     ve.Key,
-		"verdict": ve.Verdict,
-	}).Debug("nftables: added vmap element")
+		"map":     me.MapName,
+		"key":     me.Key,
+		"value":   me.Value,
+		"comment": me.Comment,
+	}).Debug("nftables: added map element")
 	return true, nil
 }
 
-func (ve VMapElement) delete(ctx context.Context, t *table) (bool, error) {
-	v := t.VMaps[ve.VmapName]
-	if v == nil {
-		return false, fmt.Errorf("cannot delete from vmap '%s', it does not exist", ve.VmapName)
+func (me MapElement) delete(ctx context.Context, t *table) (bool, error) {
+	nm := t.Maps[me.MapName]
+	if nm == nil {
+		return false, fmt.Errorf("cannot delete from map '%s', it does not exist", me.MapName)
 	}
-	oldVerdict, ok := v.Elements[ve.Key]
+	oldValue, ok := nm.Elements[me.Key]
 	if !ok {
-		return false, fmt.Errorf("verdict map '%s' does not contain element '%s'", ve.VmapName, ve.Key)
+		return false, fmt.Errorf("map '%s' does not contain element '%s'", me.MapName, me.Key)
 	}
-	if oldVerdict != ve.Verdict {
-		return false, fmt.Errorf("cannot delete verdict map '%s' element '%s', verdict was '%s', not '%s'",
-			ve.VmapName, ve.Key, oldVerdict, ve.Verdict)
+	if oldValue.Value != me.Value {
+		return false, fmt.Errorf("cannot delete map '%s' element '%s', value was '%s', not '%s'",
+			me.MapName, me.Key, oldValue.Value, me.Value)
 	}
-	delete(v.Elements, ve.Key)
-	delete(v.AddedElements, ve.Key)
-	v.DeletedElements[ve.Key] = ve.Verdict
+	delete(nm.Elements, me.Key)
+	delete(nm.AddedElements, me.Key)
+	nm.DeletedElements[me.Key] = me.Value
 	log.G(ctx).WithFields(log.Fields{
 		"family":  t.Family,
 		"table":   t.Name,
-		"vmap":    ve.VmapName,
-		"key":     ve.Key,
-		"verdict": ve.Verdict,
-	}).Debug("nftables: deleted vmap element")
+		"map":     me.MapName,
+		"key":     me.Key,
+		"value":   me.Value,
+		"comment": oldValue.Comment,
+	}).Debug("nftables: deleted map element")
 	return true, nil
 }
 
 // ////////////////////////////
 // Sets
+
+type setElementOptions struct {
+	Comment string
+}
 
 // set is the internal representation of an nftables set.
 // Its elements need to be exported for use by text/template, but they should only be
@@ -878,10 +988,12 @@ func (ve VMapElement) delete(ctx context.Context, t *table) (bool, error) {
 type set struct {
 	table           *table
 	Name            string
-	ElementType     NftType
+	ElementTypeExpr string
 	Flags           []string
-	Elements        map[string]struct{}
-	AddedElements   map[string]struct{}
+	Size            int
+	Timeout         time.Duration
+	Elements        map[string]setElementOptions
+	AddedElements   map[string]setElementOptions
 	DeletedElements map[string]struct{}
 	MustFlush       bool
 }
@@ -890,8 +1002,10 @@ type set struct {
 // [Modifier] to create or delete a set.
 type Set struct {
 	Name        string
-	ElementType NftType
+	ElementType SetTyper
 	Flags       []string
+	Size        int
+	Timeout     time.Duration
 }
 
 // See https://wiki.nftables.org/wiki-nftables/index.php/Sets#Named_sets
@@ -902,16 +1016,18 @@ func (sd Set) create(ctx context.Context, t *table) (bool, error) {
 	if _, ok := t.Sets[sd.Name]; ok {
 		return false, fmt.Errorf("set '%s' already exists", sd.Name)
 	}
-	if sd.ElementType == "" {
+	if sd.ElementType == nil {
 		return false, fmt.Errorf("set '%s' must have a type", sd.Name)
 	}
 	s := &set{
 		table:           t,
 		Name:            sd.Name,
-		Elements:        map[string]struct{}{},
-		ElementType:     sd.ElementType,
+		Elements:        map[string]setElementOptions{},
+		ElementTypeExpr: sd.ElementType.setType(),
 		Flags:           slices.Clone(sd.Flags),
-		AddedElements:   map[string]struct{}{},
+		Size:            sd.Size,
+		Timeout:         sd.Timeout,
+		AddedElements:   map[string]setElementOptions{},
 		DeletedElements: map[string]struct{}{},
 		MustFlush:       true,
 	}
@@ -948,6 +1064,10 @@ func (sd Set) delete(ctx context.Context, t *table) (bool, error) {
 type SetElement struct {
 	SetName string
 	Element string
+	Comment string
+	// If true, deleting an element that does not exist or creating an
+	// element that already exists will succeed.
+	Idempotent bool
 }
 
 func (se SetElement) create(ctx context.Context, t *table) (bool, error) {
@@ -958,17 +1078,28 @@ func (se SetElement) create(ctx context.Context, t *table) (bool, error) {
 	if se.Element == "" {
 		return false, fmt.Errorf("cannot add to set '%s', element not specified", se.SetName)
 	}
+	if bad := validateComment(se.Comment); bad != nil {
+		bad.kind = fmt.Sprintf("set '%s' element", se.SetName)
+		bad.name = se.Element
+		return false, bad
+	}
 	if _, ok := s.Elements[se.Element]; ok {
+		if se.Idempotent {
+			return false, nil
+		}
 		return false, fmt.Errorf("set '%s' already contains element '%s'", s.Name, se.Element)
 	}
-	s.Elements[se.Element] = struct{}{}
-	s.AddedElements[se.Element] = struct{}{}
+	s.Elements[se.Element] = setElementOptions{
+		Comment: se.Comment,
+	}
+	s.AddedElements[se.Element] = s.Elements[se.Element]
 	delete(s.DeletedElements, se.Element)
 	log.G(ctx).WithFields(log.Fields{
 		"family":  t.Family,
 		"table":   t.Name,
 		"set":     s.Name,
 		"element": se.Element,
+		"comment": se.Comment,
 	}).Debug("nftables: added set element")
 	return true, nil
 }
@@ -978,7 +1109,11 @@ func (se SetElement) delete(ctx context.Context, t *table) (bool, error) {
 	if s == nil {
 		return false, fmt.Errorf("cannot delete from set '%s', it does not exist", se.SetName)
 	}
-	if _, ok := s.Elements[se.Element]; !ok {
+	oldValue, ok := s.Elements[se.Element]
+	if !ok {
+		if se.Idempotent {
+			return false, nil
+		}
 		return false, fmt.Errorf("cannot delete '%s' from set '%s', it does not exist", se.Element, s.Name)
 	}
 	delete(s.Elements, se.Element)
@@ -989,7 +1124,8 @@ func (se SetElement) delete(ctx context.Context, t *table) (bool, error) {
 		"table":   t.Name,
 		"set":     s.Name,
 		"element": se.Element,
-	}).Debug("nftables: added set element")
+		"comment": oldValue.Comment,
+	}).Debug("nftables: deleted set element")
 	return true, nil
 }
 
@@ -1041,13 +1177,13 @@ func (t *table) updatesApplied() {
 	for _, c := range t.Chains {
 		c.MustFlush = false
 	}
-	for _, m := range t.VMaps {
-		m.AddedElements = map[string]string{}
+	for _, m := range t.Maps {
+		m.AddedElements = map[string]mapValue{}
 		m.DeletedElements = map[string]string{}
 		m.MustFlush = false
 	}
 	for _, s := range t.Sets {
-		s.AddedElements = map[string]struct{}{}
+		s.AddedElements = map[string]setElementOptions{}
 		s.DeletedElements = map[string]struct{}{}
 		s.MustFlush = false
 	}
@@ -1072,15 +1208,66 @@ func (c *chain) Rules() iter.Seq[string] {
 	}
 }
 
+type badCommentError struct {
+	kind, name, disallowed string
+}
+
+func (e badCommentError) Error() string {
+	return fmt.Sprintf("%s '%s' comment contains %q which is not permitted in nftables comments",
+		e.kind, e.name, e.disallowed)
+}
+
+// validateComment checks whether s would break the rendered nftables templates
+// if interpolated as a comment.
+//
+// The nftables ruleset syntax does not support
+// escaping of characters in quoted strings; comments simply cannot contain
+// double-quote or newline characters.
+func validateComment(s string) *badCommentError {
+	i := strings.IndexAny(s, "\r\n\"")
+	if i == -1 {
+		return nil
+	}
+	return &badCommentError{
+		disallowed: strings.Clone(s[i : i+1]),
+	}
+}
+
+// incrementalUpdateTemplText is used with text/template to generate an nftables command file
+// (which will be applied atomically). Updates using this template are always incremental.
+// Steps are:
+//   - declare the table and its sets/maps with empty versions of modified chains, so that
+//     they can be flushed/deleted if they don't yet exist. (They need to be flushed in case
+//     a version of them was left behind by an old incarnation of the daemon. But, it's an
+//     error to flush or delete something that doesn't exist. So, avoid having to parse nft's
+//     stderr to work out what happened by making sure they do exist before flushing.)
+//   - if the table is newly declared, flush rules from its chains
+//   - flush each newly declared map/set
+//   - delete deleted map/set elements
+//   - flush modified chains
+//   - delete deleted chains
+//   - re-populate modified chains
+//   - add new map/set elements
+//
+//go:embed incremental_update.nft.gotmpl
+var incrementalUpdateTemplText string
+
+// reloadTemplText is used with text/template to generate an nftables command file
+// (which will be applied atomically), to fully re-create a table.
+//
+// It first declares the table so if it doesn't already exist, it can be deleted.
+// Then it deletes the table and re-creates it.
+//
+//go:embed reload.nft.gotmpl
+var reloadTemplText string
+
 func parseTemplate() error {
-	var err error
-	incrementalUpdateTempl, err = template.New("ruleset").Parse(incrementalUpdateTemplText)
-	if err != nil {
-		return fmt.Errorf("parsing 'incrementalUpdateTemplText': %w", err)
-	}
-	reloadTempl, err = template.New("ruleset").Parse(reloadTemplText)
-	if err != nil {
-		return fmt.Errorf("parsing 'reloadTemplText': %w", err)
-	}
-	return nil
+	var errs [2]error
+	incrementalUpdateTempl, errs[0] = template.New("incremental_update.nft.gotmpl").Funcs(templateFuncs).Parse(incrementalUpdateTemplText)
+	reloadTempl, errs[1] = template.New("reload.nft.gotmpl").Funcs(templateFuncs).Parse(reloadTemplText)
+	return errors.Join(errs[:]...)
+}
+
+var templateFuncs = template.FuncMap{
+	"join": strings.Join,
 }

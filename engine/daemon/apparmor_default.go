@@ -5,7 +5,7 @@ package daemon
 import (
 	"fmt"
 
-	"github.com/containerd/containerd/v2/pkg/apparmor"
+	"github.com/moby/moby/v2/daemon/internal/rootless"
 	aaprofile "github.com/moby/profiles/apparmor"
 )
 
@@ -17,29 +17,47 @@ const (
 
 // DefaultApparmorProfile returns the name of the default apparmor profile
 func DefaultApparmorProfile() string {
-	if apparmor.HostSupports() {
+	if appArmorSupported() {
 		return defaultAppArmorProfile
 	}
 	return ""
 }
 
-func ensureDefaultAppArmorProfile() error {
-	if apparmor.HostSupports() {
-		loaded, err := aaprofile.IsLoaded(defaultAppArmorProfile)
-		if err != nil {
-			return fmt.Errorf("Could not check if %s AppArmor profile was loaded: %s", defaultAppArmorProfile, err)
-		}
+func loadDefaultAppArmorProfileIfMissing() error {
+	if !defaultAppArmorProfileSupported() {
+		return nil
+	}
 
-		// Nothing to do.
-		if loaded {
-			return nil
-		}
+	loaded, err := aaprofile.IsLoaded(defaultAppArmorProfile)
+	if err != nil {
+		return fmt.Errorf("Could not check if %s AppArmor profile was loaded: %s", defaultAppArmorProfile, err)
+	}
+	if loaded {
+		return nil
+	}
 
-		// Load the profile.
+	return installDefaultAppArmorProfile()
+}
+
+func installDefaultAppArmorProfile() error {
+	if defaultAppArmorProfileSupported() {
 		if err := aaprofile.InstallDefault(defaultAppArmorProfile); err != nil {
 			return fmt.Errorf("AppArmor enabled on system but the %s profile could not be loaded: %s", defaultAppArmorProfile, err)
 		}
 	}
 
 	return nil
+}
+
+func defaultAppArmorProfileSupported() bool {
+	hostSupports := appArmorSupported()
+	if hostSupports {
+		if detachedNetNS, _ := rootless.DetachedNetNS(); detachedNetNS != "" {
+			// "open /sys/kernel/security/apparmor/profiles: permission denied"
+			// (because sysfs is netns-scoped)
+			hostSupports = false
+		}
+	}
+
+	return hostSupports
 }

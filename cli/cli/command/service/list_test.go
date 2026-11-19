@@ -108,7 +108,7 @@ func TestServiceListServiceStatus(t *testing.T) {
 		},
 	}
 
-	matrix := make([]testCase, 0)
+	matrix := make([]testCase, 0, len(tests))
 	for _, quiet := range []bool{false, true} {
 		for _, tc := range tests {
 			if quiet {
@@ -191,10 +191,7 @@ func generateServices(t *testing.T, opts clusterOpts) client.ServiceListResult {
 	t.Helper()
 
 	// Can't have more global tasks than nodes
-	globalTasks := opts.runningTasks
-	if globalTasks > opts.activeNodes {
-		globalTasks = opts.activeNodes
-	}
+	globalTasks := min(opts.runningTasks, opts.activeNodes)
 	return client.ServiceListResult{
 		Items: []swarm.Service{
 			*builders.Service(
@@ -279,7 +276,7 @@ func generateNodes(t *testing.T, activeNodes uint64) client.NodeListResult {
 	t.Helper()
 	nodes := client.NodeListResult{}
 	var i uint64
-	for i = 0; i < activeNodes; i++ {
+	for i = range activeNodes {
 		nodes.Items = append(nodes.Items, swarm.Node{
 			ID:     fmt.Sprintf("node-ready-%d", i),
 			Status: swarm.NodeStatus{State: swarm.NodeStateReady},

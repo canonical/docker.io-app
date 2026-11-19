@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -61,7 +62,7 @@ func newLoginCommand(dockerCLI command.Cli) *cobra.Command {
 	flags := cmd.Flags()
 
 	flags.StringVarP(&opts.user, "username", "u", "", "Username")
-	flags.StringVarP(&opts.password, "password", "p", "", "Password or Personal Access Token (PAT)")
+	flags.StringVarP(&opts.password, "password", "p", "", `Password or Personal Access Token (PAT), or "-" to read from stdin`)
 	flags.BoolVar(&opts.passwordStdin, "password-stdin", false, "Take the Password or Personal Access Token (PAT) from stdin")
 
 	return cmd
@@ -71,8 +72,8 @@ func newLoginCommand(dockerCLI command.Cli) *cobra.Command {
 //
 // TODO(thaJeztah); combine with verifyLoginOptions, but this requires rewrites of many tests.
 func verifyLoginFlags(flags *pflag.FlagSet, opts loginOptions) error {
-	if flags.Changed("password-stdin") {
-		if flags.Changed("password") {
+	if flags.Changed("password-stdin") || opts.password == "-" {
+		if flags.Changed("password") && opts.password != "-" {
 			return errors.New("conflicting options: cannot specify both --password and --password-stdin")
 		}
 		if !flags.Changed("username") {
@@ -88,7 +89,44 @@ func verifyLoginFlags(flags *pflag.FlagSet, opts loginOptions) error {
 	return nil
 }
 
+// readSecretFromStdin reads the secret from r and returns it as a string.
+// It trims terminal line-endings (LF, CRLF, or CR), which may be added when
+// inputting interactively or piping input. The value is otherwise treated as
+// opaque, preserving any other whitespace, including newlines, per [NIST SP 800-63B §5.1.1.2].
+// Note that trimming whitespace may still happen elsewhere (see [NIST SP 800-63B (revision 4) §3.1.1.2]);
+//
+// > Verifiers **MAY** make limited allowances for mistyping (e.g., removing
+// > leading and trailing whitespace characters before verification, allowing
+// > the verification of passwords with differing cases for the leading character)
+//
+// [NIST SP 800-63B §5.1.1.2]: https://pages.nist.gov/800-63-3/sp800-63b.html#memsecretver
+// [NIST SP 800-63B (revision 4) §3.1.1.2]: https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver
+func readSecretFromStdin(r io.Reader) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	if len(b) == 0 {
+		return "", nil
+	}
+
+	for _, eol := range [][]byte{[]byte("\r\n"), []byte("\n"), []byte("\r")} {
+		var ok bool
+		b, ok = bytes.CutSuffix(b, eol)
+		if ok {
+			break
+		}
+	}
+
+	return string(b), nil
+}
+
 func verifyLoginOptions(dockerCLI command.Streams, opts *loginOptions) error {
+	if opts.password == "-" {
+		opts.password = ""
+		opts.passwordStdin = true
+	}
+
 	if opts.password != "" {
 		_, _ = fmt.Fprintln(dockerCLI.Err(), "WARNING! Using --password via the CLI is insecure. Use --password-stdin.")
 	}
@@ -97,14 +135,14 @@ func verifyLoginOptions(dockerCLI command.Streams, opts *loginOptions) error {
 		if opts.user == "" {
 			return errors.New("username is empty")
 		}
-
-		contents, err := io.ReadAll(dockerCLI.In())
+		p, err := readSecretFromStdin(dockerCLI.In())
 		if err != nil {
 			return err
 		}
-
-		opts.password = strings.TrimSuffix(string(contents), "\n")
-		opts.password = strings.TrimSuffix(opts.password, "\r")
+		if strings.TrimSpace(p) == "" {
+			return errors.New("password is empty")
+		}
+		opts.password = p
 	}
 	return nil
 }
@@ -197,7 +235,7 @@ func loginUser(ctx context.Context, dockerCLI command.Cli, opts loginOptions, de
 	// will hit this if you attempt docker login from mintty where stdin
 	// is a pipe, not a character based console.
 	if (opts.user == "" || opts.password == "") && !dockerCLI.In().IsTerminal() {
-		return "", errors.New("error: cannot perform an interactive login from a non TTY device")
+		return "", errors.New("error: cannot perform an interactive login from a non-TTY device")
 	}
 
 	// If we're logging into the index server and the user didn't provide a username or password, use the device flow

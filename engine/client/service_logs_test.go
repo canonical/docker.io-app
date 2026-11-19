@@ -1,15 +1,10 @@
 package client
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"os"
 	"testing"
-	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"gotest.tools/v3/assert"
@@ -46,8 +41,24 @@ func TestServiceLogs(t *testing.T) {
 	}{
 		{
 			doc: "no options",
+		},
+		{
+			// magic "all" value that's used as default in docker/cli
+			// is equivalent to "don't send a tail option".
+			doc: "tail all",
+			options: ServiceLogsOptions{
+				Tail: "all",
+			},
+		},
+		{
+			// TODO(thaJeztah): tail=0 currently means: "return zero lines"; perhaps we should just make it "all"
+			//   or error, similar to "service logs"; https://github.com/moby/moby/blob/4d20b6fe56dfb2b06f4a5dd1f32913215a9c317b/daemon/cluster/services.go#L425-L449
+			doc: "tail 0",
+			options: ServiceLogsOptions{
+				Tail: "0",
+			},
 			expectedQueryParams: map[string]string{
-				"tail": "",
+				"tail": "0",
 			},
 		},
 		{
@@ -69,7 +80,6 @@ func TestServiceLogs(t *testing.T) {
 				Follow:     true,
 			},
 			expectedQueryParams: map[string]string{
-				"tail":       "",
 				"stdout":     "1",
 				"stderr":     "1",
 				"timestamps": "1",
@@ -84,7 +94,6 @@ func TestServiceLogs(t *testing.T) {
 				Since: "1136073600.000000001",
 			},
 			expectedQueryParams: map[string]string{
-				"tail":  "",
 				"since": "1136073600.000000001",
 			},
 		},
@@ -125,25 +134,5 @@ func TestServiceLogs(t *testing.T) {
 			assert.NilError(t, err)
 			assert.Check(t, is.Contains(string(content), "response"))
 		})
-	}
-}
-
-func ExampleClient_ServiceLogs_withTimeout() {
-	client, err := New(FromEnv)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	res, err := client.ServiceLogs(ctx, "service_id", ServiceLogsOptions{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer res.Close()
-
-	_, err = io.Copy(os.Stdout, res)
-	if err != nil && !errors.Is(err, io.EOF) {
-		log.Fatal(err)
 	}
 }

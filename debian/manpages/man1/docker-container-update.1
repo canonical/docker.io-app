@@ -1,5 +1,5 @@
 .nh
-.TH "DOCKER" "1" "Jan 2026" "Docker Community" "Docker User Manuals"
+.TH "DOCKER" "1" "Aug 2026" "Docker Community" "Docker User Manuals"
 
 .SH NAME
 docker-container-update - Update configuration of one or more containers
@@ -16,25 +16,10 @@ resources from their Docker host.  With a single command, you can place
 limits on a single container or on many. To specify more than one container,
 provide space-separated list of container names or IDs.
 
-.PP
-With the exception of the \fB--kernel-memory\fP option, you can specify these
-options on a running or a stopped container. On kernel version older than
-4.6, You can only update \fB--kernel-memory\fP on a stopped container or on
-a running container with kernel memory initialized.
-
 
 .SH OPTIONS
-.SH kernel-memory
-Kernel memory limit (format: \fB<number>[<unit>]\fR, where unit = b, k, m or g)
-
-.PP
-Note that on kernel version older than 4.6, you can not update kernel memory on
-a running container if the container is started without kernel memory initialized,
-in this case, it can only be updated after it's stopped. The new setting takes
-effect when the container is started.
-
 .SH memory
-Memory limit (format: , where unit = b, k, m or g)
+Memory limit (format: \fB<number>[<unit>]\fR, where unit = b, k, m or g)
 
 .PP
 Note that the memory should be smaller than the already set swap memory limit.
@@ -62,46 +47,6 @@ To update multiple resource configurations for multiple containers:
 .EX
 $ docker container update --cpu-shares 512 -m 300M abebf7571666 hopeful_morse
 .EE
-
-.SS Update a container's kernel memory constraints
-You can update a container's kernel memory limit using the \fB--kernel-memory\fP
-option. On kernel version older than 4.6, this option can be updated on a
-running container only if the container was started with \fB--kernel-memory\fP\&.
-If the container was started \fIwithout\fP \fB--kernel-memory\fP you need to stop
-the container before updating kernel memory.
-
-.PP
-NOTE: The \fB--kernel-memory\fP option has been deprecated since Docker 20.10.
-
-.PP
-For example, if you started a container with this command:
-
-.EX
-$ docker run -dit --name test --kernel-memory 50M ubuntu bash
-.EE
-
-.PP
-You can update kernel memory while the container is running:
-
-.EX
-$ docker container update --kernel-memory 80M test
-.EE
-
-.PP
-If you started a container \fIwithout\fP kernel memory initialized:
-
-.EX
-$ docker run -dit --name test2 --memory 300M ubuntu bash
-.EE
-
-.PP
-Update kernel memory of running container \fBtest2\fR will fail. You need to stop
-the container before updating the \fB--kernel-memory\fP setting. The next time you
-start it, the container uses the new value.
-
-.PP
-Kernel version newer than (include) 4.6 does not have this limitation, you
-can use \fB--kernel-memory\fR the same way as other options.
 
 .SS Update a container's restart policy
 You can change a container's restart policy on a running container. The new

@@ -13,7 +13,7 @@ import (
 func newUseCommand(dockerCLI command.Cli) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "use CONTEXT",
-		Short: "Set the current docker context",
+		Short: "Set the default docker context",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]

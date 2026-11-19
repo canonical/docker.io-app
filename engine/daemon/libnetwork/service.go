@@ -3,6 +3,7 @@ package libnetwork
 import (
 	"fmt"
 	"net"
+	strings "strings"
 	"sync"
 
 	"github.com/moby/moby/v2/daemon/libnetwork/internal/setmatrix"
@@ -24,9 +25,11 @@ func (p portConfigs) String() string {
 
 	pc := p[0]
 	str := fmt.Sprintf("%d:%d/%s", pc.PublishedPort, pc.TargetPort, PortConfig_Protocol_name[int32(pc.Protocol)])
+	var strSb27 strings.Builder
 	for _, pc := range p[1:] {
-		str = str + fmt.Sprintf(",%d:%d/%s", pc.PublishedPort, pc.TargetPort, PortConfig_Protocol_name[int32(pc.Protocol)])
+		strSb27.WriteString(fmt.Sprintf(",%d:%d/%s", pc.PublishedPort, pc.TargetPort, PortConfig_Protocol_name[int32(pc.Protocol)]))
 	}
+	str += strSb27.String()
 
 	return str
 }
@@ -46,9 +49,6 @@ type service struct {
 
 	// List of ingress ports exposed by the service
 	ingressPorts portConfigs
-
-	// Service aliases
-	aliases []string
 
 	// This maps tracks for each IP address the list of endpoints ID
 	// associated with it. At stable state the endpoint ID expected is 1
@@ -82,6 +82,11 @@ func (s *service) printIPToEndpoint(ip string) (string, bool) {
 type lbBackend struct {
 	ip       net.IP
 	disabled bool
+	// aliases is the per-task service alias list this backend was registered
+	// with. Stored so rmServiceBinding can decrement the matching counts in
+	// service.aliasRefs even when the caller-supplied list has drifted (e.g.
+	// during cleanupServiceBindings).
+	aliases []string
 }
 
 type loadBalancer struct {
@@ -91,6 +96,16 @@ type loadBalancer struct {
 	// Map of backend IPs backing this loadbalancer on this
 	// network. It is keyed with endpoint ID.
 	backEnds map[string]*lbBackend
+
+	// aliasRefs counts how many backends reference each service alias on
+	// this network. A VIP DNS record for an alias is created on the 0→1
+	// transition and removed on the 1→0 transition, so aliases survive
+	// rolling updates as long as any old or new task still claims them.
+	//
+	// The map is keyed by alias. It lives on loadBalancer (one per network
+	// the service is attached to) because a service can configure different
+	// alias sets on each of its networks.
+	aliasRefs map[string]int
 
 	// Back pointer to service to which the loadbalancer belongs.
 	service *service

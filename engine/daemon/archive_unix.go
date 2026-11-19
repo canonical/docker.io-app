@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/v2/daemon/container"
@@ -101,6 +102,22 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 	container.Lock()
 	defer container.Unlock()
 
+	options := daemon.defaultTarCopyOptions(allowOverwriteDirWithFile)
+	options, cleanup, err := archive.WithProcSelfFD(options)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Decompress the archive before switching into the container's
+	// filesystem to avoid executing decompression binaries (xz, unpigz)
+	// that may have been placed inside the container image.
+	decompressed, err := compression.DecompressStream(content)
+	if err != nil {
+		return err
+	}
+	defer decompressed.Close()
+
 	cfs, err := daemon.openContainerFS(container)
 	if err != nil {
 		return err
@@ -131,19 +148,14 @@ func (daemon *Daemon) containerExtractToDir(container *container.Container, path
 			return err
 		}
 
-		options := daemon.defaultTarCopyOptions(allowOverwriteDirWithFile)
-
 		if copyUIDGID {
-			var err error
-			// tarCopyOptions will appropriately pull in the right uid/gid for the
-			// user/group and will set the options.
-			options, err = daemon.tarCopyOptions(container, allowOverwriteDirWithFile)
-			if err != nil {
+			// Resolve the container user and group from the container's filesystem,
+			// then apply the corresponding host-mapped ownership options.
+			if err := daemon.applyTarCopyUserOptions(container, options); err != nil {
 				return err
 			}
 		}
-
-		return archive.Untar(content, absPath, options)
+		return archive.UntarUncompressed(decompressed, absPath, options)
 	})
 	if err != nil {
 		return err

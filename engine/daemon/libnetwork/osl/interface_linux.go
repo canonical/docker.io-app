@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -92,7 +93,13 @@ func newInterface(ns *Namespace, srcName, dstPrefix, dstName string, options ...
 // host namespace to DstName in a different net namespace with the appropriate
 // network settings.
 type Interface struct {
-	stopCh      chan struct{} // stopCh is closed before the interface is deleted.
+	// stopCh is closed before the interface is deleted, to stop background tasks
+	// that outlive [Namespace.AddInterface] (the unsolicited ARP/NA sends). Close
+	// it via stop(), removal can be attempted more than once for the same
+	// Interface.
+	stopCh   chan struct{}
+	stopOnce sync.Once
+
 	srcName     string
 	dstPrefix   string
 	dstName     string
@@ -170,6 +177,12 @@ func (i *Interface) Routes() []*net.IPNet {
 func (i *Interface) Remove() error {
 	nameSpace := i.ns
 	return nameSpace.RemoveInterface(i)
+}
+
+// stop stops the interface's background tasks. It is safe to call more than
+// once, and from multiple goroutines.
+func (i *Interface) stop() {
+	i.stopOnce.Do(func() { close(i.stopCh) })
 }
 
 // Statistics returns the sandbox's side veth interface statistics.
@@ -262,7 +275,7 @@ func (n *Namespace) AddInterface(ctx context.Context, srcName, dstPrefix, dstNam
 		if nerr := n.nlHandle.LinkSetName(iface, i.SrcName()); nerr != nil {
 			log.G(ctx).Errorf("renaming interface (%s->%s) failed, %v after config error %v", i.DstName(), i.SrcName(), nerr, err)
 		}
-		if nerr := n.nlHandle.LinkSetNsFd(iface, ns.ParseHandlerInt()); nerr != nil {
+		if nerr := n.nlHandle.LinkSetNsFd(iface, int(ns.NsHandle())); nerr != nil {
 			log.G(ctx).Errorf("moving interface %s to host ns failed, %v, after config error %v", i.SrcName(), nerr, err)
 		}
 		return err
@@ -455,6 +468,7 @@ func waitForIfUpped(ctx context.Context, ns netns.NsHandle, ifIndex int) (bool, 
 				}
 			case <-drainTimerC:
 				log.G(ctx).Warn("timeout while waiting for LinkSubscribe to terminate")
+				return
 			}
 		}
 	}()
@@ -665,6 +679,17 @@ func (n *Namespace) advertiseAddrs(ctx context.Context, ifIndex int, i *Interfac
 	defer span.End()
 
 	mac := i.MacAddress()
+	// If MAC is not stored in the interface struct, get it from the actual link.
+	// This can happen with some network drivers (e.g., SR-IOV, macvlan) that don't
+	// store the MAC in the endpoint configuration.
+	if len(mac) == 0 {
+		link, err := nlh.LinkByIndex(ifIndex)
+		if err != nil {
+			log.G(ctx).WithFields(log.Fields{"error": err, "ifi": ifIndex}).Warn("Failed to lookup link by index to determine MAC address; treating as no MAC to advertise")
+		} else if hw := link.Attrs().HardwareAddr; len(hw) > 0 {
+			mac = hw
+		}
+	}
 	address4 := i.Address()
 	address6 := i.AddressIPv6()
 	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(log.Fields{
@@ -681,7 +706,7 @@ func (n *Namespace) advertiseAddrs(ctx context.Context, ifIndex int, i *Interfac
 		log.G(ctx).Debug("No IP addresses to advertise")
 		return nil
 	}
-	if mac == nil {
+	if len(mac) == 0 {
 		// Nothing to do - for example, a layer-3 ipvlan.
 		log.G(ctx).Debug("No MAC address to advertise")
 		return nil
@@ -691,7 +716,7 @@ func (n *Namespace) advertiseAddrs(ctx context.Context, ifIndex int, i *Interfac
 		return nil
 	}
 
-	arpSender, naSender := n.prepAdvertiseAddrs(ctx, i, ifIndex)
+	arpSender, naSender := n.prepAdvertiseAddrs(ctx, i, ifIndex, mac)
 	if arpSender == nil && naSender == nil {
 		return nil
 	}
@@ -740,9 +765,13 @@ func (n *Namespace) advertiseAddrs(ctx context.Context, ifIndex int, i *Interfac
 		return errors.Join(errs...)
 	}
 
-	// Send an initial message. If it fails, skip the resends.
+	// Send an initial message. If it fails, log a warning but don't fail container
+	// creation - NA is an optimization, neighbors will still discover addresses via
+	// normal NDP solicitation. This can happen with L3 ipvlan which doesn't support
+	// multicast.
 	if err := send(ctx); err != nil {
-		return err
+		log.G(ctx).WithError(err).Warn("Failed to send initial neighbor advertisement")
+		return nil
 	}
 	if i.advertiseAddrNMsgs == 1 {
 		return nil
@@ -775,20 +804,20 @@ func (n *Namespace) advertiseAddrs(ctx context.Context, ifIndex int, i *Interfac
 	return nil
 }
 
-func (n *Namespace) prepAdvertiseAddrs(ctx context.Context, i *Interface, ifIndex int) (*l2disco.UnsolARP, *l2disco.UnsolNA) {
+func (n *Namespace) prepAdvertiseAddrs(ctx context.Context, i *Interface, ifIndex int, mac net.HardwareAddr) (*l2disco.UnsolARP, *l2disco.UnsolNA) {
 	var ua *l2disco.UnsolARP
 	var un *l2disco.UnsolNA
 	if err := n.InvokeFunc(func() {
 		if address4 := i.Address(); address4 != nil {
 			var err error
-			ua, err = l2disco.NewUnsolARP(ctx, address4.IP, i.MacAddress(), ifIndex)
+			ua, err = l2disco.NewUnsolARP(ctx, address4.IP, mac, ifIndex)
 			if err != nil {
 				log.G(ctx).WithError(err).Warn("Failed to prepare unsolicited ARP")
 			}
 		}
 		if address6 := i.AddressIPv6(); address6 != nil {
 			var err error
-			un, err = l2disco.NewUnsolNA(ctx, address6.IP, i.MacAddress(), ifIndex)
+			un, err = l2disco.NewUnsolNA(ctx, address6.IP, mac, ifIndex)
 			if err != nil {
 				log.G(ctx).WithError(err).Warn("Failed to prepare unsolicited NA")
 			}
@@ -802,8 +831,14 @@ func (n *Namespace) prepAdvertiseAddrs(ctx context.Context, i *Interface, ifInde
 
 // RemoveInterface removes an interface from the namespace by renaming to
 // original name and moving it out of the sandbox.
+//
+// On failure, i is left in the Namespace's list of interfaces - the interface
+// may still be present in the namespace, and its name is still reserved. So,
+// callers that iterate over [Namespace.Interfaces] will try to remove i again
+// during a later teardown. RemoveInterface must therefore tolerate being called
+// more than once for the same Interface.
 func (n *Namespace) RemoveInterface(i *Interface) error {
-	close(i.stopCh)
+	i.stop()
 
 	// Find the network interface identified by the DstName attribute.
 	iface, err := n.nlHandle.LinkByName(i.DstName())
@@ -830,8 +865,9 @@ func (n *Namespace) RemoveInterface(i *Interface) error {
 		}
 	} else if !n.isDefault {
 		// Move the network interface to caller namespace.
+		//
 		// TODO(aker): What's this really doing? There are no calls to LinkDel in this package: is this code really used? (Interface.Remove() has 3 callers); see https://github.com/moby/moby/pull/46315/commits/108595c2fe852a5264b78e96f9e63cda284990a6#r1331265335
-		if err := n.nlHandle.LinkSetNsFd(iface, ns.ParseHandlerInt()); err != nil {
+		if err := n.nlHandle.LinkSetNsFd(iface, int(ns.NsHandle())); err != nil {
 			log.G(context.TODO()).Debugf("LinkSetNsFd failed for interface %s: %v", i.SrcName(), err)
 			return err
 		}

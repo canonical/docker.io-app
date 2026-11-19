@@ -19,7 +19,6 @@ import (
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/defaults"
 	"github.com/distribution/reference"
-	"github.com/golang/protobuf/ptypes/timestamp"
 	apitypes "github.com/moby/buildkit/api/types"
 	"github.com/moby/buildkit/cache"
 	cacheutil "github.com/moby/buildkit/cache/util"
@@ -27,7 +26,6 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/executor"
-	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend"
 	"github.com/moby/buildkit/frontend/dockerui"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
@@ -61,10 +59,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
-)
-
-const (
-	keyDevel = "gateway-devel"
+	timestamp "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func NewGatewayFrontend(workers worker.Infos, allowedRepositories []string) (frontend.Frontend, error) {
@@ -87,16 +82,6 @@ func NewGatewayFrontend(workers worker.Infos, allowedRepositories []string) (fro
 type gatewayFrontend struct {
 	workers             worker.Infos
 	allowedRepositories []string
-}
-
-func filterPrefix(opts map[string]string, pfx string) map[string]string {
-	m := map[string]string{}
-	for k, v := range opts {
-		if after, ok := strings.CutPrefix(k, pfx); ok {
-			m[after] = v
-		}
-	}
-	return m
 }
 
 func (gf *gatewayFrontend) checkSourceIsAllowed(source string) error {
@@ -122,12 +107,15 @@ func (gf *gatewayFrontend) checkSourceIsAllowed(source string) error {
 }
 
 func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.FrontendLLBBridge, exec executor.Executor, opts map[string]string, inputs map[string]*opspb.Definition, sid string, sm *session.Manager) (*frontend.Result, error) {
+	if _, isDevel := opts[frontend.KeyDevelDeprecated]; isDevel {
+		return nil, errors.New("development gateway is no longer supported")
+	}
+
 	source, ok := opts[frontend.KeySource]
 	if !ok {
 		return nil, errors.Errorf("no source specified for gateway")
 	}
 
-	_, isDevel := opts[keyDevel]
 	var img dockerspec.DockerOCIImage
 	var mfstDigest digest.Digest
 	var rootFS cache.MutableRef
@@ -140,142 +128,99 @@ func (gf *gatewayFrontend) Solve(ctx context.Context, llbBridge frontend.Fronten
 		return nil, err
 	}
 
-	if isDevel {
-		devRes, err := llbBridge.Solve(ctx,
-			frontend.SolveRequest{
-				Frontend:       source,
-				FrontendOpt:    filterPrefix(opts, "gateway-"),
-				FrontendInputs: inputs,
-			}, "gateway:"+sid)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			ctx := context.WithoutCancel(ctx)
-			devRes.EachRef(func(ref solver.ResultProxy) error {
-				return ref.Release(ctx)
-			})
-		}()
-		if devRes.Ref == nil {
-			return nil, errors.Errorf("development gateway didn't return default result")
-		}
-		frontendDef = devRes.Ref.Definition()
-		res, err := devRes.Ref.Result(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		workerRef, ok := res.Sys().(*worker.WorkerRef)
-		if !ok {
-			return nil, errors.Errorf("invalid ref: %T", res.Sys())
-		}
-
-		rootFS, err = workerRef.Worker.CacheManager().New(ctx, workerRef.ImmutableRef, session.NewGroup(sid))
-		if err != nil {
-			return nil, err
-		}
-		defer rootFS.Release(context.TODO())
-		config, ok := devRes.Metadata[exptypes.ExporterImageConfigKey]
-		if ok {
-			if err := json.Unmarshal(config, &img); err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		c, err := forwarder.LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, sid, sm)
-		if err != nil {
-			return nil, err
-		}
-		dc, err := dockerui.NewClient(c)
-		if err != nil {
-			return nil, err
-		}
-		nc, err := dc.NamedContext(source, dockerui.ContextOpt{
-			CaptureDigest: &mfstDigest,
-		})
-		if err != nil {
-			return nil, err
-		}
-		var st *llb.State
-		if nc != nil {
-			var dockerImage *dockerspec.DockerOCIImage
-			st, dockerImage, err = nc.Load(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if dockerImage != nil {
-				img = *dockerImage
-			}
-		}
-		if st == nil {
-			sourceRef, err := reference.ParseNormalizedNamed(source)
-			if err != nil {
-				return nil, err
-			}
-
-			imr := sourceresolver.NewImageMetaResolver(llbBridge)
-			ref, dgst, config, err := imr.ResolveImageConfig(ctx, reference.TagNameOnly(sourceRef).String(), sourceresolver.Opt{})
-			if err != nil {
-				return nil, err
-			}
-
-			sourceRef, err = reference.ParseNormalizedNamed(ref)
-			if err != nil {
-				return nil, err
-			}
-
-			mfstDigest = dgst
-
-			if err := json.Unmarshal(config, &img); err != nil {
-				return nil, err
-			}
-
-			if dgst != "" {
-				sourceRef, err = reference.WithDigest(sourceRef, dgst)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			src := llb.Image(sourceRef.String(), &markTypeFrontend{})
-			st = &src
-		}
-
-		def, err := st.Marshal(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		res, err := llbBridge.Solve(ctx, frontend.SolveRequest{
-			Definition: def.ToPB(),
-		}, sid)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			ctx := context.WithoutCancel(ctx)
-			res.EachRef(func(ref solver.ResultProxy) error {
-				return ref.Release(ctx)
-			})
-		}()
-		if res.Ref == nil {
-			return nil, errors.Errorf("gateway source didn't return default result")
-		}
-		frontendDef = res.Ref.Definition()
-		r, err := res.Ref.Result(ctx)
-		if err != nil {
-			return nil, err
-		}
-		workerRef, ok := r.Sys().(*worker.WorkerRef)
-		if !ok {
-			return nil, errors.Errorf("invalid ref: %T", r.Sys())
-		}
-		rootFS, err = workerRef.Worker.CacheManager().New(ctx, workerRef.ImmutableRef, session.NewGroup(sid))
-		if err != nil {
-			return nil, err
-		}
-		defer rootFS.Release(context.TODO())
+	c, err := forwarder.LLBBridgeToGatewayClient(ctx, llbBridge, exec, opts, inputs, gf.workers, sid, sm)
+	if err != nil {
+		return nil, err
 	}
+	dc, err := dockerui.NewClient(c)
+	if err != nil {
+		return nil, err
+	}
+	nc, err := dc.NamedContext(source, dockerui.ContextOpt{
+		CaptureDigest: &mfstDigest,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var st *llb.State
+	if nc != nil {
+		var dockerImage *dockerspec.DockerOCIImage
+		st, dockerImage, err = nc.Load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if dockerImage != nil {
+			img = *dockerImage
+		}
+	}
+	if st == nil {
+		sourceRef, err := reference.ParseNormalizedNamed(source)
+		if err != nil {
+			return nil, err
+		}
+
+		imr := sourceresolver.NewImageMetaResolver(llbBridge)
+		ref, dgst, config, err := imr.ResolveImageConfig(ctx, reference.TagNameOnly(sourceRef).String(), sourceresolver.Opt{})
+		if err != nil {
+			return nil, err
+		}
+
+		sourceRef, err = reference.ParseNormalizedNamed(ref)
+		if err != nil {
+			return nil, err
+		}
+
+		mfstDigest = dgst
+
+		if err := json.Unmarshal(config, &img); err != nil {
+			return nil, err
+		}
+
+		if dgst != "" {
+			sourceRef, err = reference.WithDigest(sourceRef, dgst)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		src := llb.Image(sourceRef.String(), &markTypeFrontend{})
+		st = &src
+	}
+
+	def, err := st.Marshal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := llbBridge.Solve(ctx, frontend.SolveRequest{
+		Definition: def.ToPB(),
+	}, sid)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		ctx := context.WithoutCancel(ctx)
+		res.EachRef(func(ref solver.ResultProxy) error {
+			return ref.Release(ctx)
+		})
+	}()
+	if res.Ref == nil {
+		return nil, errors.Errorf("gateway source didn't return default result")
+	}
+	frontendDef = res.Ref.Definition()
+	r, err := res.Ref.Result(ctx)
+	if err != nil {
+		return nil, err
+	}
+	workerRef, ok := r.Sys().(*worker.WorkerRef)
+	if !ok {
+		return nil, errors.Errorf("invalid ref: %T", r.Sys())
+	}
+	rootFS, err = workerRef.Worker.CacheManager().New(ctx, workerRef.ImmutableRef, session.NewGroup(sid))
+	if err != nil {
+		return nil, err
+	}
+	defer rootFS.Release(context.TODO())
 
 	args := []string{"/run"}
 	env := []string{}
@@ -377,7 +322,7 @@ func metadataMount(def *opspb.Definition) (*executor.Mount, func(), error) {
 		return nil, nil, err
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "frontend.bin"), dt, 0400); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "frontend.bin"), dt, 0o400); err != nil {
 		return nil, nil, err
 	}
 
@@ -423,6 +368,10 @@ func (lbf *llbBridgeForwarder) Discard() {
 		lbf.ReleaseContainer(context.TODO(), &pb.ReleaseContainerRequest{
 			ContainerID: ctr,
 		})
+	}
+
+	for _, mount := range lbf.mounts {
+		mount.Unmount()
 	}
 
 	for id, workerRef := range lbf.workerRefByID {
@@ -495,6 +444,7 @@ func newBridgeForwarder(ctx context.Context, llbBridge frontend.FrontendLLBBridg
 		sid:           sid,
 		sm:            sm,
 		ctrs:          map[string]gwclient.Container{},
+		mounts:        map[string]snapshot.Mounter{},
 		executor:      exec,
 	}
 	return lbf
@@ -608,8 +558,10 @@ type llbBridgeForwarder struct {
 	sm                *session.Manager
 	executor          executor.Executor
 	*pipe
-	ctrs   map[string]gwclient.Container
-	ctrsMu sync.Mutex
+	ctrs     map[string]gwclient.Container
+	ctrsMu   sync.Mutex
+	mounts   map[string]snapshot.Mounter
+	mountsMu sync.Mutex
 }
 
 func (lbf *llbBridgeForwarder) ResolveSourceMeta(ctx context.Context, req *pb.ResolveSourceMetaRequest) (*pb.ResolveSourceMetaResponse, error) {
@@ -639,6 +591,7 @@ func (lbf *llbBridgeForwarder) ResolveSourceMeta(ctx context.Context, req *pb.Re
 	if req.Image != nil {
 		resolveopt.ImageOpt.NoConfig = req.Image.NoConfig
 		resolveopt.ImageOpt.AttestationChain = req.Image.AttestationChain
+		resolveopt.ImageOpt.ResolveAttestations = slices.Clone(req.Image.ResolveAttestations)
 	}
 	resolveopt.OCILayoutOpt = &sourceresolver.ResolveOCILayoutOpt{
 		Platform: platform,
@@ -648,48 +601,20 @@ func (lbf *llbBridgeForwarder) ResolveSourceMeta(ctx context.Context, req *pb.Re
 			ReturnObject: req.Git.ReturnObject,
 		}
 	}
+	if req.HTTP != nil && req.HTTP.ChecksumRequest != nil {
+		resolveopt.HTTPOpt = &sourceresolver.ResolveHTTPOpt{
+			ChecksumReq: &sourceresolver.ResolveHTTPChecksumRequest{
+				Algo:   fromPBHTTPChecksumAlgo(req.HTTP.ChecksumRequest.Algo),
+				Suffix: slices.Clone(req.HTTP.ChecksumRequest.Suffix),
+			},
+		}
+	}
 
 	resp, err := lbf.llbBridge.ResolveSourceMetadata(ctx, req.Source, resolveopt)
 	if err != nil {
 		return nil, err
 	}
-
-	r := &pb.ResolveSourceMetaResponse{
-		Source: resp.Op,
-	}
-
-	if resp.Image != nil {
-		r.Image = &pb.ResolveSourceImageResponse{
-			Digest: string(resp.Image.Digest),
-			Config: resp.Image.Config,
-		}
-		if resp.Image.AttestationChain != nil {
-			r.Image.AttestationChain = toPBAttestationChain(resp.Image.AttestationChain)
-		}
-	}
-	if resp.Git != nil {
-		r.Git = &pb.ResolveSourceGitResponse{
-			Checksum:       resp.Git.Checksum,
-			Ref:            resp.Git.Ref,
-			CommitChecksum: resp.Git.CommitChecksum,
-			CommitObject:   resp.Git.CommitObject,
-			TagObject:      resp.Git.TagObject,
-		}
-	}
-	if resp.HTTP != nil {
-		var lastModified *timestamp.Timestamp
-		if resp.HTTP.LastModified != nil {
-			lastModified = &timestamp.Timestamp{
-				Seconds: resp.HTTP.LastModified.Unix(),
-			}
-		}
-		r.HTTP = &pb.ResolveSourceHTTPResponse{
-			Checksum:     resp.HTTP.Digest.String(),
-			Filename:     resp.HTTP.Filename,
-			LastModified: lastModified,
-		}
-	}
-	return r, nil
+	return ToPBResolveSourceMetaResponse(resp), nil
 }
 
 func (lbf *llbBridgeForwarder) ResolveImageConfig(ctx context.Context, req *pb.ResolveImageConfigRequest) (*pb.ResolveImageConfigResponse, error) {
@@ -782,8 +707,17 @@ func (lbf *llbBridgeForwarder) registerResultIDs(results ...solver.Result) (ids 
 		if !ok {
 			return ids, errors.Errorf("unexpected type for result, got %T", res.Sys())
 		}
-		ids[i] = workerRef.ID()
-		lbf.workerRefByID[workerRef.ID()] = workerRef
+		id := workerRef.ID()
+		ids[i] = id
+		if existing, ok := lbf.workerRefByID[id]; ok {
+			if existing != workerRef {
+				if err := workerRef.Release(context.TODO()); err != nil {
+					return ids, errors.WithStack(err)
+				}
+			}
+			continue
+		}
+		lbf.workerRefByID[id] = workerRef
 	}
 	return ids, nil
 }
@@ -880,6 +814,7 @@ func (lbf *llbBridgeForwarder) Solve(ctx context.Context, req *pb.SolveRequest) 
 			for _, att := range atts {
 				pbAtt, err := gwclient.AttestationToPB(&att)
 				if err != nil {
+					lbf.mu.Unlock()
 					return nil, err
 				}
 
@@ -959,10 +894,45 @@ func (lbf *llbBridgeForwarder) getImmutableRef(ctx context.Context, id string) (
 	return workerRef.ImmutableRef, nil
 }
 
+func (lbf *llbBridgeForwarder) getMounter(ctx context.Context, id string, ref cache.ImmutableRef) (snapshot.Mounter, error) {
+	lbf.mountsMu.Lock()
+	defer lbf.mountsMu.Unlock()
+
+	mounter, ok := lbf.mounts[id]
+	if ok {
+		return mounter, nil
+	}
+	var mountable snapshot.Mountable
+	if ref != nil {
+		var err error
+		mountable, err = ref.Mount(ctx, true, session.NewGroup(lbf.sid))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	mounter = snapshot.LocalMounter(mountable)
+	lbf.mounts[id] = mounter
+	return mounter, nil
+}
+
+func (lbf *llbBridgeForwarder) getMount(ctx context.Context, id string, ref cache.ImmutableRef) (string, error) {
+	mounter, err := lbf.getMounter(ctx, id, ref)
+	if err != nil {
+		return "", err
+	}
+	// corresponding Unmount call is made in Discard()
+	return mounter.Mount()
+}
+
 func (lbf *llbBridgeForwarder) ReadFile(ctx context.Context, req *pb.ReadFileRequest) (*pb.ReadFileResponse, error) {
 	ctx = tracing.ContextWithSpanFromContext(ctx, lbf.callCtx)
 
 	ref, err := lbf.getImmutableRef(ctx, req.Ref)
+	if err != nil {
+		return nil, err
+	}
+	root, err := lbf.getMount(ctx, req.Ref, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -977,15 +947,7 @@ func (lbf *llbBridgeForwarder) ReadFile(ctx context.Context, req *pb.ReadFileReq
 		}
 	}
 
-	var m snapshot.Mountable
-	if ref != nil {
-		m, err = ref.Mount(ctx, true, session.NewGroup(lbf.sid))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	dt, err := cacheutil.ReadFile(ctx, m, newReq)
+	dt, err := cacheutil.ReadFile(ctx, root, newReq)
 	if err != nil {
 		return nil, lbf.wrapSolveError(err)
 	}
@@ -1000,19 +962,17 @@ func (lbf *llbBridgeForwarder) ReadDir(ctx context.Context, req *pb.ReadDirReque
 	if err != nil {
 		return nil, err
 	}
+	root, err := lbf.getMount(ctx, req.Ref, ref)
+	if err != nil {
+		return nil, err
+	}
 
 	newReq := cacheutil.ReadDirRequest{
 		Path:           req.DirPath,
 		IncludePattern: req.IncludePattern,
 	}
-	var m snapshot.Mountable
-	if ref != nil {
-		m, err = ref.Mount(ctx, true, session.NewGroup(lbf.sid))
-		if err != nil {
-			return nil, err
-		}
-	}
-	entries, err := cacheutil.ReadDir(ctx, m, newReq)
+
+	entries, err := cacheutil.ReadDir(ctx, root, newReq)
 	if err != nil {
 		return nil, lbf.wrapSolveError(err)
 	}
@@ -1027,14 +987,12 @@ func (lbf *llbBridgeForwarder) StatFile(ctx context.Context, req *pb.StatFileReq
 	if err != nil {
 		return nil, err
 	}
-	var m snapshot.Mountable
-	if ref != nil {
-		m, err = ref.Mount(ctx, true, session.NewGroup(lbf.sid))
-		if err != nil {
-			return nil, err
-		}
+	root, err := lbf.getMount(ctx, req.Ref, ref)
+	if err != nil {
+		return nil, err
 	}
-	st, err := cacheutil.StatFile(ctx, m, req.Path)
+
+	st, err := cacheutil.StatFile(ctx, root, req.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -1219,6 +1177,93 @@ func (lbf *llbBridgeForwarder) NewContainer(ctx context.Context, in *pb.NewConta
 	}
 	lbf.ctrs[in.ContainerID] = ctr
 	return &pb.NewContainerResponse{}, nil
+}
+
+func (lbf *llbBridgeForwarder) ReadFileContainer(ctx context.Context, in *pb.ReadFileRequest) (*pb.ReadFileResponse, error) {
+	bklog.G(ctx).Debugf("|<--- ReadFileContainer %s@%d", in.Ref, in.MountIndex)
+	lbf.ctrsMu.Lock()
+	ctr, ok := lbf.ctrs[in.Ref]
+	lbf.ctrsMu.Unlock()
+	if !ok {
+		return nil, errors.Errorf("container details for %s@%d not found", in.Ref, in.MountIndex)
+	}
+
+	var fileRange *gwclient.FileRange
+	if in.Range != nil {
+		fileRange = &gwclient.FileRange{
+			Length: int(in.Range.Length),
+			Offset: int(in.Range.Offset),
+		}
+	}
+	req := gwclient.ReadContainerRequest{
+		ReadRequest: gwclient.ReadRequest{
+			Filename: in.FilePath,
+			Range:    fileRange,
+		},
+		MountIndex: int(in.MountIndex),
+	}
+
+	data, err := ctr.ReadFile(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.ReadFileResponse{
+		Data: data,
+	}, nil
+}
+
+func (lbf *llbBridgeForwarder) ReadDirContainer(ctx context.Context, in *pb.ReadDirRequest) (*pb.ReadDirResponse, error) {
+	bklog.G(ctx).Debugf("|<--- ReadDirContainer %s@%d", in.Ref, in.MountIndex)
+	lbf.ctrsMu.Lock()
+	ctr, ok := lbf.ctrs[in.Ref]
+	lbf.ctrsMu.Unlock()
+	if !ok {
+		return nil, errors.Errorf("container details for %s@%d not found", in.Ref, in.MountIndex)
+	}
+
+	req := gwclient.ReadDirContainerRequest{
+		ReadDirRequest: gwclient.ReadDirRequest{
+			Path:           in.DirPath,
+			IncludePattern: in.IncludePattern,
+		},
+		MountIndex: int(in.MountIndex),
+	}
+
+	files, err := ctr.ReadDir(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.ReadDirResponse{
+		Entries: files,
+	}, nil
+}
+
+func (lbf *llbBridgeForwarder) StatFileContainer(ctx context.Context, in *pb.StatFileRequest) (*pb.StatFileResponse, error) {
+	bklog.G(ctx).Debugf("|<--- StatFileContainer %s@%d", in.Ref, in.MountIndex)
+	lbf.ctrsMu.Lock()
+	ctr, ok := lbf.ctrs[in.Ref]
+	lbf.ctrsMu.Unlock()
+	if !ok {
+		return nil, errors.Errorf("container details for %s@%d not found", in.Ref, in.MountIndex)
+	}
+
+	req := gwclient.StatContainerRequest{
+		StatRequest: gwclient.StatRequest{
+			Path: in.Path,
+		},
+		MountIndex: int(in.MountIndex),
+	}
+
+	stat, err := ctr.StatFile(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.StatFileResponse{
+		Stat: stat,
+	}, nil
 }
 
 func (lbf *llbBridgeForwarder) ReleaseContainer(ctx context.Context, in *pb.ReleaseContainerRequest) (*pb.ReleaseContainerResponse, error) {
@@ -1535,11 +1580,19 @@ func (lbf *llbBridgeForwarder) ExecProcess(srv pb.LLBBridge_ExecProcessServer) e
 					return stack.Enable(err)
 				})
 
+				// startedSent gates the proc.Wait goroutine until
+				// Started is sent and output readers are spawned,
+				// preventing Exit-before-Started and a deadlock
+				// where pio.Close() races with reader setup.
+				startedSent := make(chan struct{})
+
 				eg.Go(func() error {
 					defer func() {
 						pio.Close()
 					}()
 					err := proc.Wait()
+
+					<-startedSent
 
 					var statusCode uint32
 					var exitError *pb.ExitError
@@ -1590,6 +1643,7 @@ func (lbf *llbBridgeForwarder) ExecProcess(srv pb.LLBBridge_ExecProcessServer) e
 					},
 				})
 				if err != nil {
+					close(startedSent)
 					return stack.Enable(err)
 				}
 
@@ -1597,7 +1651,6 @@ func (lbf *llbBridgeForwarder) ExecProcess(srv pb.LLBBridge_ExecProcessServer) e
 				// StartedMessage so that Fd output will not potentially arrive
 				// to the client before "Started" as the container starts up.
 				for fd, file := range pio.serverReaders {
-					fd, file := fd, file
 					eg.Go(func() error {
 						defer func() {
 							file.Close()
@@ -1634,6 +1687,7 @@ func (lbf *llbBridgeForwarder) ExecProcess(srv pb.LLBBridge_ExecProcessServer) e
 						return stack.Enable(err)
 					})
 				}
+				close(startedSent)
 			}
 		}
 	})
@@ -1703,6 +1757,64 @@ func getCaps(label string) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+func ToPBResolveSourceMetaResponse(in *sourceresolver.MetaResponse) *pb.ResolveSourceMetaResponse {
+	r := &pb.ResolveSourceMetaResponse{
+		Source: in.Op,
+	}
+
+	if in.Image != nil {
+		r.Image = &pb.ResolveSourceImageResponse{
+			Digest: string(in.Image.Digest),
+			Config: in.Image.Config,
+		}
+		if in.Image.AttestationChain != nil {
+			r.Image.AttestationChain = toPBAttestationChain(in.Image.AttestationChain)
+		}
+	}
+	if in.Git != nil {
+		r.Git = &pb.ResolveSourceGitResponse{
+			Checksum:       in.Git.Checksum,
+			Ref:            in.Git.Ref,
+			CommitChecksum: in.Git.CommitChecksum,
+			CommitObject:   in.Git.CommitObject,
+			TagObject:      in.Git.TagObject,
+		}
+	}
+	if in.HTTP != nil {
+		var lastModified *timestamp.Timestamp
+		if in.HTTP.LastModified != nil {
+			lastModified = &timestamp.Timestamp{
+				Seconds: in.HTTP.LastModified.Unix(),
+			}
+		}
+		r.HTTP = &pb.ResolveSourceHTTPResponse{
+			Checksum:     in.HTTP.Digest.String(),
+			Filename:     in.HTTP.Filename,
+			LastModified: lastModified,
+		}
+		if in.HTTP.ChecksumResponse != nil {
+			r.HTTP.ChecksumResponse = &pb.ChecksumResponse{
+				Digest: in.HTTP.ChecksumResponse.Digest,
+				Suffix: slices.Clone(in.HTTP.ChecksumResponse.Suffix),
+			}
+		}
+	}
+	return r
+}
+
+func fromPBHTTPChecksumAlgo(in pb.ChecksumRequest_ChecksumAlgo) sourceresolver.ResolveHTTPChecksumAlgo {
+	switch in {
+	case pb.ChecksumRequest_CHECKSUM_ALGO_SHA256:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA256
+	case pb.ChecksumRequest_CHECKSUM_ALGO_SHA384:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA384
+	case pb.ChecksumRequest_CHECKSUM_ALGO_SHA512:
+		return sourceresolver.ResolveHTTPChecksumAlgoSHA512
+	default:
+		return sourceresolver.ResolveHTTPChecksumAlgo(in)
+	}
 }
 
 func toPBAttestationChain(ac *sourceresolver.AttestationChain) *pb.AttestationChain {

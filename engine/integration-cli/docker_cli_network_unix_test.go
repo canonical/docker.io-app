@@ -296,23 +296,6 @@ func getNwResource(t *testing.T, name string) *network.Inspect {
 	assert.NilError(t, err)
 	return &nr[0]
 }
-
-func (s *DockerNetworkSuite) TestDockerNetworkLsDefault(c *testing.T) {
-	defaults := []string{"bridge", "host", "none"}
-	for _, nn := range defaults {
-		assertNwIsAvailable(c, nn)
-	}
-}
-
-func (s *DockerNetworkSuite) TestDockerNetworkCreatePredefined(c *testing.T) {
-	predefined := []string{"bridge", "host", "none", "default"}
-	for _, nw := range predefined {
-		// predefined networks can't be created again
-		out, _, err := dockerCmdWithError("network", "create", nw)
-		assert.ErrorContains(c, err, "", out)
-	}
-}
-
 func (s *DockerNetworkSuite) TestDockerNetworkCreateHostBind(c *testing.T) {
 	cli.DockerCmd(c, "network", "create", "--subnet=192.168.10.0/24", "--gateway=192.168.10.1", "-o", "com.docker.network.bridge.host_binding_ipv4=192.168.10.1", "testbind")
 	assertNwIsAvailable(c, "testbind")
@@ -321,15 +304,6 @@ func (s *DockerNetworkSuite) TestDockerNetworkCreateHostBind(c *testing.T) {
 	cli.WaitRun(c, id)
 	out := cli.DockerCmd(c, "ps").Stdout()
 	assert.Assert(c, is.Contains(out, "192.168.10.1:5000->5000/tcp"))
-}
-
-func (s *DockerNetworkSuite) TestDockerNetworkRmPredefined(c *testing.T) {
-	predefined := []string{"bridge", "host", "none", "default"}
-	for _, nw := range predefined {
-		// predefined networks can't be removed
-		out, _, err := dockerCmdWithError("network", "rm", nw)
-		assert.ErrorContains(c, err, "", out)
-	}
 }
 
 func (s *DockerNetworkSuite) TestDockerNetworkLsFilter(c *testing.T) {
@@ -377,7 +351,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkLsFilter(c *testing.T) {
 
 	out = cli.DockerCmd(c, "network", "ls", "-f", "label=nonexistent").Stdout()
 	outArr := strings.Split(strings.TrimSpace(out), "\n")
-	assert.Equal(c, len(outArr), 1, fmt.Sprintf("%s\n", out))
+	assert.Equal(c, len(outArr), 1, out+"\n")
 
 	out = cli.DockerCmd(c, "network", "ls", "-f", "driver=null").Stdout()
 	assertNwList(c, out, []string{"none"})
@@ -1123,7 +1097,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkHostModeUngracefulDaemonRestart(c 
 	s.d.StartWithBusybox(ctx, c)
 
 	// Run a few containers on host network
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		cName := fmt.Sprintf("hostc-%d", i)
 		out, err := s.d.Cmd("run", "-d", "--name", cName, "--net=host", "--restart=always", "busybox", "top")
 		assert.NilError(c, err, out)
@@ -1138,7 +1112,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkHostModeUngracefulDaemonRestart(c 
 	s.d.Start(c)
 
 	// make sure all the containers are up and running
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		err := s.d.WaitRun(fmt.Sprintf("hostc-%d", i))
 		assert.NilError(c, err)
 	}
@@ -1258,7 +1232,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkConnectDisconnectToStoppedContaine
 	cli.WaitRun(c, "foo")
 	ip := inspectField(c, "foo", "NetworkSettings.Networks.test.IPAddress")
 	ip = strings.TrimSpace(ip)
-	cli.DockerCmd(c, "run", "--net=test", "busybox", "sh", "-c", fmt.Sprintf("ping -c 1 %s", ip))
+	cli.DockerCmd(c, "run", "--net=test", "busybox", "sh", "-c", "ping -c 1 "+ip)
 
 	cli.DockerCmd(c, "stop", "foo")
 
@@ -1319,7 +1293,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkConnectPreferredIP(c *testing.T) {
 	// Still it should fail to connect to the default network with a specified IP (whatever ip)
 	out, _, err := dockerCmdWithError("network", "connect", "--ip", "172.21.55.44", "bridge", "c0")
 	assert.Assert(c, err != nil, "out: %s", out)
-	assert.Assert(c, is.Contains(out, "user specified IP address is supported on user defined networks only"))
+	assert.Assert(c, is.Contains(out, "user-specified IP address is supported on user-defined networks only"))
 }
 
 func (s *DockerNetworkSuite) TestDockerNetworkConnectPreferredIPStoppedContainer(c *testing.T) {
@@ -1351,7 +1325,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkUnsupportedRequiredIP(c *testing.T
 		checkUnsupportedNetworkAndIP(c, mode)
 	}
 
-	// requested IP is not supported on networks with no user defined subnets
+	// requested IP is not supported on networks with no user-defined subnets
 	cli.DockerCmd(c, "network", "create", "n0")
 	assertNwIsAvailable(c, "n0")
 
@@ -1368,7 +1342,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkUnsupportedRequiredIP(c *testing.T
 func checkUnsupportedNetworkAndIP(t *testing.T, nwMode string) {
 	out, _, err := dockerCmdWithError("run", "-d", "--net", nwMode, "--ip", "172.28.99.88", "--ip6", "2001:db8:1234::9988", "busybox", "top")
 	assert.Assert(t, err != nil, "out: %s", out)
-	assert.Assert(t, is.Contains(out, "user specified IP address is supported on user defined networks only"))
+	assert.Assert(t, is.Contains(out, "user-specified IP address is supported on user-defined networks only"))
 }
 
 func verifyIPAddressConfig(t *testing.T, cName, nwname, ipv4, ipv6 string) {

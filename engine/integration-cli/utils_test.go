@@ -20,11 +20,20 @@ func getPrefixAndSlashFromDaemonPlatform() (prefix, slash string) {
 	return "", "/"
 }
 
+// dPath converts linux absolute paths to Windows absolute paths if the daemon
+// is running on Windows
+func dPath(path string) string {
+	if testEnv.DaemonInfo.OSType == "windows" {
+		return `c:` + strings.ReplaceAll(path, "/", `\`)
+	}
+	return path
+}
+
 // ParseCgroupPaths parses 'procCgroupData', which is output of '/proc/<pid>/cgroup', and returns
 // a map which cgroup name as key and path as value.
 func ParseCgroupPaths(procCgroupData string) map[string]string {
 	cgroupPaths := map[string]string{}
-	for _, line := range strings.Split(procCgroupData, "\n") {
+	for line := range strings.SplitSeq(procCgroupData, "\n") {
 		parts := strings.Split(line, ":")
 		if len(parts) != 3 {
 			continue
@@ -42,7 +51,7 @@ func RandomTmpDirPath(s string, platform string) string {
 	if platform == "windows" {
 		tmp = os.Getenv("TEMP")
 	}
-	path := filepath.Join(tmp, fmt.Sprintf("%s.%s", s, testutil.GenerateRandomAlphaOnlyString(10)))
+	path := filepath.Join(tmp, fmt.Sprintf("%s.%s", s, testutil.RandomAlpha(10)))
 	if platform == "windows" {
 		return filepath.FromSlash(path) // Using \
 	}
@@ -120,7 +129,7 @@ func existingElements(t *testing.T, opts elementListOptions) []string {
 	}
 	out := cli.DockerCmd(t, args...).Combined()
 	var lines []string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if l != "" {
 			lines = append(lines, l)
 		}

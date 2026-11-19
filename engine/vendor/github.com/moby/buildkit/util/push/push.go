@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -69,7 +70,7 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 		ref = r.String()
 	}
 
-	scope := "push"
+	scope := resolver.ScopeType{Push: true}
 	if insecure {
 		insecureTrue := true
 		httpTrue := true
@@ -79,7 +80,7 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 				PlainHTTP: &httpTrue,
 			},
 		})
-		scope += ":insecure"
+		scope.Insecure = true
 	}
 
 	resolver := resolver.DefaultPool.GetResolver(hosts, ref, scope, sm, session.NewGroup(sid))
@@ -138,8 +139,8 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 	}
 
 	mfstDone := progress.OneOff(ctx, fmt.Sprintf("pushing manifest for %s", ref))
-	for i := len(manifestStack) - 1; i >= 0; i-- {
-		if _, err := pushHandler(ctx, manifestStack[i]); err != nil {
+	for _, desc := range slices.Backward(manifestStack) {
+		if _, err := pushHandler(ctx, desc); err != nil {
 			return mfstDone(err)
 		}
 	}

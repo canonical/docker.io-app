@@ -77,7 +77,7 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	}
 
 	i := int(llbDef.Input)
-	if i >= len(inputs) {
+	if i < 0 || i >= len(inputs) {
 		return nil, errors.Errorf("invalid index %v", i) // TODO: this should be validated before
 	}
 	inp := inputs[i]
@@ -119,6 +119,15 @@ func (b *BuildOp) Exec(ctx context.Context, job solver.JobContext, inputs []solv
 	f, err := os.Open(newfn)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open %s", newfn)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, errors.WithStack(err)
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, errors.Errorf("%s is not a regular file", newfn)
 	}
 
 	def, err := llb.ReadFrom(f)

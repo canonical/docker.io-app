@@ -5,3 +5,8 @@ Restrictions: allow-stderr isolation-machine needs-root
 Tests: docker-in-lxd
 Depends: dctrl-tools, snapd
 Restrictions: allow-stderr isolation-machine needs-root
+
+# rootlesskit/uidmap/slirp4netns/fuse-overlayfs all required to install and run rootless docker
+Tests: rootless
+Depends: @, rootlesskit, uidmap, slirp4netns, fuse-overlayfs
+Restrictions: allow-stderr isolation-machine

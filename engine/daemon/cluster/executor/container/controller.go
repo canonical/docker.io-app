@@ -174,6 +174,17 @@ func (r *controller) Prepare(ctx context.Context) error {
 				// If you don't want this behavior, lock down your image to an
 				// immutable tag or digest.
 				log.G(ctx).WithError(r.pullErr).Error("pulling image failed")
+
+				// If the image is not available locally, the pull error is the
+				// actual cause, so return it instead of the misleading
+				// "No such image" error that would otherwise result from the
+				// container create below. If the image _is_ available, keep
+				// going: a task whose image is already on the node must not be
+				// failed just because the registry could not be reached, for
+				// example when the task carries no registry credentials.
+				if !r.adapter.imageExists(ctx) {
+					return r.pullErr
+				}
 			}
 		}
 	}
@@ -255,11 +266,10 @@ func (r *controller) Start(ctx context.Context) error {
 
 			switch event.Action {
 			case events.ActionDie: // exit on terminal events
-				ctnr, err := r.adapter.inspect(ctx)
-				if err != nil {
+				if ctr, err := r.adapter.inspect(ctx); err != nil {
 					return errors.Wrap(err, "die event received")
-				} else if ctnr.State.ExitCode != 0 {
-					return &exitError{code: ctnr.State.ExitCode, cause: healthErr}
+				} else if ctr.State.ExitCode != 0 {
+					return &exitError{code: ctr.State.ExitCode, cause: healthErr}
 				}
 
 				return nil

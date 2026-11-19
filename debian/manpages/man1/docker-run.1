@@ -1,3 +1,4 @@
+'\" t
 .nh
 .TH "DOCKER" "1" "JUNE 2014" "Docker Community" "Docker User Manuals"
 
@@ -52,7 +53,6 @@ docker-run \- Create and run a new container from an image
 [\fB--ip6\fP[=\fIIPv6-ADDRESS\fP]]
 [\fB--ipc\fP[=\fIIPC\fP]]
 [\fB--isolation\fP[=\fIdefault\fP]]
-[\fB--kernel-memory\fP[=\fIKERNEL-MEMORY\fP]]
 [\fB-l\fP|\fB--label\fP[=\fI[]\fP]]
 [\fB--label-file\fP[=\fI[]\fP]]
 [\fB--link\fP[=\fI[]\fP]]
@@ -118,12 +118,11 @@ pull\fP IMAGE, before it starts the container from that image.
    Attach to STDIN, STDOUT or STDERR.
 
 .PP
-In foreground mode (the default when \fB-d\fP
-is not specified), \fBdocker run\fP can start the process in the container
-and attach the console to the process's standard input, output, and standard
-error. It can even pretend to be a TTY (this is what most commandline
-executables expect) and pass along signals. The \fB-a\fP option can be set for
-each of stdin, stdout, and stderr.
+In foreground mode (the default when \fB-d\fP is not specified), \fBdocker run\fP
+   can start the process in the container and attach the console to the process's
+   standard input, output, and standard error. It can even pretend to be a TTY
+   (this is what most commandline executables expect) and pass along signals.
+   The \fB-a\fP option can be set for each of stdin, stdout, and stderr.
 
 .PP
 \fB--add-host\fP=[]
@@ -154,37 +153,37 @@ The annotations are provided to the OCI runtime.
 
 .PP
 By default, all containers get the same proportion of CPU cycles. This proportion
-can be modified by changing the container's CPU share weighting relative
-to the weighting of all other running containers.
+   can be modified by changing the container's CPU share weighting relative
+   to the weighting of all other running containers.
 
 .PP
 To modify the proportion from the default of 1024, use the \fB-c\fP or \fB--cpu-shares\fP
-flag to set the weighting to 2 or higher.
+   flag to set the weighting to 2 or higher.
 
 .PP
 The proportion will only apply when CPU-intensive processes are running.
-When tasks in one container are idle, other containers can use the
-left-over CPU time. The actual amount of CPU time will vary depending on
-the number of containers running on the system.
+   When tasks in one container are idle, other containers can use the
+   left-over CPU time. The actual amount of CPU time will vary depending on
+   the number of containers running on the system.
 
 .PP
 For example, consider three containers, one has a cpu-share of 1024 and
-two others have a cpu-share setting of 512. When processes in all three
-containers attempt to use 100% of CPU, the first container would receive
-50% of the total CPU time. If you add a fourth container with a cpu-share
-of 1024, the first container only gets 33% of the CPU. The remaining containers
-receive 16.5%, 16.5% and 33% of the CPU.
+   two others have a cpu-share setting of 512. When processes in all three
+   containers attempt to use 100% of CPU, the first container would receive
+   50% of the total CPU time. If you add a fourth container with a cpu-share
+   of 1024, the first container only gets 33% of the CPU. The remaining containers
+   receive 16.5%, 16.5% and 33% of the CPU.
 
 .PP
 On a multi-core system, the shares of CPU time are distributed over all CPU
-cores. Even if a container is limited to less than 100% of CPU time, it can
-use 100% of each individual CPU core.
+   cores. Even if a container is limited to less than 100% of CPU time, it can
+   use 100% of each individual CPU core.
 
 .PP
 For example, consider a system with more than three cores. If you start one
-container \fB{C0}\fP with \fB-c=512\fP running one process, and another container
-\fB{C1}\fP with \fB-c=1024\fP running two processes, this can result in the following
-division of CPU shares:
+   container \fB{C0}\fP with \fB-c=512\fP running one process, and another container
+   \fB{C1}\fP with \fB-c=1024\fP running two processes, this can result in the following
+   division of CPU shares:
 
 .EX
 PID    container	CPU	CPU share
@@ -210,7 +209,10 @@ PID    container	CPU	CPU share
 
 .PP
 \fB--cgroup-parent\fP=""
-   Path to cgroups under which the cgroup for the container will be created. If the path is not absolute, the path is considered to be relative to the cgroups path of the init process. Cgroups will be created if they do not already exist.
+   Path to cgroups under which the cgroup for the container will be created.
+   If the path is not absolute, the path is considered to be relative to the
+   cgroups path of the init process. Cgroups will be created if they do not
+   already exist.
 
 .PP
 \fB--cidfile\fP=""
@@ -218,28 +220,31 @@ PID    container	CPU	CPU share
 
 .PP
 \fB--cpu-count\fP=\fI0\fP
-    Limit the number of CPUs available for execution by the container.
+   Limit the number of CPUs available for execution by the container.
 
-.EX
-On Windows Server containers, this is approximated as a percentage of total CPU usage.
-
-On Windows Server containers, the processor resource controls are mutually exclusive, the order of precedence is CPUCount first, then CPUShares, and CPUPercent last.
-.EE
+.PP
+On Windows Server containers, this is approximated as a percentage of total
+   CPU usage. On Windows Server containers, the processor resource controls
+   are mutually exclusive, the order of precedence is CPUCount first, then
+   CPUShares, and CPUPercent last.
 
 .PP
 \fB--cpu-percent\fP=\fI0\fP
-    Limit the percentage of CPU available for execution by a container running on a Windows daemon.
+   Limit the percentage of CPU available for execution by a container running
+   on a Windows daemon.
 
-.EX
-On Windows Server containers, the processor resource controls are mutually exclusive, the order of precedence is CPUCount first, then CPUShares, and CPUPercent last.
-.EE
+.PP
+On Windows Server containers, the processor resource controls are mutually
+   exclusive, the order of precedence is CPUCount first, then CPUShares, and
+   CPUPercent last.
 
 .PP
 \fB--cpu-period\fP=\fI0\fP
    Limit the CPU CFS (Completely Fair Scheduler) period
 
 .PP
-Limit the container's CPU usage. This flag tell the kernel to restrict the container's CPU usage to the period you specify.
+Limit the container's CPU usage. This flag tell the kernel to restrict the
+   container's CPU usage to the period you specify.
 
 .PP
 \fB--cpuset-cpus\fP=""
@@ -247,7 +252,8 @@ Limit the container's CPU usage. This flag tell the kernel to restrict the conta
 
 .PP
 \fB--cpuset-mems\fP=""
-   Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
+   Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective
+   on NUMA systems.
 
 .PP
 If you have four memory nodes on your system (0-3), use \fB--cpuset-mems=0,1\fR
@@ -260,26 +266,31 @@ two memory nodes.
 
 .PP
 Limit the container's CPU usage. By default, containers run with the full
-CPU resource. This flag tell the kernel to restrict the container's CPU usage
-to the quota you specify.
+   CPU resource. This flag tell the kernel to restrict the container's CPU
+   usage to the quota you specify.
 
 .PP
 \fB--cpu-rt-period\fP=0
    Limit the CPU real-time period in microseconds
 
 .PP
-Limit the container's Real Time CPU usage. This flag tell the kernel to restrict the container's Real Time CPU usage to the period you specify.
+Limit the container's Real Time CPU usage. This flag tell the kernel to
+   restrict the container's Real Time CPU usage to the period you specify.
 
 .PP
 \fB--cpu-rt-runtime\fP=0
    Limit the CPU real-time runtime in microseconds
 
 .PP
-Limit the containers Real Time CPU usage. This flag tells the kernel to limit the amount of time in a given CPU period Real Time tasks may consume. Ex:
-   Period of 1,000,000us and Runtime of 950,000us means that this container could consume 95% of available CPU and leave the remaining 5% to normal priority tasks.
+Limit the containers Real Time CPU usage. This flag tells the kernel to
+   limit the amount of time in a given CPU period Real Time tasks may consume.
+   For example, a period of 1,000,000us and Runtime of 950,000us means that
+   this container could consume 95% of available CPU and leave the remaining
+   5% to normal priority tasks.
 
 .PP
-The sum of all runtimes across containers cannot exceed the amount allotted to the parent cgroup.
+The sum of all runtimes across containers cannot exceed the amount allotted
+   to the parent cgroup.
 
 .PP
 \fB--cpus\fP=0.0
@@ -287,42 +298,52 @@ The sum of all runtimes across containers cannot exceed the amount allotted to t
 
 .PP
 \fB-d\fP, \fB--detach\fP=\fItrue\fP|\fIfalse\fP
-   Detached mode: run the container in the background and print the new container ID. The default is \fIfalse\fP\&.
+   Detached mode: run the container in the background and print the new
+   container ID. The default is \fIfalse\fP\&.
 
 .PP
-At any time you can run \fBdocker ps\fP in
-the other shell to view a list of the running containers. You can reattach to a
-detached container with \fBdocker attach\fP\&.
+At any time you can run \fBdocker ps\fP in the other shell to view a list
+   of the running containers. You can reattach to a detached container with
+   \fBdocker attach\fP\&.
 
 .PP
-When attached in the tty mode, you can detach from the container (and leave it
-running) using a configurable key sequence. The default sequence is \fBCTRL-p CTRL-q\fR\&.
-You configure the key sequence using the \fB--detach-keys\fP option or a configuration file.
-See \fBconfig-json(5)\fP for documentation on using a configuration file.
+When attached in the tty mode, you can detach from the container (and leave
+   it running) using a configurable key sequence. The default sequence is
+   \fBCTRL-p CTRL-q\fR\&.
+   You configure the key sequence using the \fB--detach-keys\fP option or a
+   configuration file. See \fBconfig-json(5)\fP for documentation on using a
+   configuration file.
 
 .PP
 \fB--detach-keys\fP=\fIkey\fP
-   Override the key sequence for detaching a container; \fIkey\fP is a single character from the [a-Z] range, or \fBctrl\fP-\fIvalue\fP, where \fIvalue\fP is one of: \fBa-z\fP, \fB@\fP, \fB^\fP, \fB[\fP, \fB,\fP, or \fB_\fP\&.
+   Override the key sequence for detaching a container; \fIkey\fP is a single
+   character from the [a-Z] range, or \fBctrl\fP-\fIvalue\fP, where \fIvalue\fP is
+   one of: \fBa-z\fP, \fB@\fP, \fB^\fP, \fB[\fP, \fB,\fP, or \fB_\fP\&.
 
 .PP
 \fB--device\fP=\fIonhost\fP:\fIincontainer\fP[:\fImode\fP]
    Add a host device \fIonhost\fP to the container under the \fIincontainer\fP name.
-Optional \fImode\fP parameter can be used to specify device permissions, it is
-a combination of \fBr\fP (for read), \fBw\fP (for write), and \fBm\fP (for \fBmknod\fP(2)).
+   Optional \fImode\fP parameter can be used to specify device permissions, it is
+   a combination of \fBr\fP (for read), \fBw\fP (for write), and \fBm\fP (for
+   \fBmknod\fP(2)).
 
 .PP
 For example, \fB--device=/dev/sdc:/dev/xvdc:rwm\fP will give a container all
-permissions for the host device \fB/dev/sdc\fP, seen as \fB/dev/xvdc\fP inside the container.
+   permissions for the host device \fB/dev/sdc\fP, seen as \fB/dev/xvdc\fP inside
+   the container.
 
 .PP
 \fB--device-cgroup-rule\fP="\fItype\fP \fImajor\fP:\fIminor\fP \fImode\fP"
-   Add a rule to the cgroup allowed devices list. The rule is expected to be in the format specified in the Linux kernel documentation (Documentation/cgroup-v1/devices.txt):
+   Add a rule to the cgroup allowed devices list. The rule is expected to be
+   in the format specified in the Linux kernel documentation
+   (Documentation/cgroup-v1/devices.txt):
      - \fItype\fP: \fBa\fP (all), \fBc\fP (char), or \fBb\fP (block);
      - \fImajor\fP and \fIminor\fP: either a number, or \fB*\fP for all;
      - \fImode\fP: a composition of \fBr\fP (read), \fBw\fP (write), and \fBm\fP (\fBmknod\fP(2)).
 
 .PP
-Example: \fB--device-cgroup-rule "c 1:3 mr"\fP: allow for a character device idendified by \fB1:3\fP  to be created and read.
+Example: \fB--device-cgroup-rule "c 1:3 mr"\fP: allow for a character device
+   identified by \fB1:3\fP  to be created and read.
 
 .PP
 \fB--device-read-bps\fP=[]
@@ -342,7 +363,8 @@ Example: \fB--device-cgroup-rule "c 1:3 mr"\fP: allow for a character device ide
 
 .PP
 \fB--dns-search\fP=[]
-   Set custom DNS search domains (Use --dns-search=. if you don't wish to set the search domain)
+   Set custom DNS search domains (Use --dns-search=. if you don't wish to set
+   the search domain)
 
 .PP
 \fB--dns-option\fP=[]
@@ -353,10 +375,10 @@ Example: \fB--device-cgroup-rule "c 1:3 mr"\fP: allow for a character device ide
    Set custom DNS servers
 
 .PP
-This option can be used to override the DNS
-configuration passed to the container. Typically this is necessary when the
-host DNS configuration is invalid for the container (e.g., 127.0.0.1). When this
-is the case the \fB--dns\fP flags is necessary for every run.
+This option can be used to override the DNS configuration passed to the
+   container. Typically this is necessary when the host DNS configuration
+   is invalid for the container (e.g., 127.0.0.1). When this is the case
+   the \fB--dns\fP flags is necessary for every run.
 
 .PP
 \fB--domainname\fP=""
@@ -381,15 +403,15 @@ inside of the container.
 
 .PP
 This option allows you to overwrite the default entrypoint of the image that
-is set in the Dockerfile. The ENTRYPOINT of an image is similar to a COMMAND
-because it specifies what executable to run when the container starts, but it is
-(purposely) more difficult to override. The ENTRYPOINT gives a container its
-default nature or behavior, so that when you set an ENTRYPOINT you can run the
-container as if it were that binary, complete with default options, and you can
-pass in more options via the COMMAND. But, sometimes an operator may want to run
-something else inside the container, so you can override the default ENTRYPOINT
-at runtime by using a \fB--entrypoint\fP and a string to specify the new
-ENTRYPOINT.
+   is set in the Dockerfile. The ENTRYPOINT of an image is similar to a COMMAND
+   because it specifies what executable to run when the container starts, but it is
+   (purposely) more difficult to override. The ENTRYPOINT gives a container its
+   default nature or behavior, so that when you set an ENTRYPOINT you can run the
+   container as if it were that binary, complete with default options, and you can
+   pass in more options via the COMMAND. But, sometimes an operator may want to run
+   something else inside the container, so you can override the default ENTRYPOINT
+   at runtime by using a \fB--entrypoint\fP and a string to specify the new
+   ENTRYPOINT.
 
 .PP
 \fB--env-file\fP=[]
@@ -397,10 +419,10 @@ ENTRYPOINT.
 
 .PP
 \fB--expose\fP=[]
-   Expose a port, or a range of ports (e.g. --expose=3300-3310) informs Docker
-that the container listens on the specified network ports at runtime. Docker
-uses this information to interconnect containers using links and to set up port
-redirection on the host system.
+   Expose a port, or a range of ports (e.g. --expose=3300-3310) informs the
+   docker daemon that the container listens on the specified network ports at
+   runtime. The docker daemon uses this information to interconnect containers
+   using links and to set up port redirection on the host system.
 
 .PP
 \fB--group-add\fP=[]
@@ -482,17 +504,6 @@ is \fBhyperv\fR\&. Linux only supports \fBdefault\fR\&.
    Set metadata on the container (for example, \fB--label com.example.key=value\fP).
 
 .PP
-\fB--kernel-memory\fP=\fInumber\fP[\fIS\fP]
-   Kernel memory limit; \fIS\fP is an optional suffix which can be one of \fBb\fP, \fBk\fP, \fBm\fP, or \fBg\fP\&.
-
-.PP
-Constrains the kernel memory available to a container. If a limit of 0
-is specified (not using \fB--kernel-memory\fP), the container's kernel memory
-is not limited. If you specify a limit, it may be rounded up to a multiple
-of the operating system's page size and the value can be very large,
-millions of trillions.
-
-.PP
 \fB--label-file\fP=[]
    Read in a line delimited file of labels
 
@@ -527,10 +538,10 @@ which interface and port to use.
 
 .PP
 Allows you to constrain the memory available to a container. If the host
-supports swap memory, then the \fB-m\fP memory setting can be larger than physical
-RAM. If a limit of 0 is specified (not using \fB-m\fP), the container's memory is
-not limited. The actual limit may be rounded up to a multiple of the operating
-system's page size (the value would be very large, that's millions of trillions).
+   supports swap memory, then the \fB-m\fP memory setting can be larger than physical
+   RAM. If a limit of 0 is specified (not using \fB-m\fP), the container's memory is
+   not limited. The actual limit may be rounded up to a multiple of the operating
+   system's page size (the value would be very large, that's millions of trillions).
 
 .PP
 \fB--memory-reservation\fP=\fInumber\fP[*S]
@@ -538,17 +549,20 @@ system's page size (the value would be very large, that's millions of trillions)
 
 .PP
 After setting memory reservation, when the system detects memory contention
-or low memory, containers are forced to restrict their consumption to their
-reservation. So you should always set the value below \fB--memory\fP, otherwise the
-hard limit will take precedence. By default, memory reservation will be the same
-as memory limit.
+   or low memory, containers are forced to restrict their consumption to their
+   reservation. So you should always set the value below \fB--memory\fP, otherwise the
+   hard limit will take precedence. By default, memory reservation will be the same
+   as memory limit.
 
 .PP
 \fB--memory-swap\fP=\fInumber\fP[\fIS\fP]
-   Combined memory plus swap limit; \fIS\fP is an optional suffix which can be one of \fBb\fP, \fBk\fP, \fBm\fP, or \fBg\fP\&.
+   Combined memory plus swap limit; \fIS\fP is an optional suffix which can be
+   one of \fBb\fP, \fBk\fP, \fBm\fP, or \fBg\fP\&.
 
 .PP
-This option can only be used together with \fB--memory\fP\&. The argument should always be larger than that of \fB--memory\fP\&. Default is double the value of \fB--memory\fP\&. Set to \fB-1\fP to enable unlimited swap.
+This option can only be used together with \fB--memory\fP\&. The argument
+   should always be larger than that of \fB--memory\fP\&. Default is double the
+   value of \fB--memory\fP\&. Set to \fB-1\fP to enable unlimited swap.
 
 .PP
 \fB--mac-address\fP=""
@@ -567,13 +581,13 @@ according to RFC4862.
 Current supported mount \fBTYPES\fR are \fBbind\fR, \fBvolume\fR, and \fBtmpfs\fR\&.
 
 .PP
-e.g.
+For example;
 
 .PP
 \fBtype=bind,source=/path/on/host,destination=/path/in/container\fR
 
 .PP
-\fBtype=volume,source=my-volume,destination=/path/in/container,volume-label="color=red",volume-label="shape=round"\fR
+\fBtype=volume,source=my-volume,destination=/path/in/container,volume-label="color=red"\fR
 
 .PP
 \fBtype=tmpfs,tmpfs-size=512M,destination=/path/in/container\fR
@@ -611,7 +625,9 @@ Options specific to \fBvolume\fR:
 .IP \(bu 2
 \fBvolume-label\fR: Custom metadata.
 .IP \(bu 2
-\fBvolume-nocopy\fR: \fBtrue\fR(default) or \fBfalse\fR\&. If set to \fBfalse\fR, the Engine copies existing files and directories under the mount-path into the volume, allowing the host to access them.
+\fBvolume-nocopy\fR: \fBtrue\fR(default) or \fBfalse\fR\&. If set to \fBfalse\fR, the Engine
+ copies existing files and directories under the mount-path into the volume,
+ allowing the host to access them.
 .IP \(bu 2
 \fBvolume-opt\fR: specific to a given volume driver.
 
@@ -628,25 +644,19 @@ Options specific to \fBtmpfs\fR:
 
 .PP
 The operator can identify a container in three ways:
-
-.TS
-allbox;
-l l 
-l l .
-\fBIdentifier type\fP	\fBExample value\fP
-UUID long identifier	T{
-"f78375b1c487e03c9438c729345e54db9d20cfa2ac1fc3494b6eb60872e74778"
-T}
-UUID short identifier	"f78375b1c487"
-Name	"evil_ptolemy"
-.TE
+.IP \(bu 2
+\fBlong ID\fP: \fBf78375b1c487e03c9438c729345e54db9d20cfa2ac1fc3494b6eb60872e74778\fR
+.IP \(bu 2
+\fBshort ID\fP: \fBf78375b1c487\fR
+.IP \(bu 2
+\fBName\fP: \fBevil_ptolemy\fR
 
 .PP
-The UUID identifiers come from the Docker daemon, and if a name is not assigned
-to the container with \fB--name\fP then the daemon will also generate a random
-string name. The name is useful when defining links (see \fB--link\fP) (or any
-other place you need to identify a container). This works for both background
-and foreground Docker containers.
+The ID identifiers come from the Docker daemon, and if a name is not assigned
+   to the container with \fB--name\fP then the daemon will also generate a random
+   string name. The name is useful when defining links (see \fB--link\fP) (or any
+   other place you need to identify a container). This works for both background
+   and foreground Docker containers.
 
 .PP
 \fB--network\fP=\fItype\fP
@@ -720,8 +730,9 @@ Use \fBdocker port\fR(1) to see the actual mapping, e.g. \fBdocker port CONTAINE
 \fB--pid\fP=""
    Set the PID mode for the container
    Default is to create a private PID namespace for the container
-                               'container:\&': join another container's PID namespace
-                               'host': use the host's PID namespace for the container. Note: the host mode gives the container full access to local PID and is therefore considered insecure.
+   'container:\&': join another container's PID namespace
+   'host': use the host's PID namespace for the container. Note: the host mode
+   gives the container full access to local PID and is therefore considered insecure.
 
 .PP
 \fB--userns\fP=""
@@ -734,9 +745,12 @@ Use \fBdocker port\fR(1) to see the actual mapping, e.g. \fBdocker port CONTAINE
 
 .PP
 \fB--uts\fP=\fItype\fP
-   Set the UTS mode for the container. The only possible \fItype\fP is \fBhost\fP, meaning to
-use the host's UTS namespace inside the container.
-     Note: the host mode gives the container access to changing the host's hostname and is therefore considered insecure.
+   Set the UTS mode for the container. The only possible \fItype\fP is \fBhost\fP,
+   meaning to use the host's UTS namespace inside the container.
+
+.PP
+Note: the host mode gives the container access to changing the host's hostname
+   and is therefore considered insecure.
 
 .PP
 \fB--privileged\fP [\fBtrue\fP|\fBfalse\fP]
@@ -773,7 +787,7 @@ T}
 Restart only if the container exits with a non-zero exit status. Optionally, limit the number of restart retries the Docker daemon attempts.
 T}
 \fBalways\fP	T{
-Always restart the container regardless of the exit status. When you specify always, the Docker daemon will try to restart the container indefinitely. The container will also always start on daemon startup, regardless of the current state of the container.
+Always restart the container regardless of the exit status. When you specify always, the Docker daemon tries to restart the container indefinitely. The container always start on daemon startup, regardless of the current state of the container.
 T}
 \fBunless-stopped\fP	T{
 Always restart the container regardless of the exit status, but do not start it on daemon startup if the container has been put to a stopped state before.
@@ -785,28 +799,51 @@ Default is \fBno\fP\&.
 
 .PP
 \fB--rm\fP \fBtrue\fP|\fBfalse\fP
-   Automatically remove the container when it exits. The default is \fBfalse\fP\&.
-   \fB--rm\fR flag can work together with \fB-d\fR, and auto-removal will be done on daemon side. Note that it's
-incompatible with any restart policy other than \fBnone\fR\&.
+   Automatically remove the container and its associated anonymous volumes when it exits. The default is \fBfalse\fP\&.
+   \fB--rm\fR flag can work together with \fB-d\fR, and auto-removal will be done on
+   daemon side. Note that it's incompatible with any restart policy other than
+  \fBnone\fR\&.
 
 .PP
 \fB--security-opt\fP \fIvalue\fP[,...]
    Security Options for the container. The following options can be given:
 
-.EX
-"label=user:USER"   : Set the label user for the container
-"label=role:ROLE"   : Set the label role for the container
-"label=type:TYPE"   : Set the label type for the container
-"label=level:LEVEL" : Set the label level for the container
-"label=disable"     : Turn off label confinement for the container
-"no-new-privileges" : Disable container processes from gaining additional privileges
-
-"seccomp=unconfined" : Turn off seccomp confinement for the container
-"seccomp=profile.json :  White listed syscalls seccomp Json file to be used as a seccomp filter
-
-"apparmor=unconfined" : Turn off apparmor confinement for the container
-"apparmor=your-profile" : Set the apparmor confinement profile for the container
-.EE
+.TS
+allbox;
+l l 
+l l .
+\fBOption\fP	\fBDescription\fP
+"label=user:USER"	T{
+Set the label user for the container
+T}
+"label=role:ROLE"	T{
+Set the label role for the container
+T}
+"label=type:TYPE"	T{
+Set the label type for the container
+T}
+"label=level:LEVEL"	T{
+Set the label level for the container
+T}
+"label=disable"	T{
+Turn off label confinement for the container
+T}
+"no-new-privileges"	T{
+Disable container processes from gaining additional privileges
+T}
+"seccomp=unconfined"	T{
+Turn off seccomp confinement for the container
+T}
+"seccomp=profile.json"	T{
+White listed syscalls seccomp Json file to be used as a seccomp filter
+T}
+"apparmor=unconfined"	T{
+Turn off apparmor confinement for the container
+T}
+"apparmor=your-profile"	T{
+Set the apparmor confinement profile for the container
+T}
+.TE
 
 .PP
 \fB--storage-opt\fP
@@ -816,11 +853,14 @@ incompatible with any restart policy other than \fBnone\fR\&.
 $ docker run -it --storage-opt size=120G fedora /bin/bash
 
 .PP
-This (size) will allow to set the container rootfs size to 120G at creation time.
-   This option is only available for the \fBbtrfs\fR, \fBoverlay2\fR  and \fBzfs\fR graph drivers.
-   For the \fBbtrfs\fR and \fBzfs\fR storage drivers, user cannot pass a size less than the Default BaseFS Size.
-   For the \fBoverlay2\fR storage driver, the size option is only available if the backing fs is \fBxfs\fR and mounted with the \fBpquota\fR mount option.
-   Under these conditions, user can pass any size less than the backing fs size.
+This (size) will allow to set the container rootfs size to 120G at creation
+   time. This option is only available for the \fBbtrfs\fR, \fBoverlay2\fR  and \fBzfs\fR
+   graph drivers.
+   For the \fBbtrfs\fR and \fBzfs\fR storage drivers, user cannot pass a size less than
+   the Default BaseFS Size. For the \fBoverlay2\fR storage driver, the size option
+   is only available if the backing fs is \fBxfs\fR and mounted with the \fBpquota\fR
+   mount option. Under these conditions, user can pass any size less than the
+   backing fs size.
 
 .PP
 \fB--stop-signal\fP=""
@@ -857,8 +897,9 @@ The default is determined by the daemon, and 10 seconds for Linux containers,
 .PP
 \fB--shm-size\fP=""
    Size of \fB/dev/shm\fR\&. The format is \fB<number><unit>\fR\&.
-   \fBnumber\fR must be greater than \fB0\fR\&.  Unit is optional and can be \fBb\fR (bytes), \fBk\fR (kilobytes), \fBm\fR(megabytes), or \fBg\fR (gigabytes).
-   If you omit the unit, the system uses bytes. If you omit the size entirely, the system uses \fB64m\fR\&.
+   \fBnumber\fR must be greater than \fB0\fR\&.  Unit is optional and can be \fBb\fR (bytes),
+   \fBk\fR (kilobytes), \fBm\fR(megabytes), or \fBg\fR (gigabytes). If you omit the unit,
+   the system uses bytes. If you omit the size entirely, the system uses \fB64m\fR\&.
 
 .PP
 \fB--sysctl\fP=SYSCTL
@@ -868,8 +909,9 @@ The default is determined by the daemon, and 10 seconds for Linux containers,
 IPC Namespace - current sysctls allowed:
 
 .PP
-kernel.msgmax, kernel.msgmnb, kernel.msgmni, kernel.sem, kernel.shmall, kernel.shmmax, kernel.shmmni, kernel.shm_rmid_forced
-  Sysctls beginning with fs.mqueue.*
+kernel.msgmax, kernel.msgmnb, kernel.msgmni, kernel.sem, kernel.shmall,
+  kernel.shmmax, kernel.shmmni, kernel.shm_rmid_forced, and sysctls beginning
+  with fs.mqueue.*
 
 .PP
 If you use the \fB--ipc=host\fR option these sysctls will not be allowed.
@@ -883,7 +925,8 @@ If you use the \fB--network=host\fR option these sysctls will not be allowed.
 
 .PP
 \fB--sig-proxy\fP=\fItrue\fP|\fIfalse\fP
-   Proxy received signals to the process (non-TTY mode only). SIGCHLD, SIGSTOP, and SIGKILL are not proxied. The default is \fItrue\fP\&.
+   Proxy received signals to the process (non-TTY mode only). SIGCHLD, SIGSTOP,
+   and SIGKILL are not proxied. The default is \fItrue\fP\&.
 
 .PP
 \fB--memory-swappiness\fP=""
@@ -926,7 +969,7 @@ See also \fB--mount\fR, which is the successor of \fB--tmpfs\fR and \fB--volume\
    Sets the username or UID used and optionally the groupname or GID for the specified command.
 
 .PP
-The followings examples are all valid:
+The following examples are all valid:
    --user [user | user:group | uid | uid:gid | user:gid | uid:group ]
 
 .PP
@@ -1203,7 +1246,8 @@ Host shows a shared memory segment with 7 pids attached, happens to be from http
 .EE
 
 .PP
-Now run a regular container, and it correctly does NOT see the shared memory segment from the host:
+Now run a regular container, and it correctly does NOT see the shared memory
+segment from the host:
 
 .EX
  $ docker run -it shm ipcs -m
@@ -1213,7 +1257,8 @@ Now run a regular container, and it correctly does NOT see the shared memory seg
 .EE
 
 .PP
-Run a container with the new \fB--ipc=host\fR option, and it now sees the shared memory segment from the host httpd:
+Run a container with the new \fB--ipc=host\fR option, and it now sees the shared
+memory segment from the host httpd:
 
 .EX
  $ docker run -it --ipc=host shm ipcs -m
@@ -1240,7 +1285,8 @@ Start a container with a program to create a shared memory segment:
 .EE
 
 .PP
-Create a 2nd container correctly shows no shared memory segment from 1st container:
+Create a second container correctly shows no shared memory segment from first
+container:
 
 .EX
  $ docker run shm ipcs -m
@@ -1250,7 +1296,8 @@ Create a 2nd container correctly shows no shared memory segment from 1st contain
 .EE
 
 .PP
-Create a 3rd container using the new --ipc=container:CONTAINERID option, now it shows the shared memory segment from the first:
+Create a 3rd container using the new --ipc=container:CONTAINERID option,
+now it shows the shared memory segment from the first:
 
 .EX
  $ docker run -it --ipc=container:ed735b2264ac shm ipcs -m
@@ -1456,14 +1503,17 @@ $ docker run -d --isolation default busybox top
 .PP
 On Microsoft Windows, can take any of these values:
 .IP \(bu 2
-\fBdefault\fR: Use the value specified by the Docker daemon's \fB--exec-opt\fR . If the \fBdaemon\fR does not specify an isolation technology, Microsoft Windows uses \fBprocess\fR as its default value.
+\fBdefault\fR: Use the value specified by the Docker daemon's \fB--exec-opt\fR . If the
+\fBdaemon\fR does not specify an isolation technology, Microsoft Windows uses
+\fBprocess\fR as its default value.
 .IP \(bu 2
 \fBprocess\fR: Namespace isolation only.
 .IP \(bu 2
 \fBhyperv\fR: Hyper-V hypervisor partition-based isolation.
 
 .PP
-In practice, when running on Microsoft Windows without a \fBdaemon\fR option set,  these two commands are equivalent:
+In practice, when running on Microsoft Windows without a \fBdaemon\fR option set,
+these two commands are equivalent:
 
 .EX
 $ docker run -d --isolation default busybox top
@@ -1471,7 +1521,8 @@ $ docker run -d --isolation process busybox top
 .EE
 
 .PP
-If you have set the \fB--exec-opt isolation=hyperv\fR option on the Docker \fBdaemon\fR, any of these commands also result in \fBhyperv\fR isolation:
+If you have set the \fB--exec-opt isolation=hyperv\fR option on the Docker \fBdaemon\fR,
+any of these commands also result in \fBhyperv\fR isolation:
 
 .EX
 $ docker run -d --isolation default busybox top

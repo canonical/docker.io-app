@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package service
 
@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -551,12 +552,7 @@ func updateStringToSlice(flags *pflag.FlagSet, flag string, field *[]string) {
 }
 
 func anyChanged(flags *pflag.FlagSet, fields ...string) bool {
-	for _, flag := range fields {
-		if flags.Changed(flag) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(fields, flags.Changed)
 }
 
 func addGenericResources(flags *pflag.FlagSet, spec *swarm.TaskSpec) error {
@@ -685,9 +681,7 @@ func updateContainerLabels(flags *pflag.FlagSet, field *map[string]string) {
 		}
 
 		values := flags.Lookup(flagContainerLabelAdd).Value.(*opts.ListOpts).GetSlice()
-		for key, value := range opts.ConvertKVStringsToMap(values) {
-			(*field)[key] = value
-		}
+		maps.Copy((*field), opts.ConvertKVStringsToMap(values))
 	}
 }
 
@@ -704,9 +698,7 @@ func updateLabels(flags *pflag.FlagSet, field *map[string]string) {
 		}
 
 		values := flags.Lookup(flagLabelAdd).Value.(*opts.ListOpts).GetSlice()
-		for key, value := range opts.ConvertKVStringsToMap(values) {
-			(*field)[key] = value
-		}
+		maps.Copy((*field), opts.ConvertKVStringsToMap(values))
 	}
 }
 
@@ -723,9 +715,7 @@ func updateSysCtls(flags *pflag.FlagSet, field *map[string]string) {
 		}
 
 		values := flags.Lookup(flagSysCtlAdd).Value.(*opts.ListOpts).GetSlice()
-		for key, value := range opts.ConvertKVStringsToMap(values) {
-			(*field)[key] = value
-		}
+		maps.Copy((*field), opts.ConvertKVStringsToMap(values))
 	}
 }
 
@@ -1223,11 +1213,9 @@ func updateHosts(flags *pflag.FlagSet, hosts *[]string) error {
 			if rm.IPAddr != "" && rm.IPAddr != ip {
 				continue
 			}
-			for i, h := range hostNames {
-				if h == rm.Host {
-					hostNames = append(hostNames[:i], hostNames[i+1:]...)
-				}
-			}
+			hostNames = slices.DeleteFunc(hostNames, func(h string) bool {
+				return h == rm.Host
+			})
 		}
 		if len(hostNames) > 0 {
 			newHosts = append(newHosts, fmt.Sprintf("%s %s", ip, strings.Join(hostNames, " ")))
@@ -1333,7 +1321,7 @@ func updateNetworks(ctx context.Context, apiClient client.NetworkAPIClient, flag
 	}
 
 	existingNetworks := make(map[string]struct{})
-	var newNetworks []swarm.NetworkAttachmentConfig //nolint:prealloc
+	var newNetworks []swarm.NetworkAttachmentConfig
 	for _, nw := range specNetworks {
 		if _, exists := idsToRemove[nw.Target]; exists {
 			continue

@@ -5,14 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"reflect"
 	"strconv"
 
 	"github.com/containerd/log"
 	"github.com/mitchellh/copystructure"
 	"github.com/moby/moby/api/types/events"
-
 	"github.com/moby/moby/v2/daemon/config"
+	"github.com/moby/moby/v2/daemon/pkg/opts"
 )
+
+func init() {
+	// Register a custom copier for netip.Addr. The copystructure library uses
+	// reflection which cannot access unexported fields in netip.Addr, resulting
+	// in zero-value copies. Since netip.Addr is an immutable value type, we can
+	// safely return it as-is.
+	//
+	// Note: copystructure is archived (https://github.com/mitchellh/copystructure)
+	// and won't receive upstream fixes for this limitation.
+	copystructure.Copiers[reflect.TypeFor[netip.Addr]()] = func(v any) (any, error) {
+		return v.(netip.Addr), nil
+	}
+}
 
 // reloadTxn is used to defer side effects of a config reload.
 type reloadTxn struct {
@@ -66,11 +81,13 @@ func (tx *reloadTxn) Rollback() error {
 // - Daemon max concurrent uploads
 // - Daemon max download attempts
 // - Daemon shutdown timeout (in seconds)
+// - Daemon default container stop timeout (in seconds)
 // - Cluster discovery (reconfigure and restart)
 // - Daemon labels
 // - Insecure registries
 // - Registry mirrors
 // - Daemon live restore
+// - NRI enable and filesystem locations
 func (daemon *Daemon) Reload(conf *config.Config) error {
 	daemon.configReload.Lock()
 	defer daemon.configReload.Unlock()
@@ -102,11 +119,13 @@ func (daemon *Daemon) Reload(conf *config.Config) error {
 		daemon.reloadMaxConcurrentDownloadsAndUploads,
 		daemon.reloadMaxDownloadAttempts,
 		daemon.reloadShutdownTimeout,
+		daemon.reloadDefaultStopTimeout,
 		daemon.reloadFeatures,
 		daemon.reloadLabels,
 		daemon.reloadRegistryConfig,
 		daemon.reloadLiveRestore,
 		daemon.reloadNetworkDiagnosticPort,
+		daemon.reloadNRI,
 	} {
 		if err := reload(&txn, newCfg, conf, attributes); err != nil {
 			return errors.Join(err, txn.Rollback())
@@ -114,8 +133,9 @@ func (daemon *Daemon) Reload(conf *config.Config) error {
 	}
 
 	daemon.configStore.Store(newCfg)
+	err = txn.Commit()
 	daemon.LogDaemonEventWithAttributes(events.ActionReload, attributes)
-	return txn.Commit()
+	return err
 }
 
 func marshalAttributeSlice(v []string) string {
@@ -131,7 +151,7 @@ func marshalAttributeSlice(v []string) string {
 
 // reloadDebug updates configuration with Debug option
 // and updates the passed attributes
-func (daemon *Daemon) reloadDebug(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadDebug(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// update corresponding configuration
 	if conf.IsValueSet("debug") {
 		newCfg.Debug = conf.Debug
@@ -174,7 +194,7 @@ func (daemon *Daemon) reloadMaxConcurrentDownloadsAndUploads(txn *reloadTxn, new
 
 // reloadMaxDownloadAttempts updates configuration with max concurrent
 // download attempts when a connection is lost and updates the passed attributes
-func (daemon *Daemon) reloadMaxDownloadAttempts(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadMaxDownloadAttempts(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// We always "reset" as the cost is lightweight and easy to maintain.
 	newCfg.MaxDownloadAttempts = config.DefaultDownloadAttempts
 	if conf.IsValueSet("max-download-attempts") && conf.MaxDownloadAttempts != 0 {
@@ -189,7 +209,7 @@ func (daemon *Daemon) reloadMaxDownloadAttempts(txn *reloadTxn, newCfg *configSt
 
 // reloadShutdownTimeout updates configuration with daemon shutdown timeout option
 // and updates the passed attributes
-func (daemon *Daemon) reloadShutdownTimeout(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadShutdownTimeout(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// update corresponding configuration
 	if conf.IsValueSet("shutdown-timeout") {
 		newCfg.ShutdownTimeout = conf.ShutdownTimeout
@@ -201,9 +221,21 @@ func (daemon *Daemon) reloadShutdownTimeout(txn *reloadTxn, newCfg *configStore,
 	return nil
 }
 
+// reloadDefaultStopTimeout updates the default container stop timeout
+// and updates the passed attributes.
+func (daemon *Daemon) reloadDefaultStopTimeout(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+	if conf.IsValueSet("default-stop-timeout") {
+		newCfg.DefaultStopTimeout = conf.DefaultStopTimeout
+		log.G(context.TODO()).Debugf("Reset Default Stop Timeout: %d", newCfg.DefaultStopTimeout)
+	}
+
+	attributes["default-stop-timeout"] = strconv.Itoa(newCfg.DefaultStopTimeout)
+	return nil
+}
+
 // reloadLabels updates configuration with engine labels
 // and updates the passed attributes
-func (daemon *Daemon) reloadLabels(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadLabels(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// update corresponding configuration
 	if conf.IsValueSet("labels") {
 		newCfg.Labels = conf.Labels
@@ -238,7 +270,7 @@ func (daemon *Daemon) reloadRegistryConfig(txn *reloadTxn, newCfg *configStore, 
 
 // reloadLiveRestore updates configuration with live restore option
 // and updates the passed attributes
-func (daemon *Daemon) reloadLiveRestore(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadLiveRestore(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// update corresponding configuration
 	if conf.IsValueSet("live-restore") {
 		newCfg.LiveRestoreEnabled = conf.LiveRestoreEnabled
@@ -267,12 +299,36 @@ func (daemon *Daemon) reloadNetworkDiagnosticPort(txn *reloadTxn, newCfg *config
 }
 
 // reloadFeatures updates configuration with enabled/disabled features
-func (daemon *Daemon) reloadFeatures(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+func (daemon *Daemon) reloadFeatures(_ *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
 	// update corresponding configuration
 	// note that we allow features option to be entirely unset
 	newCfg.Features = conf.Features
 
 	// prepare reload event attributes with updatable configurations
-	attributes["features"] = fmt.Sprintf("%v", newCfg.Features)
+	attributes["features"] = fmt.Sprint(newCfg.Features)
+	return nil
+}
+
+// reloadNRI updates NRI configuration
+func (daemon *Daemon) reloadNRI(txn *reloadTxn, newCfg *configStore, conf *config.Config, attributes map[string]string) error {
+	if daemon.nri == nil {
+		// Daemon not initialised.
+		return nil
+	}
+	if conf.IsValueSet("nri-opts") {
+		newCfg.Config.NRIOpts = conf.NRIOpts
+	} else {
+		newCfg.Config.NRIOpts = opts.NRIOpts{}
+	}
+
+	commit, err := daemon.nri.PrepareReload(newCfg.NRIOpts)
+	if err != nil {
+		return err
+	}
+	if commit != nil {
+		txn.OnCommit(commit)
+	}
+
+	attributes["nri-opts"] = fmt.Sprint(newCfg.NRIOpts)
 	return nil
 }

@@ -18,35 +18,52 @@ import (
 	is "gotest.tools/v3/assert/cmp"
 )
 
-func TestConvertRestartPolicyFromNone(t *testing.T) {
-	policy, err := convertRestartPolicy("no", nil)
-	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual((*swarm.RestartPolicy)(nil), policy))
-}
-
-func TestConvertRestartPolicyFromUnknown(t *testing.T) {
-	_, err := convertRestartPolicy("unknown", nil)
-	assert.Error(t, err, "unknown restart policy: unknown")
-}
-
-func TestConvertRestartPolicyFromAlways(t *testing.T) {
-	policy, err := convertRestartPolicy("always", nil)
-	expected := &swarm.RestartPolicy{
-		Condition: swarm.RestartPolicyConditionAny,
-	}
-	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual(expected, policy))
-}
-
-func TestConvertRestartPolicyFromFailure(t *testing.T) {
-	policy, err := convertRestartPolicy("on-failure:4", nil)
+func TestConvertRestartPolicy(t *testing.T) {
 	attempts := uint64(4)
-	expected := &swarm.RestartPolicy{
-		Condition:   swarm.RestartPolicyConditionOnFailure,
-		MaxAttempts: &attempts,
+	tests := []struct {
+		input    string
+		expected *swarm.RestartPolicy
+		expError string
+	}{
+		{},
+		{
+			input: "no",
+		},
+		{
+			input:    "unknown",
+			expError: "invalid restart policy: unknown policy 'unknown'",
+		},
+		{
+			input: "always",
+			expected: &swarm.RestartPolicy{
+				Condition: swarm.RestartPolicyConditionAny,
+			},
+		},
+		{
+			input: "on-failure:4",
+			expected: &swarm.RestartPolicy{
+				Condition:   swarm.RestartPolicyConditionOnFailure,
+				MaxAttempts: &attempts,
+			},
+		},
 	}
-	assert.NilError(t, err)
-	assert.Check(t, is.DeepEqual(expected, policy))
+
+	for _, tc := range tests {
+		name := tc.input
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			policy, err := convertRestartPolicy(tc.input, nil)
+			if tc.expError != "" {
+				assert.Check(t, is.ErrorContains(err, tc.expError))
+				assert.Check(t, is.Nil(policy))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, is.DeepEqual(policy, tc.expected))
+		})
+	}
 }
 
 func strPtr(val string) *string {

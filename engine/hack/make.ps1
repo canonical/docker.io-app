@@ -328,7 +328,7 @@ Function Run-UnitTests() {
     $jsonFilePath = $bundlesDir + "\go-test-report-unit-flaky-tests.json"
     $xmlFilePath = $bundlesDir + "\junit-report-unit-flaky-tests.xml"
     $coverageFilePath = $bundlesDir + "\coverage-report-unit-flaky-tests.txt"
-    $goTestArg = "--rerun-fails=4  --format=standard-verbose --jsonfile=$jsonFilePath --junitfile=$xmlFilePath """ + "--packages=$pkgList" + """ -- " + $raceParm + " -coverprofile=$coverageFilePath -covermode=atomic -ldflags -w -a -test.timeout=10m -test.run=TestFlaky.*"
+    $goTestArg = "--rerun-fails=4  --format=testname --jsonfile=$jsonFilePath --junitfile=$xmlFilePath """ + "--packages=$pkgList" + """ -- " + $raceParm + " -coverprofile=$coverageFilePath -covermode=atomic -ldflags -w -a -test.timeout=10m -test.run=TestFlaky.*"
     Write-Host "INFO: Invoking unit tests run with $GOTESTSUM_LOCATION\gotestsum.exe $goTestArg"
     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
     $pinfo.FileName = "$GOTESTSUM_LOCATION\gotestsum.exe"
@@ -344,7 +344,7 @@ Function Run-UnitTests() {
     $jsonFilePath = $bundlesDir + "\go-test-report-unit-tests.json"
     $xmlFilePath = $bundlesDir + "\junit-report-unit-tests.xml"
     $coverageFilePath = $bundlesDir + "\coverage-report-unit-tests.txt"
-    $goTestArg = "--format=standard-verbose --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- " + $raceParm + " -coverprofile=$coverageFilePath -covermode=atomic -ldflags -w -a -test.timeout=10m -test.skip=TestFlaky.*" + " $pkgList"
+    $goTestArg = "--format=testname --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- " + $raceParm + " -coverprofile=$coverageFilePath -covermode=atomic -ldflags -w -a -test.timeout=10m -test.skip=TestFlaky.*" + " $pkgList"
     Write-Host "INFO: Invoking unit tests run with $GOTESTSUM_LOCATION\gotestsum.exe $goTestArg"
     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
     $pinfo.FileName = "$GOTESTSUM_LOCATION\gotestsum.exe"
@@ -363,6 +363,7 @@ Function Run-IntegrationTests() {
     $escRoot = [Regex]::Escape($root)
     $env:DOCKER_INTEGRATION_DAEMON_DEST = $bundlesDir + "\tmp"
     $dirs = go list -test -f '{{- if ne .ForTest "" -}}{{- .Dir -}}{{- end -}}' .\integration\...
+    $failed = $false
     ForEach($dir in $dirs) {
         # Normalize directory name for using in the test results files.
         $normDir = $dir.Trim()
@@ -387,13 +388,17 @@ Function Run-IntegrationTests() {
         $pinfo.FileName = "gotestsum.exe"
         $pinfo.WorkingDirectory = "$($PWD.Path)"
         $pinfo.UseShellExecute = $false
-        $pinfo.Arguments = "--format=standard-verbose --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- -coverprofile=$coverageFilePath -covermode=atomic -test.timeout=60m $env:INTEGRATION_TESTFLAGS"
+        $pinfo.Arguments = "--format=testname --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- -coverprofile=$coverageFilePath -covermode=atomic -test.timeout=60m $env:INTEGRATION_TESTFLAGS"
         $p = New-Object System.Diagnostics.Process
         $p.StartInfo = $pinfo
         $p.Start() | Out-Null
         $p.WaitForExit()
-        if ($p.ExitCode -ne 0) { Throw "Integration tests failed" }
+        if ($p.ExitCode -ne 0) {
+            $failed = $true
+            if (-not [string]::IsNullOrEmpty($env:TEST_INTEGRATION_FAIL_FAST)) { break }
+        }
     }
+    if ($failed) { Throw "Integration tests failed" }
 }
 
 # Run the integration-cli tests
@@ -412,7 +417,7 @@ Function Run-IntegrationCliTests() {
     $jsonFilePath = $bundlesDir + "\go-test-report-int-cli-tests$reportSuffix.json"
     $xmlFilePath = $bundlesDir + "\junit-report-int-cli-tests$reportSuffix.xml"
     $coverageFilePath = $bundlesDir + "\coverage-report-int-cli-tests$reportSuffix.txt"
-    $goTestArg = "--format=standard-verbose --packages=./integration-cli/... --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- -coverprofile=$coverageFilePath -covermode=atomic -tags=autogen -test.timeout=200m $goTestRun $env:INTEGRATION_TESTFLAGS"
+    $goTestArg = "--format=testname --packages=./integration-cli/... --jsonfile=$jsonFilePath --junitfile=$xmlFilePath -- -coverprofile=$coverageFilePath -covermode=atomic -tags=autogen -test.timeout=200m $goTestRun $env:INTEGRATION_TESTFLAGS"
     Write-Host "INFO: Invoking integration-cli tests run with gotestsum.exe $goTestArg"
     $pinfo = New-Object System.Diagnostics.ProcessStartInfo
     $pinfo.FileName = "gotestsum.exe"
@@ -535,6 +540,11 @@ Try {
             Finally {
                 Remove-Item -Force "docker.zip"
             }
+
+            if (-not ($buildx = $env:BUILDX_VERSION)) { $buildx = "0.36.0" }
+            Write-Host "INFO: Downloading docker/buildx version $buildx..."
+            $url = "https://github.com/docker/buildx/releases/download/v${buildx}/buildx-v${buildx}.windows-amd64.exe"
+            Invoke-WebRequest $url -OutFile "$PWD\bundles\docker-buildx.exe"
         }
     }
 

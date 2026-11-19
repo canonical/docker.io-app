@@ -5,7 +5,9 @@ package containerdexecutor
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 
 	ctd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/mount"
@@ -45,22 +47,31 @@ func getUserSpec(user, rootfsPath string) (specs.User, error) {
 func (w *containerdExecutor) prepareExecutionEnv(ctx context.Context, rootMount executor.Mount, mounts []executor.Mount, meta executor.Meta, details *containerState, netMode pb.NetMode) (string, string, func(), error) {
 	var releasers []func()
 	releaseAll := func() {
-		for i := len(releasers) - 1; i >= 0; i-- {
-			releasers[i]()
+		for _, release := range slices.Backward(releasers) {
+			release()
 		}
 	}
 
-	resolvConf, err := oci.GetResolvConf(ctx, w.root, nil, w.dnsConfig, netMode)
+	stateDirRoot, err := os.OpenRoot(w.root)
 	if err != nil {
 		releaseAll()
 		return "", "", nil, err
 	}
+	defer stateDirRoot.Close()
 
-	hostsFile, clean, err := oci.GetHostsFile(ctx, w.root, meta.ExtraHosts, nil, meta.Hostname)
+	resolvConfName, err := oci.GetResolvConf(ctx, stateDirRoot, nil, w.dnsConfig, netMode)
 	if err != nil {
 		releaseAll()
 		return "", "", nil, err
 	}
+	resolvConf := filepath.Join(w.root, resolvConfName)
+
+	hostsName, clean, err := oci.GetHostsFile(ctx, stateDirRoot, meta.ExtraHosts, nil, meta.Hostname)
+	if err != nil {
+		releaseAll()
+		return "", "", nil, err
+	}
+	hostsFile := filepath.Join(w.root, hostsName)
 	if clean != nil {
 		releasers = append(releasers, clean)
 	}
@@ -123,8 +134,8 @@ func (w *containerdExecutor) ensureCWD(details *containerState, meta executor.Me
 func (w *containerdExecutor) createOCISpec(ctx context.Context, id, resolvConf, hostsFile string, namespace network.Namespace, mounts []executor.Mount, meta executor.Meta, details *containerState) (*specs.Spec, func(), error) {
 	var releasers []func()
 	releaseAll := func() {
-		for i := len(releasers) - 1; i >= 0; i-- {
-			releasers[i]()
+		for _, release := range slices.Backward(releasers) {
+			release()
 		}
 	}
 

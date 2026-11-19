@@ -1,4 +1,4 @@
-package daemon // import "github.com/docker/docker/integration/daemon"
+package daemon
 
 import (
 	"bytes"
@@ -25,6 +25,7 @@ func TestMigrateNativeSnapshotter(t *testing.T) {
 
 func testMigrateSnapshotter(t *testing.T, graphdriver, snapshotter string) {
 	skip.If(t, runtime.GOOS != "linux")
+	skip.If(t, testEnv.IsUserNamespace(), "containerd snapshotters are disabled with user namespace remapping")
 
 	t.Setenv("DOCKER_MIGRATE_SNAPSHOTTER_THRESHOLD", "200M")
 	t.Setenv("DOCKER_DRIVER", "")

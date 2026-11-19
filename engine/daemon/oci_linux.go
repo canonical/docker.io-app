@@ -3,14 +3,15 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	cdcgroups "github.com/containerd/cgroups/v3"
 	"github.com/containerd/containerd/v2/core/containers"
-	"github.com/containerd/containerd/v2/pkg/apparmor"
 	coci "github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/log"
 	containertypes "github.com/moby/moby/api/types/container"
@@ -59,7 +60,7 @@ func withRlimits(daemon *Daemon, daemonCfg *dconfig.Config, c *container.Contain
 }
 
 // withRootless sets the spec to the rootless configuration
-func withRootless(daemon *Daemon, daemonCfg *dconfig.Config) coci.SpecOpts {
+func withRootless(_ *Daemon, daemonCfg *dconfig.Config) coci.SpecOpts {
 	return func(_ context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
 		var v2Controllers []string
 		if cgroupDriver(daemonCfg) == cgroupSystemdDriver {
@@ -87,7 +88,7 @@ func withRootless(daemon *Daemon, daemonCfg *dconfig.Config) coci.SpecOpts {
 
 // withRootfulInRootless is used for "rootful-in-rootless" dind;
 // the daemon is running in UserNS but has no access to RootlessKit API socket, host filesystem, etc.
-func withRootfulInRootless(daemon *Daemon, daemonCfg *dconfig.Config) coci.SpecOpts {
+func withRootfulInRootless(_ *Daemon, _ *dconfig.Config) coci.SpecOpts {
 	return func(_ context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
 		specconv.ToRootfulInRootless(s)
 		return nil
@@ -123,7 +124,7 @@ func WithSelinux(c *container.Container) coci.SpecOpts {
 // WithApparmor sets the apparmor profile
 func WithApparmor(c *container.Container) coci.SpecOpts {
 	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
-		if apparmor.HostSupports() {
+		if appArmorSupported() {
 			var appArmorProfile string
 			if c.AppArmorProfile != "" {
 				appArmorProfile = c.AppArmorProfile
@@ -138,9 +139,9 @@ func WithApparmor(c *container.Container) coci.SpecOpts {
 				// profiles inadvertently. Since we cannot store our profile in
 				// /etc/apparmor.d, nor can we practically add other ways of
 				// telling the system to keep our profile loaded, in order to make
-				// sure that we keep the default profile enabled we dynamically
-				// reload it if necessary.
-				if err := ensureDefaultAppArmorProfile(); err != nil {
+				// sure that we keep the default profile enabled we load it again
+				// if it is missing.
+				if err := loadDefaultAppArmorProfileIfMissing(); err != nil {
 					return err
 				}
 			}
@@ -269,6 +270,16 @@ func WithNamespaces(daemon *Daemon, c *container.Container) coci.SpecOpts {
 			}
 		}
 
+		// Remove time-namespace if not supported. We can remove this once we
+		// drop support for kernel < 5.6.
+		sysInfo, err := daemon.RawSysInfo()
+		if err != nil {
+			return errdefs.System(err)
+		}
+		if !sysInfo.TimeNamespaces {
+			oci.RemoveNamespace(s, specs.TimeNamespace)
+		}
+
 		// ipc
 		ipcMode := c.HostConfig.IpcMode
 		if !ipcMode.Valid() {
@@ -389,10 +400,11 @@ func getSourceMount(source string) (string, string, error) {
 		return "", "", fmt.Errorf("Can't find mount point of %s", source)
 	}
 
-	// find the longest mount point
+	// find the longest mount point, preferring later entries when there are
+	// multiple mounts at the same path (e.g., with different propagation settings)
 	var idx, maxlen int
 	for i := range mi {
-		if len(mi[i].Mountpoint) > maxlen {
+		if len(mi[i].Mountpoint) >= maxlen {
 			maxlen = len(mi[i].Mountpoint)
 			idx = i
 		}
@@ -408,7 +420,7 @@ const (
 // hasMountInfoOption checks if any of the passed any of the given option values
 // are set in the passed in option string.
 func hasMountInfoOption(opts string, vals ...string) bool {
-	for _, opt := range strings.Split(opts, " ") {
+	for opt := range strings.SplitSeq(opts, " ") {
 		for _, val := range vals {
 			if strings.HasPrefix(opt, val) {
 				return true
@@ -463,17 +475,6 @@ var (
 		mount.RSLAVE:   "rslave",
 	}
 )
-
-// inSlice tests whether a string is contained in a slice of strings or not.
-// Comparison is case sensitive
-func inSlice(slice []string, s string) bool {
-	for _, ss := range slice {
-		if s == ss {
-			return true
-		}
-	}
-	return false
-}
 
 // withMounts sets the container's mounts
 func withMounts(daemon *Daemon, daemonCfg *configStore, c *container.Container, mounts []container.Mount) coci.SpecOpts {
@@ -644,7 +645,7 @@ func withMounts(daemon *Daemon, daemonCfg *configStore, c *container.Container, 
 					continue
 				}
 				if _, ok := userMounts[m.Destination]; !ok {
-					if !inSlice(m.Options, "ro") {
+					if !slices.Contains(m.Options, "ro") {
 						s.Mounts[i].Options = append(s.Mounts[i].Options, "ro")
 					}
 				}
@@ -985,9 +986,7 @@ func WithSysctls(c *container.Container) coci.SpecOpts {
 		}
 		// We merge the sysctls injected above with the HostConfig (latter takes
 		// precedence for backwards-compatibility reasons).
-		for k, v := range c.HostConfig.Sysctls {
-			s.Linux.Sysctl[k] = v
-		}
+		maps.Copy(s.Linux.Sysctl, c.HostConfig.Sysctls)
 		return nil
 	}
 }
@@ -1014,6 +1013,8 @@ func (daemon *Daemon) createSpec(ctx context.Context, daemonCfg *configStore, c 
 		withCgroups(daemon, &daemonCfg.Config, c),
 		WithResources(c),
 		WithSysctls(c),
+		// Set the user before CDI device injection, which may append supplementary groups.
+		WithUser(c),
 		WithDevices(daemon, c),
 		withRlimits(daemon, &daemonCfg.Config, c),
 		WithNamespaces(daemon, c),
@@ -1024,7 +1025,6 @@ func (daemon *Daemon) createSpec(ctx context.Context, daemonCfg *configStore, c 
 		WithSelinux(c),
 		WithOOMScore(&c.HostConfig.OomScoreAdj),
 		coci.WithAnnotations(c.HostConfig.Annotations),
-		WithUser(c),
 	)
 
 	if c.NoNewPrivileges {

@@ -1,3 +1,6 @@
+// FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
+//go:build go1.25
+
 package progress
 
 import (
@@ -662,10 +665,7 @@ func (u *replicatedJobProgressUpdater) writeOverallProgress(active, completed in
 	})
 
 	// actualDesired is the lesser of MaxConcurrent, or the remaining tasks
-	actualDesired := u.total - completed
-	if actualDesired > u.concurrent {
-		actualDesired = u.concurrent
-	}
+	actualDesired := min(u.total-completed, u.concurrent)
 
 	_ = u.progressOut.WriteProgress(progress.Progress{
 		ID: "active tasks",

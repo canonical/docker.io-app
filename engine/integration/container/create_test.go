@@ -279,6 +279,7 @@ func TestCreateWithCustomMaskedPaths(t *testing.T) {
 
 	for i, tc := range testCases {
 		t.Run(tc.doc, func(t *testing.T) {
+			skip.If(t, tc.privileged && testEnv.IsUserNamespace(), "privileged mode is incompatible with user namespaces")
 			t.Parallel()
 
 			// Create the container.
@@ -352,6 +353,7 @@ func TestCreateWithCustomReadonlyPaths(t *testing.T) {
 
 	for i, tc := range testCases {
 		t.Run(tc.doc, func(t *testing.T) {
+			skip.If(t, tc.privileged && testEnv.IsUserNamespace(), "privileged mode is incompatible with user namespaces")
 			t.Parallel()
 			ctr, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
 				Config: &container.Config{
@@ -762,13 +764,14 @@ func TestCreateWithMultipleEndpointSettings(t *testing.T) {
 
 func TestCreateWithCustomMACs(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows")
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.44"), "requires API v1.44")
 
 	ctx := setupTest(t)
 	apiClient := testEnv.APIClient()
 
 	net.CreateNoError(ctx, t, apiClient, "testnet")
 
-	attachCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	attachCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	res := testContainer.RunAttach(attachCtx, t, apiClient,
 		testContainer.WithCmd("ip", "-o", "link", "show"),

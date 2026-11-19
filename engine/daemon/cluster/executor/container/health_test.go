@@ -3,7 +3,6 @@
 package container
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -18,10 +17,6 @@ import (
 
 func TestHealthStates(t *testing.T) {
 	// set up environment: events, task, container ....
-	e := events.New()
-	_, l, _ := e.Subscribe()
-	defer e.Evict(l)
-
 	task := &api.Task{
 		ID:        "id",
 		ServiceID: "sid",
@@ -38,33 +33,21 @@ func TestHealthStates(t *testing.T) {
 		Annotations: api.Annotations{Name: "name"},
 	}
 
-	c := &container.Container{
-		ID:   "id",
-		Name: "name",
-		Config: &containertypes.Config{
-			Image: "image_name",
-			Labels: map[string]string{
-				"com.docker.swarm.task.id": "id",
-			},
-		},
-	}
-
 	daemon := &daemon.Daemon{
-		EventsService: e,
+		EventsService: events.New(),
 	}
 
-	controller, err := newController(daemon, nil, nil, task, nil, nil)
+	ctrlr, err := newController(daemon, nil, nil, task, nil, nil)
 	if err != nil {
 		t.Fatalf("create controller fail %v", err)
 	}
 
 	errChan := make(chan error, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// fire checkHealth
 	go func() {
-		err := controller.checkHealth(ctx)
+		err := ctrlr.checkHealth(ctx)
 		select {
 		case errChan <- err:
 		case <-ctx.Done():
@@ -74,7 +57,17 @@ func TestHealthStates(t *testing.T) {
 	// send an event and expect to get expectedErr
 	// if expectedErr is nil, shouldn't get any error
 	logAndExpect := func(msg eventtypes.Action, expectedErr error) {
-		daemon.LogContainerEvent(c, msg)
+		ctr := &container.Container{
+			ID:   "id",
+			Name: "name",
+			Config: &containertypes.Config{
+				Image: "image_name",
+				Labels: map[string]string{
+					"com.docker.swarm.task.id": "id",
+				},
+			},
+		}
+		daemon.LogContainerEvent(ctr, msg)
 
 		timer := time.NewTimer(1 * time.Second)
 		defer timer.Stop()

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -37,11 +38,13 @@ func TestDaemonConfigurationNotFound(t *testing.T) {
 	assert.Check(t, os.IsNotExist(err), "got: %[1]T: %[1]v", err)
 }
 
-func TestDaemonBrokenConfiguration(t *testing.T) {
-	configFile := makeConfigFile(t, `{"Debug": tru`)
+func TestDaemonConfigurationMalformedJSON(t *testing.T) {
+	configFile := makeConfigFile(t, `{"debug": tru`)
 
 	_, err := MergeDaemonConfigurations(&Config{}, nil, configFile)
-	assert.ErrorContains(t, err, `invalid character ' ' in literal true`)
+	assert.Check(t, is.ErrorContains(err, "invalid JSON"))
+	var syntaxErr *json.SyntaxError
+	assert.Check(t, errors.As(err, &syntaxErr), `got: %[1]T: %[1]v`, err)
 }
 
 // TestDaemonConfigurationUnicodeVariations feeds various variations of Unicode into the JSON parser, ensuring that we
@@ -143,6 +146,42 @@ func TestDaemonConfigurationMergeConcurrentError(t *testing.T) {
 	assert.ErrorContains(t, err, `invalid max concurrent downloads: -1`)
 }
 
+func TestDefaultStopTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		config   string
+		expected int
+	}{
+		{
+			name:     "positive",
+			config:   `{"default-stop-timeout": 42}`,
+			expected: 42,
+		},
+		{
+			name:     "zero",
+			config:   `{"default-stop-timeout": 0}`,
+			expected: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configFile := makeConfigFile(t, tc.config)
+			flagsConfig := &Config{
+				CommonConfig: CommonConfig{
+					ContainerDefaults: ContainerDefaults{
+						DefaultStopTimeout: 20,
+					},
+				},
+			}
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			flags.IntVar(&flagsConfig.DefaultStopTimeout, "default-stop-timeout", flagsConfig.DefaultStopTimeout, "")
+
+			merged, err := MergeDaemonConfigurations(flagsConfig, flags, configFile)
+			assert.NilError(t, err)
+			assert.Equal(t, merged.DefaultStopTimeout, tc.expected)
+		})
+	}
+}
+
 func TestDaemonConfigurationMergeConflictsWithInnerStructs(t *testing.T) {
 	configFile := makeConfigFile(t, `{"tlscacert": "/etc/certificates/ca.pem"}`)
 
@@ -235,6 +274,16 @@ func TestValidateConfigurationErrors(t *testing.T) {
 			expectedErr: "bad attribute format: one",
 		},
 		{
+			name: "embedded-containerd with cri-containerd",
+			config: &Config{
+				CommonConfig: CommonConfig{
+					Features:      map[string]bool{"embedded-containerd": true},
+					CriContainerd: true,
+				},
+			},
+			expectedErr: errEmbeddedContainerdWithCRI.Error(),
+		},
+		{
 			name: "multiple label without value",
 			config: &Config{
 				CommonConfig: CommonConfig{
@@ -304,6 +353,17 @@ func TestValidateConfigurationErrors(t *testing.T) {
 				},
 			},
 			expectedErr: "invalid max download attempts: -10",
+		},
+		{
+			name: "invalid default-stop-timeout",
+			config: &Config{
+				CommonConfig: CommonConfig{
+					ContainerDefaults: ContainerDefaults{
+						DefaultStopTimeout: -1,
+					},
+				},
+			},
+			expectedErr: "invalid default stop timeout: -1",
 		},
 		// TODO(thaJeztah) temporarily excluding this test as it assumes defaults are set before validating and applying updated configs
 		/*
@@ -459,6 +519,17 @@ func TestValidateConfigurationErrors(t *testing.T) {
 	}
 }
 
+func TestValidateEmbeddedContainerdAllowsExplicitAddr(t *testing.T) {
+	cfg := &Config{
+		CommonConfig: CommonConfig{
+			Features:       map[string]bool{"embedded-containerd": true},
+			ContainerdAddr: "/run/containerd/containerd.sock",
+		},
+	}
+
+	assert.NilError(t, Validate(cfg))
+}
+
 func withForceOverwrite(fieldName string) func(config *mergo.Config) {
 	return mergo.WithTransformers(overwriteTransformer{fieldName: fieldName})
 }
@@ -468,7 +539,7 @@ type overwriteTransformer struct {
 }
 
 func (tf overwriteTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
-	if typ == reflect.TypeOf(CommonConfig{}) {
+	if typ == reflect.TypeFor[CommonConfig]() {
 		return func(dst, src reflect.Value) error {
 			dst.FieldByName(tf.fieldName).Set(src.FieldByName(tf.fieldName))
 			return nil
@@ -702,7 +773,7 @@ func TestConfigInvalidDNS(t *testing.T) {
 }
 
 func field(field string) cmp.Option {
-	tmp := reflect.TypeOf(Config{})
+	tmp := reflect.TypeFor[Config]()
 	ignoreFields := make([]string, 0, tmp.NumField())
 	for i := 0; i < tmp.NumField(); i++ {
 		if tmp.Field(i).Name != field {

@@ -2,7 +2,6 @@ package buildkit
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,6 +58,7 @@ import (
 	"github.com/pkg/errors"
 	bolt "go.etcd.io/bbolt"
 	"go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/grpc"
 )
 
 func newController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
@@ -82,7 +82,7 @@ func getTraceExporter(ctx context.Context) trace.SpanExporter {
 	return tc
 }
 
-func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
+func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt) (_ *control.Controller, retErr error) {
 	if err := os.MkdirAll(opt.Root, 0o711); err != nil {
 		return nil, err
 	}
@@ -91,30 +91,34 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			_ = historyDB.Close()
+		}
+	}()
 
 	cacheStorage, err := bboltcachestorage.NewStore(filepath.Join(opt.Root, "cache.db"))
 	if err != nil {
 		return nil, err
 	}
-
-	nc := netproviders.Opt{
-		Mode: "host",
-	}
-
-	// HACK! Windows doesn't have 'host' mode networking.
-	if runtime.GOOS == "windows" {
-		nc = netproviders.Opt{
-			Mode: "auto",
+	defer func() {
+		if retErr != nil {
+			_ = cacheStorage.Close()
 		}
-	}
+	}()
 
-	dns := getDNSConfig(opt.DNSConfig)
+	networkMode := "host"
+	if runtime.GOOS == "windows" {
+		// HACK! Windows doesn't have 'host' mode networking.
+		networkMode = "auto"
+	}
 
 	cdiManager, err := getCDIManager(opt)
 	if err != nil {
 		return nil, err
 	}
 
+	dnsConfig := getDNSConfig(opt.DNSConfig)
 	workerOpts := containerd.WorkerOptions{
 		Root:            opt.Root,
 		Address:         opt.ContainerdAddress,
@@ -124,14 +128,23 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 		Labels: map[string]string{
 			label.Snapshotter: opt.Snapshotter,
 		},
-		DNS:             dns,
-		NetworkOpt:      nc,
+		DNS:             dnsConfig,
+		NetworkOpt:      netproviders.Opt{Mode: networkMode},
 		ApparmorProfile: opt.ApparmorProfile,
 		Selinux:         false,
 		CDIManager:      cdiManager,
 	}
 
-	wo, err := containerd.NewWorkerOpt(workerOpts, ctd.WithTimeout(60*time.Second))
+	ctdOpts := []ctd.Opt{ctd.WithTimeout(60 * time.Second)}
+	if opt.ContainerdDialer != nil {
+		// Embedded mode: dial the in-process containerd over the in-memory
+		// pipe. The address stays the gRPC target, and the dialer overrides the
+		// connection.
+		ctdOpts = append(ctdOpts, ctd.WithExtraDialOpts([]grpc.DialOption{
+			grpc.WithContextDialer(opt.ContainerdDialer),
+		}))
+	}
+	wo, err := containerd.NewWorkerOpt(workerOpts, ctdOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,22 +163,37 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	wo.RegistryHosts = opt.RegistryHosts
 	wo.Labels = getLabels(opt, wo.Labels)
 
-	exec, err := newExecutor(
-		opt.Root,
-		opt.DefaultCgroupParent,
-		opt.NetworkController,
-		dns,
-		opt.Rootless,
-		opt.IdentityMapping,
-		opt.ApparmorProfile,
-		cdiManager,
-		opt.ContainerdAddress,
-		opt.ContainerdNamespace,
-		opt.HyperVIsolation,
-	)
+	exec, proxyProvider, err := newExecutor(executorOpts{
+		root:                opt.Root,
+		networkController:   opt.NetworkController,
+		dnsConfig:           dnsConfig,
+		cdiManager:          cdiManager,
+		cgroupParent:        opt.DefaultCgroupParent,
+		apparmorProfile:     opt.ApparmorProfile,
+		rootless:            opt.Rootless,
+		identityMapping:     opt.IdentityMapping,
+		containerdAddr:      opt.ContainerdAddress,
+		containerdDialer:    opt.ContainerdDialer,
+		containerdNamespace: opt.ContainerdNamespace,
+		hypervIsolation:     opt.HyperVIsolation,
+	})
 	if err != nil {
 		return nil, err
 	}
+	if wo.ProxyProvider != nil {
+		if err := wo.ProxyProvider.Close(); err != nil {
+			if proxyProvider != nil {
+				_ = proxyProvider.Close()
+			}
+			return nil, err
+		}
+	}
+	wo.ProxyProvider = proxyProvider
+	defer func() {
+		if retErr != nil && wo.ProxyProvider != nil {
+			_ = wo.ProxyProvider.Close()
+		}
+	}()
 	wo.Executor = exec
 
 	w, err := mobyworker.NewContainerdWorker(ctx, wo, opt.Callbacks, rt)
@@ -197,12 +225,12 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 		CacheManager:     solver.NewCacheManager(ctx, "local", cacheStorage, worker.NewCacheResultStorage(wc)),
 		CacheStore:       cacheStorage,
 		ResolveCacheImporterFuncs: map[string]remotecache.ResolveCacheImporterFunc{
-			"gha":      gha.ResolveCacheImporterFunc(),
+			"gha":      gha.ResolveCacheImporterFunc(nil, nil),
 			"local":    localremotecache.ResolveCacheImporterFunc(opt.SessionManager),
 			"registry": registryremotecache.ResolveCacheImporterFunc(opt.SessionManager, wo.ContentStore, opt.RegistryHosts),
 		},
 		ResolveCacheExporterFuncs: map[string]remotecache.ResolveCacheExporterFunc{
-			"gha":      gha.ResolveCacheExporterFunc(),
+			"gha":      gha.ResolveCacheExporterFunc(nil, nil),
 			"inline":   inlineremotecache.ResolveCacheExporterFunc(),
 			"local":    localremotecache.ResolveCacheExporterFunc(opt.SessionManager),
 			"registry": registryremotecache.ResolveCacheExporterFunc(opt.SessionManager, opt.RegistryHosts),
@@ -218,7 +246,9 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 }
 
 func openHistoryDB(root string, fn string, cfg *config.BuilderHistoryConfig) (*bolt.DB, *bkconfig.HistoryConfig, error) {
-	db, err := bolt.Open(filepath.Join(root, fn), 0o600, nil)
+	db, err := bolt.Open(filepath.Join(root, fn), 0o600, &bolt.Options{
+		FreelistType: bolt.FreelistMapType,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,7 +264,7 @@ func openHistoryDB(root string, fn string, cfg *config.BuilderHistoryConfig) (*b
 	return db, conf, nil
 }
 
-func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt) (*control.Controller, error) {
+func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt) (_ *control.Controller, retErr error) {
 	if err := os.MkdirAll(opt.Root, 0o711); err != nil {
 		return nil, err
 	}
@@ -268,10 +298,17 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 
-	db, err := bolt.Open(filepath.Join(root, "containerdmeta.db"), 0o644, nil)
+	db, err := bolt.Open(filepath.Join(root, "containerdmeta.db"), 0o644, &bolt.Options{
+		FreelistType: bolt.FreelistMapType,
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	defer func() {
+		if retErr != nil {
+			_ = db.Close()
+		}
+	}()
 
 	mdb := ctdmetadata.NewDB(db, innerStore, map[string]snapshots.Snapshotter{})
 
@@ -286,15 +323,21 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
-
-	if err := cache.MigrateV2(context.Background(), filepath.Join(root, "metadata.db"), filepath.Join(root, "metadata_v2.db"), store, snapshotter, lm); err != nil {
-		return nil, err
-	}
+	defer func() {
+		if retErr != nil {
+			_ = snapshotter.Close()
+		}
+	}()
 
 	md, err := metadata.NewStore(filepath.Join(root, "metadata_v2.db"))
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			_ = md.Close()
+		}
+	}()
 
 	layerGetter, ok := snapshotter.(imagerefchecker.LayerGetter)
 	if !ok {
@@ -335,28 +378,35 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 
-	dns := getDNSConfig(opt.DNSConfig)
-
 	cdiManager, err := getCDIManager(opt)
 	if err != nil {
 		return nil, err
 	}
 
-	exec, err := newExecutorGD(
-		root,
-		opt.DefaultCgroupParent,
-		opt.NetworkController,
-		dns,
-		opt.Rootless,
-		opt.IdentityMapping,
-		opt.ApparmorProfile,
-		cdiManager,
-		opt.ContainerdAddress,
-		opt.ContainerdNamespace,
-	)
+	exec, proxyProvider, err := newExecutorGD(executorOpts{
+		root:              root,
+		networkController: opt.NetworkController,
+		dnsConfig:         getDNSConfig(opt.DNSConfig),
+		cdiManager:        cdiManager,
+		cgroupParent:      opt.DefaultCgroupParent,
+		apparmorProfile:   opt.ApparmorProfile,
+		rootless:          opt.Rootless,
+		identityMapping:   opt.IdentityMapping,
+
+		// Windows-only fields (currently not used, as newExecutorGD is not implemented on Windows)
+		containerdAddr:      opt.ContainerdAddress,
+		containerdDialer:    opt.ContainerdDialer,
+		containerdNamespace: opt.ContainerdNamespace,
+		hypervIsolation:     opt.HyperVIsolation,
+	})
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil && proxyProvider != nil {
+			_ = proxyProvider.Close()
+		}
+	}()
 
 	differ, ok := snapshotter.(mobyexporter.Differ)
 	if !ok {
@@ -380,11 +430,21 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			_ = cacheStorage.Close()
+		}
+	}()
 
 	historyDB, historyConf, err := openHistoryDB(opt.Root, "history.db", opt.BuilderConfig.History)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil {
+			_ = historyDB.Close()
+		}
+	}()
 
 	gcPolicy, err := getGCPolicy(opt.BuilderConfig, root)
 	if err != nil {
@@ -414,6 +474,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		ImageSource:       src,
 		DownloadManager:   dist.DownloadManager,
 		V2MetadataService: dist.V2MetadataService,
+		RegistryHosts:     opt.RegistryHosts,
 		Exporter:          exp,
 		Transport:         rt,
 		Layers:            layers,
@@ -422,6 +483,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		GarbageCollect:    mdb.GarbageCollect,
 		Labels:            getLabels(opt, nil),
 		CDIManager:        cdiManager,
+		ProxyProvider:     proxyProvider,
 	}
 
 	wc := &worker.Controller{}
@@ -506,7 +568,7 @@ func parseGCPolicy(p config.BuilderGCRule, prefix string) (reservedSpace, maxUse
 		if prefix != "" {
 			key = prefix + strings.ToTitle(key)
 		}
-		return fmt.Sprintf("failed to parse %s", key)
+		return "failed to parse " + key
 	}
 
 	if p.ReservedSpace != "" {

@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
+	buildtypes "github.com/moby/moby/api/types/build"
 	"github.com/moby/moby/client"
 	"github.com/moby/moby/client/pkg/jsonmessage"
+	"github.com/moby/moby/v2/integration/internal/build"
 	"github.com/moby/moby/v2/integration/internal/container"
 	"github.com/moby/moby/v2/internal/testutil"
 	"github.com/moby/moby/v2/internal/testutil/daemon"
@@ -70,7 +72,7 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 	defer resp.Body.Close()
 
 	buf := bytes.NewBuffer(nil)
-	err = jsonmessage.DisplayJSONMessagesStream(resp.Body, buf, 0, false, nil)
+	err = jsonmessage.DisplayStream(resp.Body, buf)
 	assert.NilError(t, err)
 
 	reader, err := clientUserRemap.ImageSave(ctx, []string{imageTag})
@@ -107,7 +109,7 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 	assert.NilError(t, err, "failed to load image tar file")
 	defer loadResp.Close()
 	var buf2 bytes.Buffer
-	err = jsonmessage.DisplayJSONMessagesStream(loadResp, &buf2, 0, false, nil)
+	err = jsonmessage.DisplayStream(loadResp, &buf2)
 	assert.NilError(t, err)
 
 	cid := container.Run(ctx, t, clientNoUserRemap,
@@ -129,4 +131,39 @@ func TestBuildUserNamespaceValidateCapabilitiesAreV2(t *testing.T) {
 	if strings.TrimSpace(actualStdout.String()) != "/bin/sleep cap_net_bind_service=eip" {
 		t.Fatalf("run produced invalid output: %q, expected %q", actualStdout.String(), "/bin/sleep cap_net_bind_service=eip")
 	}
+}
+
+func TestBuildUserNamespaceRemap(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType != "linux")
+	skip.If(t, testEnv.IsRootless())
+	skip.If(t, testEnv.UsingSnapshotter(), "TODO: Broken with containerd")
+
+	ctx := testutil.StartSpan(baseContext, t)
+
+	d := daemon.New(t, daemon.WithUserNsRemap("default"))
+	d.Start(t)
+	defer func() {
+		d.Stop(t)
+		d.Cleanup(t)
+	}()
+
+	apiClient := d.NewClientT(t)
+	defer apiClient.Close()
+
+	_, err := apiClient.Info(ctx, client.InfoOptions{})
+	assert.NilError(t, err)
+
+	err = load.FrozenImagesLinux(ctx, apiClient, "busybox:latest")
+	assert.NilError(t, err)
+
+	const dockerfile = `FROM busybox
+RUN echo "hello world"
+`
+
+	source := fakecontext.New(t, "", fakecontext.WithDockerfile(dockerfile))
+	defer source.Close()
+
+	assert.Check(t, build.Do(ctx, t, apiClient, source, client.ImageBuildOptions{
+		Version: buildtypes.BuilderBuildKit,
+	}) != "")
 }

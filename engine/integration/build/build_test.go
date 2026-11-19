@@ -97,7 +97,6 @@ func TestBuildWithRemoveAndForceRemove(t *testing.T) {
 	apiClient := testEnv.APIClient()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			ctx := testutil.StartSpan(ctx, t)
 			dockerfile := []byte(tc.dockerfile)
 
@@ -136,8 +135,8 @@ func buildContainerIdsFilter(buildOutput io.Reader) (client.Filters, error) {
 		if err != nil {
 			return filter, err
 		}
-		if ix := strings.Index(m.Stream, intermediateContainerPrefix); ix != -1 {
-			filter.Add("id", strings.TrimSpace(m.Stream[ix+len(intermediateContainerPrefix):]))
+		if _, id, ok := strings.Cut(m.Stream, intermediateContainerPrefix); ok {
+			filter.Add("id", strings.TrimSpace(id))
 		}
 	}
 }
@@ -376,7 +375,12 @@ RUN cat somefile`
 	assert.Check(t, is.Contains(img.Config.Env, "bar=baz"))
 }
 
-// #35403 #36122
+// TestBuildUncleanTarFilenames is a regression test for cache invalidation
+// with non-canonical, in-context archive paths.
+//
+// See:
+// - https://github.com/moby/moby/issues/35403
+// - https://github.com/moby/moby/issues/36122
 func TestBuildUncleanTarFilenames(t *testing.T) {
 	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "FIXME")
 
@@ -392,7 +396,7 @@ COPY bar /
 	buf := bytes.NewBuffer(nil)
 	w := tar.NewWriter(buf)
 	writeTarRecord(t, w, "Dockerfile", dockerfile)
-	writeTarRecord(t, w, "../foo", "foocontents0")
+	writeTarRecord(t, w, "dir/../foo", "foocontents0")
 	writeTarRecord(t, w, "/bar", "barcontents0")
 	err := w.Close()
 	assert.NilError(t, err)
@@ -414,7 +418,7 @@ COPY bar /
 	buf = bytes.NewBuffer(nil)
 	w = tar.NewWriter(buf)
 	writeTarRecord(t, w, "Dockerfile", dockerfile)
-	writeTarRecord(t, w, "../foo", "foocontents1")
+	writeTarRecord(t, w, "dir/../foo", "foocontents1")
 	writeTarRecord(t, w, "/bar", "barcontents1")
 	err = w.Close()
 	assert.NilError(t, err)
@@ -720,9 +724,8 @@ func TestBuildEmitsImageCreateEvent(t *testing.T) {
 
 	for _, builderVersion := range []build.BuilderVersion{build.BuilderV1, build.BuilderBuildKit} {
 		t.Run("v"+string(builderVersion), func(t *testing.T) {
-			if builderVersion == build.BuilderBuildKit {
-				skip.If(t, testEnv.DaemonInfo.OSType == "windows", "Buildkit is not supported on Windows")
-			}
+			skip.If(t, builderVersion == build.BuilderBuildKit && testEnv.DaemonInfo.OSType == "windows" && !testEnv.UsingSnapshotter(),
+				"Buildkit is not supported on Windows with graphdrivers")
 
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
@@ -774,7 +777,6 @@ func TestBuildEmitsImageCreateEvent(t *testing.T) {
 }
 
 func TestBuildHistoryDoesNotPreventRemoval(t *testing.T) {
-	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "buildkit is not supported on Windows")
 	skip.If(t, !testEnv.UsingSnapshotter(), "only relevant to c8d integration")
 
 	ctx := setupTest(t)
@@ -861,7 +863,7 @@ type buildLine struct {
 
 func getImageIDsFromBuild(output []byte) ([]string, error) {
 	var ids []string
-	for _, line := range bytes.Split(output, []byte("\n")) {
+	for line := range bytes.SplitSeq(output, []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

@@ -345,12 +345,11 @@ func (s *DockerRegistrySuite) TestBuildCopyFromForcePull(c *testing.T) {
 	// tag the image to upload it to the private registry
 	ctx := testutil.GetContext(c)
 	_, err := apiClient.ImageTag(ctx, client.ImageTagOptions{Source: "busybox", Target: repoName})
-	assert.Check(c, err)
+	assert.NilError(c, err)
 	// push the image to the registry
 	rc, err := apiClient.ImagePush(ctx, repoName, client.ImagePushOptions{RegistryAuth: "{}"})
-	assert.Check(c, err)
-	_, err = io.Copy(io.Discard, rc)
-	assert.Check(c, err)
+	assert.NilError(c, err)
+	assert.NilError(c, rc.Wait(ctx))
 
 	dockerfile := fmt.Sprintf(`
 		FROM %s AS foo
@@ -569,7 +568,7 @@ type buildLine struct {
 
 func getImageIDsFromBuild(t *testing.T, output []byte) []string {
 	var ids []string
-	for _, line := range bytes.Split(output, []byte("\n")) {
+	for line := range bytes.SplitSeq(output, []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

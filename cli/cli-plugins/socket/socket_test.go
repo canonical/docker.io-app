@@ -47,16 +47,16 @@ func TestPluginServer(t *testing.T) {
 		select {
 		case err := <-done:
 			if !errors.Is(err, io.EOF) {
-				t.Fatalf("exepcted EOF error, got: %v", err)
+				t.Fatalf("expected EOF error, got: %v", err)
 			}
 		case <-time.After(10 * time.Millisecond):
 		}
 	})
 
 	t.Run("allows reconnects", func(t *testing.T) {
-		var calls int32
+		var calls atomic.Int32
 		h := func(_ net.Conn) {
-			atomic.AddInt32(&calls, 1)
+			calls.Add(1)
 		}
 
 		srv, err := NewPluginServer(h)
@@ -70,7 +70,7 @@ func TestPluginServer(t *testing.T) {
 
 		waitForCalls := func(n int) {
 			poll.WaitOn(t, func(t poll.LogT) poll.Result {
-				if atomic.LoadInt32(&calls) == int32(n) {
+				if calls.Load() == int32(n) {
 					return poll.Success()
 				}
 				return poll.Continue("waiting for handler to be called")

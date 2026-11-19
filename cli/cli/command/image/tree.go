@@ -1,19 +1,17 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package image
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/containerd/platforms"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/command/formatter"
-	"github.com/docker/cli/cli/streams"
 	"github.com/docker/cli/internal/tui"
 	"github.com/docker/go-units"
 	imagetypes "github.com/moby/moby/api/types/image"
@@ -206,37 +204,41 @@ var allChips = []imageChip{
 	chipInUse,
 }
 
+// getPossibleChips returns the list of chips used by at least one image.
+// It is used to determine which columns to print (and how much width to
+// reserve).
 func getPossibleChips(view treeView) (chips []imageChip) {
-	remaining := make([]imageChip, len(allChips))
-	copy(remaining, allChips)
+	remaining := slices.Clone(allChips)
 
-	var possible []imageChip
-	for _, img := range view.images {
-		details := []imageDetails{img.Details}
-
-		for _, c := range img.Children {
-			details = append(details, c.Details)
+	check := func(d imageDetails) (done bool) {
+		// filter without allocating
+		out := remaining[:0]
+		for _, chip := range remaining {
+			if chip.check(&d) {
+				chips = append(chips, chip)
+				continue
+			}
+			out = append(out, chip)
 		}
+		remaining = out
+		return len(remaining) == 0
+	}
 
-		for _, d := range details {
-			for idx := len(remaining) - 1; idx >= 0; idx-- {
-				chip := remaining[idx]
-				if chip.check(&d) {
-					possible = append(possible, chip)
-					remaining = append(remaining[:idx], remaining[idx+1:]...)
-				}
+	for _, img := range view.images {
+		if check(img.Details) {
+			return chips
+		}
+		for _, c := range img.Children {
+			if check(c.Details) {
+				return chips
 			}
 		}
 	}
 
-	return possible
+	return chips
 }
 
 func printImageTree(outs command.Streams, view treeView) {
-	if streamRedirected(outs.Out()) {
-		_, _ = fmt.Fprintln(outs.Err(), "WARNING: This output is designed for human readability. For machine-readable output, please use --format.")
-	}
-
 	out := tui.NewOutput(outs.Out())
 	isTerm := out.IsTerminal()
 
@@ -389,10 +391,7 @@ func generateLegend(out tui.Output, width uint) string {
 	}
 	legend += legendSb371.String()
 
-	r := int(width) - tui.Width(legend)
-	if r < 0 {
-		r = 0
-	}
+	r := max(int(width)-tui.Width(legend), 0)
 	legend = strings.Repeat(" ", r) + legend
 	return legend
 }
@@ -563,18 +562,4 @@ func widestFirstColumnValue(headers []imgColumn, images []topImage) int {
 		}
 	}
 	return width
-}
-
-func streamRedirected(s *streams.Out) bool {
-	fd := s.FD()
-	if os.Stdout.Fd() != fd {
-		return true
-	}
-
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return true
-	}
-
-	return fi.Mode()&os.ModeCharDevice == 0
 }

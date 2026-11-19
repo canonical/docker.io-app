@@ -19,10 +19,10 @@ produces:
 consumes:
   - "application/json"
   - "text/plain"
-basePath: "/v1.52"
+basePath: "/v1.55"
 info:
   title: "Docker Engine API"
-  version: "1.52"
+  version: "1.55"
   x-logo:
     url: "https://docs.docker.com/assets/images/logo-docker-main.png"
   description: |
@@ -55,8 +55,8 @@ info:
     the URL is not supported by the daemon, a HTTP `400 Bad Request` error message
     is returned.
 
-    If you omit the version-prefix, the current version of the API (v1.50) is used.
-    For example, calling `/info` is the same as calling `/v1.52/info`. Using the
+    If you omit the version-prefix, the current version of the API is used.
+    For example, calling `/info` is the same as calling `/v1.55/info`. Using the
     API without a version-prefix is deprecated and will be removed in a future release.
 
     Engine releases in the near future should support this version of the API,
@@ -172,6 +172,34 @@ tags:
     x-displayName: "System"
 
 definitions:
+  ImageHistoryResponseItem:
+    type: "object"
+    x-go-name: HistoryResponseItem
+    title: "HistoryResponseItem"
+    description: "individual image layer information in response to ImageHistory operation"
+    required: [Id, Created, CreatedBy, Tags, Size, Comment]
+    properties:
+      Id:
+        type: "string"
+        x-nullable: false
+      Created:
+        type: "integer"
+        format: "int64"
+        x-nullable: false
+      CreatedBy:
+        type: "string"
+        x-nullable: false
+      Tags:
+        type: "array"
+        items:
+          type: "string"
+      Size:
+        type: "integer"
+        format: "int64"
+        x-nullable: false
+      Comment:
+        type: "string"
+        x-nullable: false
   PortSummary:
     type: "object"
     description: |
@@ -204,6 +232,26 @@ definitions:
       PublicPort: 80
       Type: "tcp"
 
+  MountType:
+    description: |-
+      The mount type. Available types:
+
+      - `bind` a mount of a file or directory from the host into the container.
+      - `cluster` a Swarm cluster volume.
+      - `image` an OCI image.
+      - `npipe` a named pipe from the host into the container.
+      - `tmpfs` a `tmpfs`.
+      - `volume` a docker volume with the given `Name`.
+    type: "string"
+    enum:
+      - "bind"
+      - "cluster"
+      - "image"
+      - "npipe"
+      - "tmpfs"
+      - "volume"
+    example: "volume"
+
   MountPoint:
     type: "object"
     description: |
@@ -215,19 +263,13 @@ definitions:
           The mount type:
 
           - `bind` a mount of a file or directory from the host into the container.
-          - `volume` a docker volume with the given `Name`.
-          - `image` a docker image
-          - `tmpfs` a `tmpfs`.
+          - `cluster` a Swarm cluster volume.
+          - `image` an OCI image.
           - `npipe` a named pipe from the host into the container.
-          - `cluster` a Swarm cluster volume
-        type: "string"
-        enum:
-          - "bind"
-          - "volume"
-          - "image"
-          - "tmpfs"
-          - "npipe"
-          - "cluster"
+          - `tmpfs` a `tmpfs`.
+          - `volume` a docker volume with the given `Name`.
+        allOf:
+          - $ref: "#/definitions/MountType"
         example: "volume"
       Name:
         description: |
@@ -359,26 +401,26 @@ definitions:
         description: "Container path."
         type: "string"
       Source:
-        description: "Mount source (e.g. a volume name, a host path)."
+        description: |-
+          Mount source (e.g. a volume name, a host path). The source cannot be
+          specified when using `Type=tmpfs`. For `Type=bind`, the source path
+          must either exist, or the `CreateMountpoint` must be set to `true` to
+          create the source path on the host if missing.
+
+          For `Type=npipe`, the pipe must exist prior to creating the container.
         type: "string"
       Type:
         description: |
           The mount type. Available types:
 
-          - `bind` Mounts a file or directory from the host into the container. Must exist prior to creating the container.
-          - `volume` Creates a volume with the given name and options (or uses a pre-existing volume with the same name and options). These are **not** removed when the container is removed.
-          - `image` Mounts an image.
-          - `tmpfs` Create a tmpfs with the given options. The mount source cannot be specified for tmpfs.
-          - `npipe` Mounts a named pipe from the host into the container. Must exist prior to creating the container.
+          - `bind` Mounts a file or directory from the host into the container. The `Source` must exist prior to creating the container.
           - `cluster` a Swarm cluster volume
-        type: "string"
-        enum:
-          - "bind"
-          - "volume"
-          - "image"
-          - "tmpfs"
-          - "npipe"
-          - "cluster"
+          - `image` Mounts an image.
+          - `npipe` Mounts a named pipe from the host into the container. The `Source` must exist prior to creating the container.
+          - `tmpfs` Create a tmpfs with the given options. The mount `Source` cannot be specified for tmpfs.
+          - `volume` Creates a volume with the given name and options (or uses a pre-existing volume with the same name and options). These are **not** removed when the container is removed.
+        allOf:
+          - $ref: "#/definitions/MountType"
       ReadOnly:
         description: "Whether the mount should be read-only."
         type: "boolean"
@@ -409,12 +451,12 @@ definitions:
             default: false
           ReadOnlyNonRecursive:
             description: |
-               Make the mount non-recursively read-only, but still leave the mount recursive
-               (unless NonRecursive is set to `true` in conjunction).
+              Make the mount non-recursively read-only, but still leave the mount recursive
+              (unless NonRecursive is set to `true` in conjunction).
 
-               Added in v1.44, before that version all read-only mounts were
-               non-recursive by default. To match the previous behaviour this
-               will default to `true` for clients on versions prior to v1.44.
+              Added in v1.44, before that version all read-only mounts were
+              non-recursive by default. To match the previous behaviour this
+              will default to `true` for clients on versions prior to v1.44.
             type: "boolean"
             default: false
           ReadOnlyForceRecursive:
@@ -467,7 +509,10 @@ definitions:
             type: "integer"
             format: "int64"
           Mode:
-            description: "The permission mode for the tmpfs mount in an integer."
+            description: |
+              The permission mode for the tmpfs mount in an integer.
+              The value must not be in octal format (e.g. 755) but rather
+              the decimal representation of the octal value (e.g. 493).
             type: "integer"
           Options:
             description: |
@@ -807,7 +852,9 @@ definitions:
           Value: "UUID2"
 
   HealthConfig:
-    description: "A test to perform to check that the container is healthy."
+    description: |
+      A test to perform to check that the container is healthy.
+      Healthcheck commands should be side-effect free.
     type: "object"
     properties:
       Test:
@@ -818,6 +865,12 @@ definitions:
           - `["NONE"]` disable healthcheck
           - `["CMD", args...]` exec arguments directly
           - `["CMD-SHELL", command]` run command with system's default shell
+
+          A non-zero exit code indicates a failed healthcheck:
+          - `0` healthy
+          - `1` unhealthy
+          - `2` reserved (treated as unhealthy)
+          - other values: error running probe
         type: "array"
         items:
           type: "string"
@@ -831,6 +884,10 @@ definitions:
         description: |
           The time to wait before considering the check to have hung. It should
           be 0 or at least 1000000 (1 ms). 0 means inherit.
+
+          If the health check command does not complete within this timeout,
+          the check is considered failed and the health check process is
+          forcibly terminated without a graceful shutdown.
         type: "integer"
         format: "int64"
       Retries:
@@ -1413,9 +1470,10 @@ definitions:
         example: "SIGTERM"
         x-nullable: true
       StopTimeout:
-        description: "Timeout to stop a container in seconds."
+        description: |
+          Timeout to stop a container in seconds. If omitted, the daemon-wide
+          default (`default-stop-timeout`) is used.
         type: "integer"
-        default: 10
         x-nullable: true
       Shell:
         description: |
@@ -1780,19 +1838,26 @@ definitions:
         $ref: "#/definitions/OCIDescriptor"
       Manifests:
         description: |
-            Manifests is a list of image manifests available in this image. It
-            provides a more detailed view of the platform-specific image manifests or
-            other image-attached data like build attestations.
+          Manifests is a list of image manifests available in this image. It
+          provides a more detailed view of the platform-specific image manifests or
+          other image-attached data like build attestations.
 
-            Only available if the daemon provides a multi-platform image store
-            and the `manifests` option is set in the inspect request.
+          Only available if the daemon provides a multi-platform image store
+          and the `manifests` option is set in the inspect request.
 
-            WARNING: This is experimental and may change at any time without any backward
-            compatibility.
+          WARNING: This is experimental and may change at any time without any backward
+          compatibility.
         type: "array"
         x-nullable: true
         items:
           $ref: "#/definitions/ImageManifestSummary"
+      Identity:
+        description: |-
+          Identity holds information about the identity and origin of the image.
+          This is trusted information verified by the daemon and cannot be modified
+          by tagging an image to a different name.
+        x-nullable: true
+        $ref: "#/definitions/Identity"
       RepoTags:
         description: |
           List of image names/tags in the local image cache that reference this
@@ -1919,6 +1984,220 @@ definitions:
             format: "dateTime"
             example: "2022-02-28T14:40:02.623929178Z"
             x-nullable: true
+
+  Identity:
+    description: |-
+      Identity holds information about the identity and origin of the image.
+      This is trusted information verified by the daemon and cannot be modified
+      by tagging an image to a different name.
+    type: "object"
+    properties:
+      Signature:
+        description: |-
+          Signature contains the properties of verified signatures for the image.
+        type: "array"
+        items:
+          $ref: "#/definitions/SignatureIdentity"
+      Pull:
+        description: |-
+          Pull contains remote location information if image was created via pull.
+          If image was pulled via mirror, this contains the original repository location.
+          After successful push this images also contains the pushed repository location.
+        type: "array"
+        items:
+          $ref: "#/definitions/PullIdentity"
+      Build:
+        description: |-
+          Build contains build reference information if image was created via build.
+        type: "array"
+        items:
+          $ref: "#/definitions/BuildIdentity"
+
+  BuildIdentity:
+    description: |-
+      BuildIdentity contains build reference information if image was created via build.
+    type: "object"
+    properties:
+      Ref:
+        description: |-
+          Ref is the identifier for the build request. This reference can be used to
+          look up the build details in BuildKit history API.
+        type: "string"
+      CreatedAt:
+        description: |-
+          CreatedAt is the time when the build ran.
+        type: "string"
+        format: "date-time"
+
+  PullIdentity:
+    description: |-
+      PullIdentity contains remote location information if image was created via pull.
+      If image was pulled via mirror, this contains the original repository location.
+    type: "object"
+    properties:
+      Repository:
+        description: |-
+          Repository is the remote repository location the image was pulled from.
+        type: "string"
+
+  SignatureIdentity:
+    description: |-
+      SignatureIdentity contains the properties of verified signatures for the image.
+    type: "object"
+    properties:
+      Name:
+        description: |-
+          Name is a textual description summarizing the type of signature.
+        type: "string"
+      Timestamps:
+        description: |-
+          Timestamps contains a list of verified signed timestamps for the signature.
+        type: "array"
+        items:
+          $ref: "#/definitions/SignatureTimestamp"
+      KnownSigner:
+        description: |-
+          KnownSigner is an identifier for a special signer identity that is known to the implementation.
+        $ref: "#/definitions/KnownSignerIdentity"
+      DockerReference:
+        description: |-
+          DockerReference is the Docker image reference associated with the signature.
+          This is an optional field only present in older hashedrecord signatures.
+        type: "string"
+      Signer:
+        description: |-
+          Signer contains information about the signer certificate used to sign the image.
+        $ref: "#/definitions/SignerIdentity"
+      SignatureType:
+        description: |-
+          SignatureType is the type of signature format. E.g. "bundle-v0.3" or "hashedrecord".
+        $ref: "#/definitions/SignatureType"
+      Error:
+        description: |-
+          Error contains error information if signature verification failed.
+          Other fields will be empty in this case.
+        type: "string"
+      Warnings:
+        description: |-
+          Warnings contains any warnings that occurred during signature verification.
+          For example, if there was no internet connectivity and cached trust roots were used.
+          Warning does not indicate a failed verification but may point to configuration issues.
+        type: "array"
+        items:
+          type: "string"
+
+  SignatureTimestamp:
+    description: |-
+      SignatureTimestamp contains information about a verified signed timestamp for an image signature.
+    type: "object"
+    properties:
+      Type:
+        $ref: "#/definitions/SignatureTimestampType"
+      URI:
+        type: "string"
+      Timestamp:
+        type: "string"
+        format: "date-time"
+
+  SignatureTimestampType:
+    description: |-
+      SignatureTimestampType is the type of timestamp used in the signature.
+    type: "string"
+    enum:
+      - "Tlog"
+      - "TimestampAuthority"
+
+  SignatureType:
+    description: |-
+      SignatureType is the type of signature format.
+    type: "string"
+    enum:
+      - "bundle-v0.3"
+      - "simplesigning-v1"
+
+  KnownSignerIdentity:
+    description: |-
+      KnownSignerIdentity is an identifier for a special signer identity that is known to the implementation.
+    type: "string"
+    enum:
+      - "DHI"
+
+  SignerIdentity:
+    description: |-
+      SignerIdentity contains information about the signer certificate used to sign the image.
+    type: "object"
+    properties:
+      CertificateIssuer:
+        type: "string"
+        description: |-
+          CertificateIssuer is the certificate issuer.
+      SubjectAlternativeName:
+        type: "string"
+        description: |-
+          SubjectAlternativeName is the certificate subject alternative name.
+      Issuer:
+        type: "string"
+        description: |-
+          The OIDC issuer. Should match `iss` claim of ID token or, in the case of
+          a federated login like Dex it should match the issuer URL of the
+          upstream issuer. The issuer is not set the extensions are invalid and
+          will fail to render.
+      BuildSignerURI:
+        type: "string"
+        description: |-
+          Reference to specific build instructions that are responsible for signing.
+      BuildSignerDigest:
+        type: "string"
+        description: |-
+          Immutable reference to the specific version of the build instructions that is responsible for signing.
+      RunnerEnvironment:
+        type: "string"
+        description: |-
+          Specifies whether the build took place in platform-hosted cloud infrastructure or customer/self-hosted infrastructure.
+      SourceRepositoryURI:
+        type: "string"
+        description: |-
+          Source repository URL that the build was based on.
+      SourceRepositoryDigest:
+        type: "string"
+        description: |-
+          Immutable reference to a specific version of the source code that the build was based upon.
+      SourceRepositoryRef:
+        type: "string"
+        description: |-
+          Source Repository Ref that the build run was based upon.
+      SourceRepositoryIdentifier:
+        type: "string"
+        description: |-
+          Immutable identifier for the source repository the workflow was based upon.
+      SourceRepositoryOwnerURI:
+        type: "string"
+        description: |-
+          Source repository owner URL of the owner of the source repository that the build was based on.
+      SourceRepositoryOwnerIdentifier:
+        type: "string"
+        description: |-
+          Immutable identifier for the owner of the source repository that the workflow was based upon.
+      BuildConfigURI:
+        type: "string"
+        description: |-
+          Build Config URL to the top-level/initiating build instructions.
+      BuildConfigDigest:
+        type: "string"
+        description: |-
+          Immutable reference to the specific version of the top-level/initiating build instructions.
+      BuildTrigger:
+        type: "string"
+        description: |-
+          Event or action that initiated the build.
+      RunInvocationURI:
+        type: "string"
+        description: |-
+          Run Invocation URL to uniquely identify the build execution.
+      SourceRepositoryVisibilityAtSigning:
+        type: "string"
+        description: |-
+          Source repository visibility at the time of signing the certificate.
 
   ImageSummary:
     type: "object"
@@ -2942,6 +3221,31 @@ definitions:
         description: |
           The unique identifier for the device within its source driver.
           For CDI devices, this would be an FQDN like "vendor.com/gpu=0".
+
+  NRIInfo:
+    description: |
+      Information about the Node Resource Interface (NRI).
+
+      This field is only present if NRI is enabled.
+    type: "object"
+    x-nullable: true
+    properties:
+      Info:
+        description: |
+          Information about NRI, provided as "label" / "value" pairs.
+
+          <p><br /></p>
+
+          > **Note**: The information returned in this field, including the
+          > formatting of values and labels, should not be considered stable,
+          > and may change without notice.
+        type: "array"
+        items:
+          type: "array"
+          items:
+            type: "string"
+        example:
+          - ["plugin-path", "/opt/docker/nri/plugins"]
 
   ErrorDetail:
     type: "object"
@@ -4666,6 +4970,29 @@ definitions:
       PortStatus:
         $ref: "#/definitions/PortStatus"
 
+  NetworkAttachment:
+    description: |
+      Specifies how a task is attached to a network, and the addresses the
+      task was assigned on that network.
+    type: "object"
+    properties:
+      Network:
+        $ref: "#/definitions/Network"
+      Addresses:
+        description: |
+          The IP addresses (in CIDR notation) assigned to the task on this
+          network. To maintain backward compatibility this field accepts CIDR
+          notation, but only the IP address is used.
+        type: "array"
+        items:
+          type: "string"
+          format: "cidr"
+    example:
+      Network:
+        ID: "4qvuz4ko70xaltuqbt8956gd1"
+      Addresses:
+        - "10.255.0.10/16"
+
   Task:
     type: "object"
     properties:
@@ -4710,6 +5037,13 @@ definitions:
           the JobIteration of the Service this Task was created for. Absent if
           the Task was created for a Replicated or Global Service.
         $ref: "#/definitions/ObjectVersion"
+      NetworksAttachments:
+        description: |
+          The networks that this task is attached to, and the addresses the
+          task was assigned on each of them.
+        type: "array"
+        items:
+          $ref: "#/definitions/NetworkAttachment"
     example:
       ID: "0kzzo1i0y4jz6027t0k7aezc7"
       Version:
@@ -5644,8 +5978,8 @@ definitions:
           com.example.some-other-label: "some-other-value"
       Data:
         description: |
-          Data is the data to store as a secret, formatted as a Base64-url-safe-encoded
-          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-5)) string.
+          Data is the data to store as a secret, formatted as a standard base64-encoded
+          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-4)) string.
           It must be empty if the Driver field is set, in which case the data is
           loaded from an external secret store. The maximum allowed size is 500KB,
           as defined in [MaxSecretSize](https://pkg.go.dev/github.com/moby/swarmkit/v2@v2.0.0/api/validation#MaxSecretSize).
@@ -5699,8 +6033,8 @@ definitions:
           type: "string"
       Data:
         description: |
-          Data is the data to store as a config, formatted as a Base64-url-safe-encoded
-          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-5)) string.
+          Data is the data to store as a config, formatted as a standard base64-encoded
+          ([RFC 4648](https://tools.ietf.org/html/rfc4648#section-4)) string.
           The maximum allowed size is 1000KB, as defined in [MaxConfigSize](https://pkg.go.dev/github.com/moby/swarmkit/v2@v2.0.0-20250103191802-8c1959736554/manager/controlapi#MaxConfigSize).
         type: "string"
       Templating:
@@ -6191,7 +6525,11 @@ definitions:
         example: 0
       stats:
         description: |
-          All the stats exported via memory.stat. when using cgroups v2.
+          All the stats exported via memory.stat.
+
+          The fields in this object differ between cgroups v1 and v2.
+          On cgroups v1, fields such as `cache`, `rss`, `mapped_file` are available.
+          On cgroups v2, fields such as `file`, `anon`, `inactive_file` are available.
 
           This field is Linux-specific and omitted for Windows containers.
         type: "object"
@@ -6531,7 +6869,9 @@ definitions:
         example: "linux"
       Arch:
         description: |
-          The architecture that the daemon is running on
+          Architecture of the daemon, as returned by the Go runtime (`GOARCH`).
+
+          A full list of possible values can be found in the [Go documentation](https://go.dev/doc/install/source#environment).
         type: "string"
         example: "amd64"
       KernelVersion:
@@ -6758,10 +7098,13 @@ definitions:
         example: "linux"
       Architecture:
         description: |
-          Hardware architecture of the host, as returned by the Go runtime
-          (`GOARCH`).
+          Hardware architecture of the host, as returned by the operating system.
+          This is equivalent to the output of `uname -m` on Linux.
 
-          A full list of possible values can be found in the [Go documentation](https://go.dev/doc/install/source#environment).
+          Unlike `Arch` (from `/version`), this reports the machine's native
+          architecture, which can differ from the Go runtime architecture when
+          running a binary compiled for a different architecture (for example,
+          a 32-bit binary running on 64-bit hardware).
         type: "string"
         example: "x86_64"
       NCPU:
@@ -6980,6 +7323,8 @@ definitions:
         type: "array"
         items:
           $ref: "#/definitions/DeviceInfo"
+      NRI:
+        $ref: "#/definitions/NRIInfo"
       Warnings:
         description: |
           List of warnings / informational messages about missing features, or
@@ -7820,9 +8165,31 @@ definitions:
       details, see documentation for the Topology object in the CSI
       specification.
     type: "object"
-    additionalProperties:
-      type: "string"
+    properties:
+      Segments:
+        type: "object"
+        additionalProperties:
+          type: "string"
 
+  AttestationStatement:
+    x-go-name: "AttestationStatement"
+    description: |
+      AttestationStatement is a single in-toto statement attached to an image.
+    type: "object"
+    required: ["Descriptor", "PredicateType"]
+    properties:
+      Descriptor:
+        $ref: "#/definitions/OCIDescriptor"
+      PredicateType:
+        description: The in-toto predicate type URI of this statement.
+        type: "string"
+        example: "https://slsa.dev/provenance/v0.2"
+      Statement:
+        description: |
+          The verbatim in-toto statement JSON. Only included when the caller
+          opts in via the `statement=true` query parameter; otherwise absent.
+        type: "object"
+        x-nullable: true
   ImageManifestSummary:
     x-go-name: "ManifestSummary"
     description: |
@@ -7898,6 +8265,13 @@ definitions:
               OCI platform of the image. This will be the platform specified in the
               manifest descriptor from the index/manifest list.
               If it's not available, it will be obtained from the image config.
+          Identity:
+            description: |
+              Identity holds information about the identity and origin of this image.
+              For image list responses, this can duplicate Build/Pull fields across
+              image manifests, because those parts are image-level metadata.
+            x-nullable: true
+            $ref: "#/definitions/Identity"
           Containers:
             description: |
               The IDs of the containers that are using this image.
@@ -8457,7 +8831,8 @@ paths:
 
         To calculate the values shown by the `stats` command of the docker cli tool
         the following formulas can be used:
-        * used_memory = `memory_stats.usage - memory_stats.stats.cache`
+        * used_memory = `memory_stats.usage - memory_stats.stats.cache` (cgroups v1)
+        * used_memory = `memory_stats.usage - memory_stats.stats.inactive_file` (cgroups v2)
         * available_memory = `memory_stats.limit`
         * Memory usage % = `(used_memory / available_memory) * 100.0`
         * cpu_delta = `cpu_stats.cpu_usage.total_usage - precpu_stats.cpu_usage.total_usage`
@@ -9407,6 +9782,11 @@ paths:
           description: "Include `Manifests` in the image summary."
           type: "boolean"
           default: false
+        - name: "identity"
+          in: "query"
+          description: "Include `Identity` in each manifest summary. Requires `manifests=1`."
+          type: "boolean"
+          default: false
       tags: ["Image"]
   /build:
     post:
@@ -9801,8 +10181,117 @@ paths:
           required: true
         - name: "manifests"
           in: "query"
-          description: "Include Manifests in the image summary."
+          description: |-
+            Include Manifests in the image summary.
+
+            The `manifests` and `platform` options are mutually exclusive, and
+            an error is produced if both are set.
           type: "boolean"
+          default: false
+          required: false
+        - name: "platform"
+          type: "string"
+          in: "query"
+          description: |-
+            JSON-encoded OCI platform to select the platform-variant.
+            If omitted, it defaults to any locally available platform,
+            prioritizing the daemon's host platform.
+
+            If the daemon provides a multi-platform image store, this selects
+            the platform-variant to show inspect. If the image is
+            a single-platform image, or if the multi-platform image does not
+            provide a variant matching the given platform, an error is returned.
+
+            The `platform` and `manifests` options are mutually exclusive, and
+            an error is produced if both are set.
+
+            Example: `{"os": "linux", "architecture": "arm", "variant": "v5"}`
+      tags: ["Image"]
+  /images/{name}/attestations:
+    get:
+      summary: "Get attestation statements for an image"
+      description: |
+        Return the in-toto attestation statements attached to the image for the
+        given platform. The daemon locates the attestation manifest(s) that
+        reference the matching platform image manifest, reads their statement
+        layers, and returns the verbatim statement JSON together with layer
+        metadata.
+
+        If the image has no attestations an empty array is returned.
+      operationId: "ImageAttestations"
+      produces:
+        - "application/json"
+      responses:
+        200:
+          description: "No error"
+          schema:
+            type: "array"
+            items:
+              $ref: "#/definitions/AttestationStatement"
+        400:
+          description: "Bad parameter (e.g. malformed `platform` value)"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        404:
+          description: "No such image, or no manifest found for the requested platform"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        500:
+          description: "Server error"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        501:
+          description: |
+            The daemon's image backend does not support attestations. This
+            is returned by the legacy (graphdriver) image store, which does
+            not preserve OCI image indexes.
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+      parameters:
+        - name: "name"
+          in: "path"
+          description: "Image name or id"
+          type: "string"
+          required: true
+        - name: "platform"
+          type: "array"
+          items:
+            type: "string"
+          collectionFormat: "multi"
+          in: "query"
+          description: |-
+            JSON-encoded OCI platform to select the image variant whose
+            attestations to return.
+            If omitted, the daemon's default (host) platform is used.
+
+            Only one platform value is currently accepted; passing more than
+            one returns an error. The parameter is declared as an array so the
+            wire shape can accept multiple values in the future without an
+            API version bump.
+
+            Example: `{"os": "linux", "architecture": "amd64"}`
+          required: false
+        - name: "type"
+          type: "array"
+          items:
+            type: "string"
+          collectionFormat: "multi"
+          in: "query"
+          description: |-
+            In-toto predicate type URI to filter returned statements. May be
+            repeated to accept any of several predicate types. If omitted, all
+            statements are returned.
+
+            Example: `type=https://slsa.dev/provenance/v0.2&type=https://spdx.dev/Document`
+          required: false
+        - name: "statement"
+          type: "boolean"
+          in: "query"
+          description: |-
+            Include the verbatim in-toto statement body in each returned
+            entry. Defaults to false; when omitted or false, only the
+            descriptor and predicate type are returned and statement blobs
+            are not read.
           default: false
           required: false
       tags: ["Image"]
@@ -9818,33 +10307,7 @@ paths:
           schema:
             type: "array"
             items:
-              type: "object"
-              x-go-name: HistoryResponseItem
-              title: "HistoryResponseItem"
-              description: "individual image layer information in response to ImageHistory operation"
-              required: [Id, Created, CreatedBy, Tags, Size, Comment]
-              properties:
-                Id:
-                  type: "string"
-                  x-nullable: false
-                Created:
-                  type: "integer"
-                  format: "int64"
-                  x-nullable: false
-                CreatedBy:
-                  type: "string"
-                  x-nullable: false
-                Tags:
-                  type: "array"
-                  items:
-                    type: "string"
-                Size:
-                  type: "integer"
-                  format: "int64"
-                  x-nullable: false
-                Comment:
-                  type: "string"
-                  x-nullable: false
+              $ref: "#/definitions/ImageHistoryResponseItem"
           examples:
             application/json:
               - Id: "3db9c44f45209632d6050b35958829c3a2aa256d81b9a7be45b362ff85c54710"
@@ -9970,7 +10433,12 @@ paths:
   /images/{name}/tag:
     post:
       summary: "Tag an image"
-      description: "Tag an image so that it becomes part of a repository."
+      description: |
+        Create a tag that refers to a source image.
+
+        This creates an additional reference (tag) to the source image. The tag
+        can include a different repository name and/or tag. If the repository
+        or tag already exists, it will be overwritten.
       operationId: "ImageTag"
       responses:
         201:
@@ -10431,6 +10899,7 @@ paths:
 
       operationId: "SystemEvents"
       produces:
+        - "application/jsonl"
         - "application/x-ndjson"
         - "application/json-seq"
       responses:
@@ -10487,13 +10956,13 @@ paths:
             type: "object"
             title: "SystemDataUsageResponse"
             properties:
-              ImagesDiskUsage:
+              ImageUsage:
                 $ref: "#/definitions/ImagesDiskUsage"
-              ContainersDiskUsage:
+              ContainerUsage:
                 $ref: "#/definitions/ContainersDiskUsage"
-              VolumesDiskUsage:
+              VolumeUsage:
                 $ref: "#/definitions/VolumesDiskUsage"
-              BuildCacheDiskUsage:
+              BuildCacheUsage:
                 $ref: "#/definitions/BuildCacheDiskUsage"
         500:
           description: "server error"
@@ -12225,7 +12694,9 @@ paths:
                 description: |
                   Listen address used for inter-manager communication if the node
                   gets promoted to manager, as well as determining the networking
-                  interface used for the VXLAN Tunnel Endpoint (VTEP).
+                  interface used for the VXLAN Tunnel Endpoint (VTEP). This is
+                  required for joining a swarm. If the port number is omitted,
+                  the default swarm listening port is used.
                 type: "string"
               AdvertiseAddr:
                 description: |
@@ -12259,6 +12730,7 @@ paths:
               JoinToken:
                 description: "Secret token for joining this swarm."
                 type: "string"
+            required: [ListenAddr, RemoteAddrs, JoinToken]
             example:
               ListenAddr: "0.0.0.0:2377"
               AdvertiseAddr: "192.168.1.1:2377"
@@ -13515,6 +13987,9 @@ paths:
       description: |
         Start a new interactive session with a server. Session allows server to
         call back to the client for advanced capabilities.
+
+        > **Deprecated**: This endpoint is deprecated and will be removed in a future version.
+        > Server should support gRPC directly on the listening socket.
 
         ### Hijacking
 

@@ -2,17 +2,20 @@ package network
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	networktypes "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/v2/integration/internal/swarm"
 	"github.com/moby/moby/v2/internal/testutil"
 	"github.com/moby/moby/v2/internal/testutil/request"
 	"gotest.tools/v3/assert"
 
 	is "gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 )
 
 // TestNetworkInvalidJSON tests that POST endpoints that expect a body return
@@ -142,5 +145,76 @@ func TestAPINetworkFilter(t *testing.T) {
 			found = true
 		}
 	}
-	assert.Assert(t, found, fmt.Sprintf("%s is not found", networkName))
+	assert.Assert(t, found, networkName+" is not found")
+}
+
+func TestNetworkInspectWithScope(t *testing.T) {
+	ctx := setupTest(t)
+
+	d := swarm.NewSwarm(ctx, t, testEnv)
+	defer d.Stop(t)
+
+	cli := d.NewClientT(t) // IMPORTANT: talk to swarm daemon
+
+	name := "test-scoped-network"
+	create, err := cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "overlay"})
+	assert.NilError(t, err)
+
+	var inspect client.NetworkInspectResult
+	poll.WaitOn(t, func(_ poll.LogT) poll.Result {
+		var err error
+		inspect, err = cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+		if err != nil {
+			return poll.Continue("waiting for network %s to be inspectable: %v", name, err)
+		}
+		return poll.Success()
+	}, swarm.NetworkPoll)
+	assert.Check(t, is.Equal("swarm", inspect.Network.Scope))
+	assert.Check(t, is.Equal(create.ID, inspect.Network.ID))
+
+	_, err = cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{Scope: "local"})
+	assert.Check(t, is.ErrorType(err, cerrdefs.IsNotFound))
+}
+
+func TestCreateDeletePredefinedNetworks(t *testing.T) {
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	// Predefined networks differ per OS.
+	predefined := []string{"bridge", "host", "none"}
+	if testEnv.DaemonInfo.OSType == "windows" {
+		predefined = []string{"nat", "none"}
+	}
+
+	// Verify the daemon actually has those networks.
+	res, err := apiClient.NetworkList(ctx, client.NetworkListOptions{})
+	assert.NilError(t, err)
+
+	var actual []string
+	for _, nw := range res.Items {
+		if slices.Contains(predefined, nw.Name) {
+			actual = append(actual, nw.Name)
+		}
+	}
+	slices.Sort(actual)
+	slices.Sort(predefined)
+	assert.Check(t, is.DeepEqual(actual, predefined))
+
+	for _, name := range predefined {
+		t.Run(name, func(t *testing.T) {
+			// Creating a predefined network must fail.
+			_, err := apiClient.NetworkCreate(ctx, name, client.NetworkCreateOptions{})
+			assert.Check(t, is.ErrorContains(err, "operation is not permitted on predefined"))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsPermissionDenied))
+
+			// Deleting a predefined network must fail.
+			_, err = apiClient.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
+			assert.Check(t, is.ErrorContains(err, "is a pre-defined network and cannot be removed"))
+			assert.Check(t, is.ErrorType(err, cerrdefs.IsPermissionDenied))
+
+			// Sanity: it should still exist.
+			_, err = apiClient.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+			assert.NilError(t, err)
+		})
+	}
 }

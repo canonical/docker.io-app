@@ -22,13 +22,16 @@ trap clean EXIT
 cp -r cli/ "${build_dir}"
 pushd "${build_dir}"/cli
 
-# Check if golang-1.24-go is installed
-if dpkg -l golang-1.24-go >/dev/null 2>&1; then
-  # Add Go 1.24 to the $PATH to be used instead of the default
-  # (in case the default is not 1.24).
-  PATH=/usr/lib/go-1.24/bin:"${PATH}"
+# check if latest golang version available is >= 1.24
+LATEST_GO_DIR=$(dpkg -l | grep -Eo golang-[0-9]+\.[0-9]+-go | grep -Eo golang-[0-9]+\.[0-9]+ | sort -ur | head -n1 | sed 's/lang//')
+LATEST_GO_VER=$(echo $LATEST_GO_DIR | sed 's/go-//')
+MIN_GO_VER="1.24"
+if awk "BEGIN {exit ($LATEST_GO_VER < $MIN_GO_VER)}"; then
+  # Add the latest Go to the $PATH to be used instead of the default
+  # (in case the default is not the latest).
+  PATH=/usr/lib/${LATEST_GO_DIR}/bin:"${PATH}"
 else
-  echo "[E] Please, install golang-1.24-go."
+  echo "[E] Please, install golang-x.yz-go. >= 1.24"
   exit 5
 fi
 

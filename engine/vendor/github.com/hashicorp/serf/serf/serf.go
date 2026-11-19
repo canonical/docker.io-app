@@ -1,23 +1,26 @@
+// Copyright IBM Corp. 2013, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package serf
 
 import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/hashicorp/go-msgpack/codec"
+	metrics "github.com/hashicorp/go-metrics/compat"
+	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/coordinate"
 )
@@ -36,15 +39,18 @@ const (
 	tagMagicByte uint8 = 255
 )
 
+const MaxNodeNameLength int = 128
+
 var (
 	// FeatureNotSupported is returned if a feature cannot be used
 	// due to an older protocol version being used.
-	FeatureNotSupported = fmt.Errorf("Feature not supported")
+	FeatureNotSupported = fmt.Errorf("Feature not supported") //nolint:staticcheck
 )
 
-func init() {
-	// Seed the random number generator
-	rand.Seed(time.Now().UnixNano())
+// ReconnectTimeoutOverrider is an interface that can be implemented to allow overriding
+// the reconnect timeout for individual members.
+type ReconnectTimeoutOverrider interface {
+	ReconnectTimeout(member *Member, timeout time.Duration) time.Duration
 }
 
 // Serf is a single node that is part of a single cluster that gets
@@ -97,6 +103,10 @@ type Serf struct {
 	coordClient    *coordinate.Client
 	coordCache     map[string]*coordinate.Coordinate
 	coordCacheLock sync.RWMutex
+
+	// metricLabels is the slice of labels to put on all emitted metrics
+	metricLabels            []metrics.Label
+	msgpackUseNewTimeFormat bool
 }
 
 // SerfState is the state of the Serf instance.
@@ -204,10 +214,7 @@ func (ue *userEvent) Equals(other *userEvent) bool {
 	if ue.Name != other.Name {
 		return false
 	}
-	if bytes.Compare(ue.Payload, other.Payload) != 0 {
-		return false
-	}
-	return true
+	return bytes.Equal(ue.Payload, other.Payload)
 }
 
 // userEvents stores all the user events at a specific time
@@ -256,18 +263,23 @@ func Create(conf *Config) (*Serf, error) {
 	}
 
 	serf := &Serf{
-		config:        conf,
-		logger:        logger,
-		members:       make(map[string]*memberState),
-		queryResponse: make(map[LamportTime]*QueryResponse),
-		shutdownCh:    make(chan struct{}),
-		state:         SerfAlive,
+		config:                  conf,
+		logger:                  logger,
+		members:                 make(map[string]*memberState),
+		queryResponse:           make(map[LamportTime]*QueryResponse),
+		shutdownCh:              make(chan struct{}),
+		state:                   SerfAlive,
+		metricLabels:            conf.MetricLabels,
+		msgpackUseNewTimeFormat: conf.MsgpackUseNewTimeFormat,
 	}
 	serf.eventJoinIgnore.Store(false)
 
 	// Check that the meta data length is okay
 	if len(serf.encodeTags(conf.Tags)) > memberlist.MetaMaxSize {
 		return nil, fmt.Errorf("Encoded length of tags exceeds limit of %d bytes", memberlist.MetaMaxSize)
+	}
+	if err := serf.ValidateNodeNames(); err != nil {
+		return nil, err
 	}
 
 	// Check if serf member event coalescing is enabled
@@ -302,7 +314,9 @@ func Create(conf *Config) (*Serf, error) {
 
 	// Set up network coordinate client.
 	if !conf.DisableCoordinates {
-		serf.coordClient, err = coordinate.NewClient(coordinate.DefaultConfig())
+		coordinateConfig := coordinate.DefaultConfig()
+		coordinateConfig.MetricLabels = serf.metricLabels
+		serf.coordClient, err = coordinate.NewClient(coordinateConfig)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create coordinate client: %v", err)
 		}
@@ -323,6 +337,7 @@ func Create(conf *Config) (*Serf, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Failed to setup snapshot: %v", err)
 		}
+		snap.metricLabels = serf.metricLabels
 		serf.snapshotter = snap
 		conf.EventCh = eventCh
 		prev = snap.AliveNodes()
@@ -392,6 +407,8 @@ func Create(conf *Config) (*Serf, error) {
 		conf.MemberlistConfig.Merge = md
 		conf.MemberlistConfig.Alive = md
 	}
+
+	conf.MemberlistConfig.MetricLabels = conf.MetricLabels
 
 	// Create the underlying memberlist that will manage membership
 	// and failure detection for the Serf instance.
@@ -471,7 +488,7 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 	}
 
 	// Start broadcasting the event
-	raw, err := encodeMessage(messageUserEventType, &msg)
+	raw, err := encodeMessage(messageUserEventType, &msg, s.msgpackUseNewTimeFormat)
 	if err != nil {
 		return err
 	}
@@ -487,7 +504,7 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 
 	if len(raw) > UserEventSizeLimit {
 		return fmt.Errorf(
-			"encoded user event exceeds sane limit of %d bytes before encoding",
+			"encoded user event exceeds reasonable limit of %d bytes after encoding",
 			UserEventSizeLimit,
 		)
 	}
@@ -541,6 +558,7 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 		ID:          uint32(rand.Int31()),
 		Addr:        local.Addr,
 		Port:        local.Port,
+		SourceNode:  local.Name,
 		Filters:     filters,
 		Flags:       flags,
 		RelayFactor: params.RelayFactor,
@@ -550,7 +568,7 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 	}
 
 	// Encode the query
-	raw, err := encodeMessage(messageQueryType, &q)
+	raw, err := encodeMessage(messageQueryType, &q, s.msgpackUseNewTimeFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -672,19 +690,23 @@ func (s *Serf) broadcastJoin(ltime LamportTime) error {
 
 // Leave gracefully exits the cluster. It is safe to call this multiple
 // times.
+// If the Leave broadcast timeout, Leave() will try to finish the sequence as best effort.
 func (s *Serf) Leave() error {
 	// Check the current state
 	s.stateLock.Lock()
-	if s.state == SerfLeft {
+
+	switch s.state {
+	case SerfLeft:
 		s.stateLock.Unlock()
 		return nil
-	} else if s.state == SerfLeaving {
+	case SerfLeaving:
 		s.stateLock.Unlock()
 		return fmt.Errorf("Leave already in progress")
-	} else if s.state == SerfShutdown {
+	case SerfShutdown:
 		s.stateLock.Unlock()
 		return fmt.Errorf("Leave called after Shutdown")
 	}
+
 	s.state = SerfLeaving
 	s.stateLock.Unlock()
 
@@ -714,14 +736,14 @@ func (s *Serf) Leave() error {
 		select {
 		case <-notifyCh:
 		case <-time.After(s.config.BroadcastTimeout):
-			return errors.New("timeout while waiting for graceful leave")
+			s.logger.Printf("[WARN] serf: timeout while waiting for graceful leave")
 		}
 	}
 
 	// Attempt the memberlist leave
 	err := s.memberlist.Leave(s.config.BroadcastTimeout)
 	if err != nil {
-		return err
+		s.logger.Printf("[WARN] serf: timeout waiting for leave broadcast: %s", err.Error())
 	}
 
 	// Wait for the leave to propagate through the cluster. The broadcast
@@ -887,8 +909,8 @@ func (s *Serf) State() SerfState {
 // broadcast takes a Serf message type, encodes it for the wire, and queues
 // the broadcast. If a notify channel is given, this channel will be closed
 // when the broadcast is sent.
-func (s *Serf) broadcast(t messageType, msg interface{}, notify chan<- struct{}) error {
-	raw, err := encodeMessage(t, msg)
+func (s *Serf) broadcast(t messageType, msg any, notify chan<- struct{}) error {
+	raw, err := encodeMessage(t, msg, s.msgpackUseNewTimeFormat)
 	if err != nil {
 		return err
 	}
@@ -906,6 +928,10 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 	s.memberLock.Lock()
 	defer s.memberLock.Unlock()
 
+	if s.config.messageDropper(messageJoinType) {
+		return
+	}
+
 	var oldStatus MemberStatus
 	member, ok := s.members[n.Name]
 	if !ok {
@@ -913,7 +939,7 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 		member = &memberState{
 			Member: Member{
 				Name:   n.Name,
-				Addr:   net.IP(n.Addr),
+				Addr:   n.Addr,
 				Port:   n.Port,
 				Tags:   s.decodeTags(n.Meta),
 				Status: StatusAlive,
@@ -934,14 +960,14 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 		s.members[n.Name] = member
 	} else {
 		oldStatus = member.Status
-		deadTime := time.Now().Sub(member.leaveTime)
+		deadTime := time.Since(member.leaveTime)
 		if oldStatus == StatusFailed && deadTime < s.config.FlapTimeout {
-			metrics.IncrCounter([]string{"serf", "member", "flap"}, 1)
+			metrics.IncrCounterWithLabels([]string{"serf", "member", "flap"}, 1, s.metricLabels)
 		}
 
 		member.Status = StatusAlive
 		member.leaveTime = time.Time{}
-		member.Addr = net.IP(n.Addr)
+		member.Addr = n.Addr
 		member.Port = n.Port
 		member.Tags = s.decodeTags(n.Meta)
 	}
@@ -963,11 +989,11 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 	}
 
 	// Update some metrics
-	metrics.IncrCounter([]string{"serf", "member", "join"}, 1)
+	metrics.IncrCounterWithLabels([]string{"serf", "member", "join"}, 1, s.metricLabels)
 
 	// Send an event along
 	s.logger.Printf("[INFO] serf: EventMemberJoin: %s %s",
-		member.Member.Name, member.Member.Addr)
+		member.Name, member.Addr)
 	if s.config.EventCh != nil {
 		s.config.EventCh <- MemberEvent{
 			Type:    EventMemberJoin,
@@ -1013,10 +1039,10 @@ func (s *Serf) handleNodeLeave(n *memberlist.Node) {
 	}
 
 	// Update some metrics
-	metrics.IncrCounter([]string{"serf", "member", member.Status.String()}, 1)
+	metrics.IncrCounterWithLabels([]string{"serf", "member", member.Status.String()}, 1, s.metricLabels)
 
 	s.logger.Printf("[INFO] serf: %s: %s %s",
-		eventStr, member.Member.Name, member.Member.Addr)
+		eventStr, member.Name, member.Addr)
 	if s.config.EventCh != nil {
 		s.config.EventCh <- MemberEvent{
 			Type:    event,
@@ -1039,7 +1065,7 @@ func (s *Serf) handleNodeUpdate(n *memberlist.Node) {
 	}
 
 	// Update the member attributes
-	member.Addr = net.IP(n.Addr)
+	member.Addr = n.Addr
 	member.Port = n.Port
 	member.Tags = s.decodeTags(n.Meta)
 
@@ -1057,10 +1083,10 @@ func (s *Serf) handleNodeUpdate(n *memberlist.Node) {
 	member.DelegateCur = n.DCur
 
 	// Update some metrics
-	metrics.IncrCounter([]string{"serf", "member", "update"}, 1)
+	metrics.IncrCounterWithLabels([]string{"serf", "member", "update"}, 1, s.metricLabels)
 
 	// Send an event along
-	s.logger.Printf("[INFO] serf: EventMemberUpdate: %s", member.Member.Name)
+	s.logger.Printf("[INFO] serf: EventMemberUpdate: %s", member.Name)
 	if s.config.EventCh != nil {
 		s.config.EventCh <- MemberEvent{
 			Type:    EventMemberUpdate,
@@ -1071,6 +1097,7 @@ func (s *Serf) handleNodeUpdate(n *memberlist.Node) {
 
 // handleNodeLeaveIntent is called when an intent to leave is received.
 func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
+	state := s.State()
 
 	// Witness a potentially newer time
 	s.clock.Witness(leaveMsg.LTime)
@@ -1091,17 +1118,33 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 
 	// Refute us leaving if we are in the alive state
 	// Must be done in another goroutine since we have the memberLock
-	if leaveMsg.Node == s.config.NodeName && s.state == SerfAlive {
+	if leaveMsg.Node == s.config.NodeName && state == SerfAlive {
 		s.logger.Printf("[DEBUG] serf: Refuting an older leave intent")
-		go s.broadcastJoin(s.clock.Time())
+		go s.broadcastJoin(s.clock.Time()) //nolint:errcheck
 		return false
 	}
+
+	// Always update the lamport time even when the status does not change
+	// (despite the variable naming implying otherwise).
+	//
+	// By updating this statusLTime here we ensure that the earlier conditional
+	// on "leaveMsg.LTime <= member.statusLTime" will prevent an infinite
+	// rebroadcast when seeing two successive leave message for the same
+	// member. Without this fix a leave message that arrives after a member is
+	// already marked as leaving/left will cause it to be rebroadcast without
+	// marking it locally as witnessed. If more than one serf instance in the
+	// cluster experiences this series of events then they will rebroadcast
+	// each other's messages about the affected node indefinitely.
+	//
+	// This eventually leads to overflowing serf intent queues
+	// - https://github.com/hashicorp/consul/issues/8179
+	// - https://github.com/hashicorp/consul/issues/7960
+	member.statusLTime = leaveMsg.LTime
 
 	// State transition depends on current state
 	switch member.Status {
 	case StatusAlive:
 		member.Status = StatusLeaving
-		member.statusLTime = leaveMsg.LTime
 
 		if leaveMsg.Prune {
 			s.handlePrune(member)
@@ -1109,7 +1152,6 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 		return true
 	case StatusFailed:
 		member.Status = StatusLeft
-		member.statusLTime = leaveMsg.LTime
 
 		// Remove from the failed list and add to the left list. We add
 		// to the left list so that when we do a sync, other nodes will
@@ -1122,7 +1164,7 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 		// left to allow higher-level applications to handle the
 		// graceful leave.
 		s.logger.Printf("[INFO] serf: EventMemberLeave (forced): %s %s",
-			member.Member.Name, member.Member.Addr)
+			member.Name, member.Addr)
 		if s.config.EventCh != nil {
 			s.config.EventCh <- MemberEvent{
 				Type:    EventMemberLeave,
@@ -1153,7 +1195,7 @@ func (s *Serf) handlePrune(member *memberState) {
 		time.Sleep(s.config.BroadcastTimeout + s.config.LeavePropagateDelay)
 	}
 
-	s.logger.Printf("[INFO] serf: EventMemberReap (forced): %s %s", member.Name, member.Member.Addr)
+	s.logger.Printf("[INFO] serf: EventMemberReap (forced): %s %s", member.Name, member.Addr)
 
 	//If we are leaving or left we may be in that list of members
 	if member.Status == StatusLeaving || member.Status == StatusLeft {
@@ -1239,8 +1281,8 @@ func (s *Serf) handleUserEvent(eventMsg *messageUserEvent) bool {
 	seen.Events = append(seen.Events, userEvent)
 
 	// Update some metrics
-	metrics.IncrCounter([]string{"serf", "events"}, 1)
-	metrics.IncrCounter([]string{"serf", "events", eventMsg.Name}, 1)
+	metrics.IncrCounterWithLabels([]string{"serf", "events"}, 1, s.metricLabels)
+	metrics.IncrCounterWithLabels([]string{"serf", "events", eventMsg.Name}, 1, s.metricLabels)
 
 	if s.config.EventCh != nil {
 		s.config.EventCh <- UserEvent{
@@ -1283,11 +1325,9 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	idx := query.LTime % LamportTime(len(s.queryBuffer))
 	seen := s.queryBuffer[idx]
 	if seen != nil && seen.LTime == query.LTime {
-		for _, previous := range seen.QueryIDs {
-			if previous == query.ID {
-				// Seen this ID already
-				return false
-			}
+		if slices.Contains(seen.QueryIDs, query.ID) {
+			// Seen this ID already
+			return false
 		}
 	} else {
 		seen = &queries{LTime: query.LTime}
@@ -1298,14 +1338,11 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	seen.QueryIDs = append(seen.QueryIDs, query.ID)
 
 	// Update some metrics
-	metrics.IncrCounter([]string{"serf", "queries"}, 1)
-	metrics.IncrCounter([]string{"serf", "queries", query.Name}, 1)
+	metrics.IncrCounterWithLabels([]string{"serf", "queries"}, 1, s.metricLabels)
+	metrics.IncrCounterWithLabels([]string{"serf", "queries", query.Name}, 1, s.metricLabels)
 
 	// Check if we should rebroadcast, this may be disabled by a flag
-	rebroadcast := true
-	if query.NoBroadcast() {
-		rebroadcast = false
-	}
+	rebroadcast := !query.NoBroadcast()
 
 	// Filter the query
 	if !s.shouldProcessQuery(query.Filters) {
@@ -1322,15 +1359,19 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 			From:  s.config.NodeName,
 			Flags: queryFlagAck,
 		}
-		raw, err := encodeMessage(messageQueryResponseType, &ack)
+		raw, err := encodeMessage(messageQueryResponseType, &ack, s.msgpackUseNewTimeFormat)
 		if err != nil {
 			s.logger.Printf("[ERR] serf: failed to format ack: %v", err)
 		} else {
-			addr := net.UDPAddr{IP: query.Addr, Port: int(query.Port)}
-			if err := s.memberlist.SendTo(&addr, raw); err != nil {
+			udpAddr := net.UDPAddr{IP: query.Addr, Port: int(query.Port)}
+			addr := memberlist.Address{
+				Addr: udpAddr.String(),
+				Name: query.SourceNode,
+			}
+			if err := s.memberlist.SendToAddress(addr, raw); err != nil {
 				s.logger.Printf("[ERR] serf: failed to send ack: %v", err)
 			}
-			if err := s.relayResponse(query.RelayFactor, addr, &ack); err != nil {
+			if err := s.relayResponse(query.RelayFactor, udpAddr, query.SourceNode, &ack); err != nil {
 				s.logger.Printf("[ERR] serf: failed to relay ack: %v", err)
 			}
 		}
@@ -1345,6 +1386,7 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 			id:          query.ID,
 			addr:        query.Addr,
 			port:        query.Port,
+			sourceNode:  query.SourceNode,
 			deadline:    time.Now().Add(query.Timeout),
 			relayFactor: query.RelayFactor,
 		}
@@ -1381,25 +1423,23 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 	if resp.Ack() {
 		// Exit early if this is a duplicate ack
 		if _, ok := query.acks[resp.From]; ok {
-			metrics.IncrCounter([]string{"serf", "query_duplicate_acks"}, 1)
+			metrics.IncrCounterWithLabels([]string{"serf", "query_duplicate_acks"}, 1, s.metricLabels)
 			return
 		}
 
-		metrics.IncrCounter([]string{"serf", "query_acks"}, 1)
-		select {
-		case query.ackCh <- resp.From:
-			query.acks[resp.From] = struct{}{}
-		default:
-			s.logger.Printf("[WARN] serf: Failed to deliver query ack, dropping")
+		metrics.IncrCounterWithLabels([]string{"serf", "query_acks"}, 1, s.metricLabels)
+		err := query.sendAck(resp)
+		if err != nil {
+			s.logger.Printf("[WARN] %v", err)
 		}
 	} else {
 		// Exit early if this is a duplicate response
 		if _, ok := query.responses[resp.From]; ok {
-			metrics.IncrCounter([]string{"serf", "query_duplicate_responses"}, 1)
+			metrics.IncrCounterWithLabels([]string{"serf", "query_duplicate_responses"}, 1, s.metricLabels)
 			return
 		}
 
-		metrics.IncrCounter([]string{"serf", "query_responses"}, 1)
+		metrics.IncrCounterWithLabels([]string{"serf", "query_responses"}, 1, s.metricLabels)
 		err := query.sendResponse(NodeResponse{From: resp.From, Payload: resp.Payload})
 		if err != nil {
 			s.logger.Printf("[WARN] %v", err)
@@ -1483,7 +1523,7 @@ func (s *Serf) resolveNodeConflict() {
 	}
 }
 
-//eraseNode takes a node completely out of the member list
+// eraseNode takes a node completely out of the member list
 func (s *Serf) eraseNode(m *memberState) {
 	// Delete from members
 	delete(s.members, m.Name)
@@ -1546,8 +1586,13 @@ func (s *Serf) reap(old []*memberState, now time.Time, timeout time.Duration) []
 	for i := 0; i < n; i++ {
 		m := old[i]
 
+		memberTimeout := timeout
+		if s.config.ReconnectTimeoutOverride != nil {
+			memberTimeout = s.config.ReconnectTimeoutOverride.ReconnectTimeout(&m.Member, memberTimeout)
+		}
+
 		// Skip if the timeout is not yet reached
-		if now.Sub(m.leaveTime) <= timeout {
+		if now.Sub(m.leaveTime) <= memberTimeout {
 			continue
 		}
 
@@ -1597,14 +1642,19 @@ func (s *Serf) reconnect() {
 	// Select a random member to try and join
 	idx := rand.Int31n(int32(n))
 	mem := s.failedMembers[idx]
-	s.memberLock.RUnlock()
 
 	// Format the addr
 	addr := net.UDPAddr{IP: mem.Addr, Port: int(mem.Port)}
 	s.logger.Printf("[INFO] serf: attempting reconnect to %v %s", mem.Name, addr.String())
 
+	joinAddr := addr.String()
+	if mem.Name != "" {
+		joinAddr = mem.Name + "/" + addr.String()
+	}
+	s.memberLock.RUnlock()
+
 	// Attempt to join at the memberlist level
-	s.memberlist.Join([]string{addr.String()})
+	_, _ = s.memberlist.Join([]string{joinAddr})
 }
 
 // getQueueMax will get the maximum queue depth, which might be dynamic depending
@@ -1630,7 +1680,7 @@ func (s *Serf) checkQueueDepth(name string, queue *memberlist.TransmitLimitedQue
 		select {
 		case <-time.After(s.config.QueueCheckInterval):
 			numq := queue.NumQueued()
-			metrics.AddSample([]string{"serf", "queue", name}, float32(numq))
+			metrics.AddSampleWithLabels([]string{"serf", "queue", name}, float32(numq), s.metricLabels)
 			if numq >= s.config.QueueDepthWarning {
 				s.logger.Printf("[WARN] serf: %s queue depth: %d", name, numq)
 			}
@@ -1709,8 +1759,13 @@ func (s *Serf) handleRejoin(previous []*PreviousNode) {
 			continue
 		}
 
+		joinAddr := prev.Addr
+		if prev.Name != "" {
+			joinAddr = prev.Name + "/" + prev.Addr
+		}
+
 		s.logger.Printf("[INFO] serf: Attempting re-join to previously known node: %s", prev)
-		_, err := s.memberlist.Join([]string{prev.Addr})
+		_, err := s.memberlist.Join([]string{joinAddr})
 		if err == nil {
 			s.logger.Printf("[INFO] serf: Re-joined to previously known node: %s", prev)
 			return
@@ -1807,7 +1862,7 @@ func (s *Serf) writeKeyringFile() error {
 	}
 
 	// Use 0600 for permissions because key data is sensitive
-	if err = ioutil.WriteFile(s.config.KeyringFile, encodedKeys, 0600); err != nil {
+	if err = os.WriteFile(s.config.KeyringFile, encodedKeys, 0600); err != nil {
 		return fmt.Errorf("Failed to write keyring file: %s", err)
 	}
 
@@ -1848,4 +1903,25 @@ func (s *Serf) NumNodes() (numNodes int) {
 	s.memberLock.RUnlock()
 
 	return numNodes
+}
+
+// ValidateNodeNames verifies the NodeName contains
+// only alphanumeric, -, or . and is under 128 chracters
+func (s *Serf) ValidateNodeNames() error {
+	return s.validateNodeName(s.config.NodeName)
+}
+
+func (s *Serf) validateNodeName(name string) error {
+	if s.config.ValidateNodeNames {
+		var InvalidNameRe = regexp.MustCompile(`[^A-Za-z0-9\-\.]+`)
+		if InvalidNameRe.MatchString(name) {
+			return fmt.Errorf("Node name contains invalid characters %v , Valid characters include "+
+				"all alpha-numerics and dashes and '.' ", name)
+		}
+		if len(name) > MaxNodeNameLength {
+			return fmt.Errorf("Node name is %v characters. "+
+				"Valid length is between 1 and 128 characters", len(name))
+		}
+	}
+	return nil
 }

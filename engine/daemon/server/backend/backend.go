@@ -104,9 +104,6 @@ type ContainerInspectOptions struct {
 type ContainerListOptions struct {
 	Size    bool
 	All     bool
-	Latest  bool
-	Since   string
-	Before  string
 	Limit   int
 	Filters filters.Args
 }
@@ -115,8 +112,8 @@ type ContainerListOptions struct {
 type ContainerLogsOptions struct {
 	ShowStdout bool
 	ShowStderr bool
-	Since      string
-	Until      string
+	Since      time.Time
+	Until      time.Time
 	Timestamps bool
 	Follow     bool
 	Tail       string
@@ -133,7 +130,8 @@ type ContainerStopOptions struct {
 	// Timeout (optional) is the timeout (in seconds) to wait for the container
 	// to stop gracefully before forcibly terminating it with SIGKILL.
 	//
-	// - Use nil to use the default timeout (10 seconds).
+	// - Use nil to use the container's configured timeout, or the engine default
+	//   if the container has no configured timeout.
 	// - Use '-1' to wait indefinitely.
 	// - Use '0' to not wait for the container to exit gracefully, and
 	//   immediately proceeds to forcibly terminating the container.

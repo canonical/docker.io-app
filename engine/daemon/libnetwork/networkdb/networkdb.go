@@ -1,6 +1,6 @@
 package networkdb
 
-//go:generate protoc -I=. -I=../../../vendor/ --gogofaster_out=import_path=github.com/docker/docker/daemon/libnetwork/networkdb:. networkdb.proto
+//go:generate protoc -I=. -I=../../../vendor/ --gogofaster_out=import_path=github.com/moby/moby/v2/daemon/libnetwork/networkdb:. networkdb.proto
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,9 +79,13 @@ type NetworkDB struct {
 	// network. The key is a network ID.
 	networkNodes map[string][]string
 
-	// A table of ack channels for every node from which we are
-	// waiting for an ack.
-	bulkSyncAckTbl map[string]chan struct{}
+	// A table of subscriptions for every node from which we are waiting for
+	// a bulk-sync ack.
+	bulkSyncAckTbl map[string][]bulkSyncSubscription
+
+	// A count of the number of times we have timed out waiting for a bulk
+	// sync ack from any peer node.
+	bulkSyncAckTimeouts atomic.Uint64
 
 	// Broadcast queue for network event gossip.
 	networkBroadcasts *memberlist.TransmitLimitedQueue
@@ -260,6 +265,14 @@ type entry struct {
 	reapTime time.Duration
 }
 
+// bulkSyncSubscription is a subscription to the bulk-sync progress for a peer node.
+// Done is closed when a bulk sync from the node is received with an LTime
+// greater than the subscription's LTime.
+type bulkSyncSubscription struct {
+	LTime serf.LamportTime
+	Done  chan<- struct{}
+}
+
 // DefaultConfig returns a NetworkDB config with default values
 func DefaultConfig() *Config {
 	hostname, _ := os.Hostname()
@@ -309,7 +322,7 @@ func newNetworkDB(c *Config) *NetworkDB {
 		failedNodes:      make(map[string]*node),
 		leftNodes:        make(map[string]*node),
 		networkNodes:     make(map[string][]string),
-		bulkSyncAckTbl:   make(map[string]chan struct{}),
+		bulkSyncAckTbl:   make(map[string][]bulkSyncSubscription),
 		broadcaster:      events.NewBroadcaster(),
 		rng:              rand.New(rand.NewChaCha8(rngSeed)), //gosec:disable G404 -- not used in a security sensitive context
 	}
@@ -393,7 +406,7 @@ func (nDB *NetworkDB) GetEntry(tname, nid, key string) ([]byte, error) {
 }
 
 func (nDB *NetworkDB) getEntry(tname, nid, key string) (*entry, error) {
-	e, ok := nDB.indexes[byTable].Get([]byte(fmt.Sprintf("/%s/%s/%s", tname, nid, key)))
+	e, ok := nDB.indexes[byTable].Get(fmt.Appendf(nil, "/%s/%s/%s", tname, nid, key))
 	if !ok {
 		return nil, types.NotFoundErrorf("could not get entry in table %s with network id %s and key %s", tname, nid, key)
 	}
@@ -470,7 +483,7 @@ func (nDB *NetworkDB) GetTableByNetwork(tname, nid string) map[string]*TableElem
 	root := nDB.indexes[byTable].Root()
 	nDB.RUnlock()
 	entries := make(map[string]*TableElem)
-	root.WalkPrefix([]byte(fmt.Sprintf("/%s/%s", tname, nid)), func(k []byte, v *entry) bool {
+	root.WalkPrefix(fmt.Appendf(nil, "/%s/%s", tname, nid), func(k []byte, v *entry) bool {
 		if v.deleting {
 			return false
 		}
@@ -729,11 +742,8 @@ func (nDB *NetworkDB) LeaveNetwork(nid string) error {
 // in the passed network only if it is not already present. Caller
 // should hold the NetworkDB lock while calling this
 func (nDB *NetworkDB) addNetworkNode(nid string, nodeName string) {
-	nodes := nDB.networkNodes[nid]
-	for _, node := range nodes {
-		if node == nodeName {
-			return
-		}
+	if slices.Contains(nDB.networkNodes[nid], nodeName) {
+		return
 	}
 
 	nDB.networkNodes[nid] = append(nDB.networkNodes[nid], nodeName)
@@ -794,8 +804,8 @@ func (nDB *NetworkDB) updateLocalNetworkTime() {
 // createOrUpdateEntry this function handles the creation or update of entries into the local
 // tree store. It is also used to keep in sync the entries number of the network (all tables are aggregated)
 func (nDB *NetworkDB) createOrUpdateEntry(nid, tname, key string, v *entry) (okTable bool, okNetwork bool) {
-	nDB.indexes[byTable], _, okTable = nDB.indexes[byTable].Insert([]byte(fmt.Sprintf("/%s/%s/%s", tname, nid, key)), v)
-	nDB.indexes[byNetwork], _, okNetwork = nDB.indexes[byNetwork].Insert([]byte(fmt.Sprintf("/%s/%s/%s", nid, tname, key)), v)
+	nDB.indexes[byTable], _, okTable = nDB.indexes[byTable].Insert(fmt.Appendf(nil, "/%s/%s/%s", tname, nid, key), v)
+	nDB.indexes[byNetwork], _, okNetwork = nDB.indexes[byNetwork].Insert(fmt.Appendf(nil, "/%s/%s/%s", nid, tname, key), v)
 	if !okNetwork {
 		// Add only if it is an insert not an update
 		n, ok := nDB.thisNodeNetworks[nid]
@@ -809,8 +819,8 @@ func (nDB *NetworkDB) createOrUpdateEntry(nid, tname, key string, v *entry) (okT
 // deleteEntry this function handles the deletion of entries into the local tree store.
 // It is also used to keep in sync the entries number of the network (all tables are aggregated)
 func (nDB *NetworkDB) deleteEntry(nid, tname, key string) (okTable bool, okNetwork bool) {
-	nDB.indexes[byTable], _, okTable = nDB.indexes[byTable].Delete([]byte(fmt.Sprintf("/%s/%s/%s", tname, nid, key)))
-	nDB.indexes[byNetwork], _, okNetwork = nDB.indexes[byNetwork].Delete([]byte(fmt.Sprintf("/%s/%s/%s", nid, tname, key)))
+	nDB.indexes[byTable], _, okTable = nDB.indexes[byTable].Delete(fmt.Appendf(nil, "/%s/%s/%s", tname, nid, key))
+	nDB.indexes[byNetwork], _, okNetwork = nDB.indexes[byNetwork].Delete(fmt.Appendf(nil, "/%s/%s/%s", nid, tname, key))
 	if okNetwork {
 		// Remove only if the delete is successful
 		n, ok := nDB.thisNodeNetworks[nid]

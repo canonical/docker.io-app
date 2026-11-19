@@ -1,5 +1,5 @@
 // FIXME(thaJeztah): remove once we are a module; the go:build directive prevents go from downgrading language version to go1.16:
-//go:build go1.24
+//go:build go1.25
 
 package service
 
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -687,15 +688,13 @@ func (options *serviceOptions) makeEnv() ([]string, error) {
 	}
 	currentEnv := make([]string, 0, len(envVariables))
 	for _, env := range envVariables { // need to process each var, in order
-		k, _, _ := strings.Cut(env, "=")
-		for i, current := range currentEnv { // remove duplicates
-			if current == env {
-				continue // no update required, may hide this behind flag to preserve order of envVariables
-			}
-			if strings.HasPrefix(current, k+"=") {
-				currentEnv = append(currentEnv[:i], currentEnv[i+1:]...)
-			}
+		if slices.Contains(currentEnv, env) {
+			continue // no update required, may hide this behind flag to preserve order of envVariables
 		}
+		k, _, _ := strings.Cut(env, "=")
+		currentEnv = slices.DeleteFunc(currentEnv, func(current string) bool { // remove duplicates
+			return strings.HasPrefix(current, k+"=")
+		})
 		currentEnv = append(currentEnv, env)
 	}
 
@@ -905,9 +904,9 @@ func addServiceFlags(flags *pflag.FlagSet, options *serviceOptions, defaultFlagV
 	flags.Int64Var(&options.resources.limitPids, flagLimitPids, 0, "Limit maximum number of processes (default 0 = unlimited)")
 	flags.SetAnnotation(flagLimitPids, "version", []string{"1.41"})
 	flags.Var(&options.resources.swapBytes, flagSwapBytes, "Swap Bytes (-1 for unlimited)")
-	flags.SetAnnotation(flagLimitPids, "version", []string{"1.52"})
+	flags.SetAnnotation(flagSwapBytes, "version", []string{"1.52"})
 	flags.Int64Var(&options.resources.memSwappiness, flagMemSwappiness, -1, "Tune memory swappiness (0-100), -1 to reset to default")
-	flags.SetAnnotation(flagLimitPids, "version", []string{"1.52"})
+	flags.SetAnnotation(flagMemSwappiness, "version", []string{"1.52"})
 
 	flags.Var(&options.stopGrace, flagStopGracePeriod, flagDesc(flagStopGracePeriod, "Time to wait before force killing a container (ns|us|ms|s|m|h)"))
 	flags.Var(&options.replicas, flagReplicas, "Number of tasks")

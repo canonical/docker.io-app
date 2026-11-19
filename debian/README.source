@@ -18,3 +18,15 @@ package. If you don't, the build will fail.  The manpages are now generated
 before build time because the upstream decided to remove documentation-related
 dependencies from the `vendor` directory, and they need to be downloaded from
 the Internet during build time.
+
+refreshing docker-trust vendorized dependencies
+===============================================
+
+The docker-trust plugin has been extracted from the core command options and is
+now built separetely. When a new docker.io-app version is available, we also
+need to refresh the vendorized dependencies for docker-trust. We can do that
+running the following commands:
+
+$ pushd cli/cmd/docker-trust
+$ go mod vendor -o ../../../debian/extra/vendor
+$ popd

@@ -1,6 +1,7 @@
 package command
 
 import (
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -181,6 +182,24 @@ func TestLoadDaemonConfigWithEmbeddedOptions(t *testing.T) {
 	assert.Check(t, is.Equal("syslog", loadedConfig.LogConfig.Type))
 }
 
+func TestContainerdRootDir(t *testing.T) {
+	cfg := config.Config{CommonConfig: config.CommonConfig{Root: t.TempDir()}}
+	t.Setenv(containerdRootEnv, "")
+	root, err := containerdRootDir(t.Context(), &cfg)
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(root, filepath.Join(cfg.Root, "containerd", "daemon")))
+
+	override := t.TempDir()
+	t.Setenv(containerdRootEnv, override)
+	root, err = containerdRootDir(t.Context(), &cfg)
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(root, override))
+
+	t.Setenv(containerdRootEnv, filepath.Join("relative", "containerd"))
+	_, err = containerdRootDir(t.Context(), &cfg)
+	assert.Check(t, is.ErrorContains(err, "must be an absolute path"))
+}
+
 func TestLoadDaemonConfigWithRegistryOptions(t *testing.T) {
 	content := `{
 		"registry-mirrors": ["https://mirrors.example.com"],
@@ -296,7 +315,7 @@ func TestOtelMeterLeak(t *testing.T) {
 	runtime.ReadMemStats(&before)
 
 	const counters = 10 * 1000 * 1000
-	for i := 0; i < counters; i++ {
+	for range counters {
 		_, _ = meter.Int64Counter("bar")
 	}
 

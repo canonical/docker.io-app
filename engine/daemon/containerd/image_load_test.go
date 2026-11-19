@@ -15,6 +15,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/moby/go-archive"
+	"github.com/moby/go-archive/compression"
 	"github.com/moby/moby/v2/daemon/server/imagebackend"
 	"github.com/moby/moby/v2/internal/testutil/labelstore"
 	"github.com/moby/moby/v2/internal/testutil/specialimage"
@@ -36,10 +37,10 @@ func TestImageLoad(t *testing.T) {
 
 	imgSvc := fakeImageService(t, ctx, store)
 	// Mock the daemon platform.
-	imgSvc.defaultPlatformOverride = platforms.Only(linuxAmd64)
+	imgSvc.defaultPlatformOverride = &linuxAmd64
 
 	tryLoad := func(ctx context.Context, t *testing.T, dir string, platformList []ocispec.Platform) error {
-		tarRc, err := archive.Tar(dir, archive.Uncompressed)
+		tarRc, err := archive.Tar(dir, compression.None)
 		assert.NilError(t, err)
 		defer tarRc.Close()
 

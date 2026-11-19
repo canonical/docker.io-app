@@ -69,7 +69,7 @@ func (d *Daemon) CheckPluginRunning(ctx context.Context, plugin string) func(c *
 		apiclient := d.NewClientT(t)
 		resp, err := apiclient.PluginInspect(ctx, plugin, client.PluginInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
-			return false, fmt.Sprintf("%v", err)
+			return false, err.Error()
 		}
 		assert.NilError(t, err)
 		return resp.Plugin.Enabled, fmt.Sprintf("%+v", resp.Plugin)
@@ -82,7 +82,7 @@ func (d *Daemon) CheckPluginImage(ctx context.Context, plugin string) func(c *te
 		apiclient := d.NewClientT(t)
 		resp, err := apiclient.PluginInspect(ctx, plugin, client.PluginInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
-			return false, fmt.Sprintf("%v", err)
+			return false, err.Error()
 		}
 		assert.NilError(t, err)
 		return resp.Plugin.PluginReference, fmt.Sprintf("%+v", resp.Plugin)
@@ -200,7 +200,7 @@ func (d *Daemon) CmdRetryOutOfSequence(args ...string) (string, error) {
 		err    error
 	)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		output, err = d.Cmd(args...)
 		// error, no error, whatever. if we don't have "update out of
 		// sequence", we don't retry, we just return.

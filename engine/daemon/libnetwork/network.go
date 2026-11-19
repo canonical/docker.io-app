@@ -415,7 +415,7 @@ func (n *Network) validateConfiguration() error {
 			!n.enableIPv4 || n.enableIPv6 ||
 			len(n.labels) > 0 || len(n.ipamOptions) > 0 ||
 			len(n.ipamV4Config) > 0 || len(n.ipamV6Config) > 0 {
-			return types.ForbiddenErrorf("user specified configurations are not supported if the network depends on a configuration network")
+			return types.ForbiddenErrorf("user-specified configurations are not supported if the network depends on a configuration network")
 		}
 		if len(n.generic) > 0 {
 			if data, ok := n.generic[netlabel.GenericData]; ok {
@@ -476,9 +476,7 @@ func (n *Network) applyConfigurationTo(to *Network) error {
 	}
 	if len(n.generic) > 0 {
 		to.generic = options.Generic{}
-		for k, v := range n.generic {
-			to.generic[k] = v
-		}
+		maps.Copy(to.generic, n.generic)
 	}
 
 	// Network drivers only see generic flags. So, make sure they match.
@@ -525,15 +523,11 @@ func (n *Network) CopyTo(o datastore.KVObject) error {
 	if dstN.labels == nil {
 		dstN.labels = make(map[string]string, len(n.labels))
 	}
-	for k, v := range n.labels {
-		dstN.labels[k] = v
-	}
+	maps.Copy(dstN.labels, n.labels)
 
 	if n.ipamOptions != nil {
 		dstN.ipamOptions = make(map[string]string, len(n.ipamOptions))
-		for k, v := range n.ipamOptions {
-			dstN.ipamOptions[k] = v
-		}
+		maps.Copy(dstN.ipamOptions, n.ipamOptions)
 	}
 
 	for _, c := range n.ipamV4Config {
@@ -553,9 +547,7 @@ func (n *Network) CopyTo(o datastore.KVObject) error {
 	}
 
 	dstN.generic = options.Generic{}
-	for k, v := range n.generic {
-		dstN.generic[k] = v
-	}
+	maps.Copy(dstN.generic, n.generic)
 
 	return nil
 }
@@ -793,9 +785,7 @@ func NetworkOptionGeneric(generic map[string]any) NetworkOption {
 		if val, ok := generic[netlabel.Internal]; ok {
 			n.internal = val.(bool)
 		}
-		for k, v := range generic {
-			n.generic[k] = v
-		}
+		maps.Copy(n.generic, generic)
 	}
 }
 
@@ -1285,10 +1275,8 @@ func (n *Network) HasContainerAttachments() bool {
 
 // WalkEndpoints uses the provided function to walk the Endpoints.
 func (n *Network) WalkEndpoints(walker EndpointWalker) {
-	for _, e := range n.Endpoints() {
-		if walker(e) {
-			return
-		}
+	if slices.ContainsFunc(n.Endpoints(), walker) {
+		return
 	}
 }
 
@@ -1875,9 +1863,7 @@ func (n *Network) Labels() map[string]string {
 	defer n.mu.Unlock()
 
 	lbls := make(map[string]string, len(n.labels))
-	for k, v := range n.labels {
-		lbls[k] = v
-	}
+	maps.Copy(lbls, n.labels)
 
 	return lbls
 }
@@ -1887,24 +1873,22 @@ func (n *Network) TableEventRegister(tableName string, objType driverapi.ObjectT
 		return fmt.Errorf("invalid object type %v in registering table, %s", objType, tableName)
 	}
 
-	t := networkDBTable{
-		name:    tableName,
-		objType: objType,
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.driverTables = append(n.driverTables, t)
+	n.driverTables = append(n.driverTables, networkDBTable{
+		name:    tableName,
+		objType: objType,
+	})
 	return nil
 }
 
 func (n *Network) UpdateIpamConfig(ipV4Data []driverapi.IPAMData) {
 	ipamV4Config := make([]*IpamConf, len(ipV4Data))
-
 	for i, data := range ipV4Data {
-		ic := &IpamConf{}
-		ic.PreferredPool = data.Pool.String()
-		ic.Gateway = data.Gateway.IP.String()
-		ipamV4Config[i] = ic
+		ipamV4Config[i] = &IpamConf{
+			PreferredPool: data.Pool.String(),
+			Gateway:       data.Gateway.IP.String(),
+		}
 	}
 
 	n.mu.Lock()
@@ -2021,22 +2005,20 @@ func (n *Network) ResolveIP(_ context.Context, ip string) string {
 func (n *Network) ResolveService(ctx context.Context, name string) ([]*net.SRV, []net.IP) {
 	c := n.getController()
 
-	srv := []*net.SRV{}
-	ip := []net.IP{}
-
 	log.G(ctx).Debugf("Service name To resolve: %v", name)
 
 	// There are DNS implementations that allow SRV queries for names not in
-	// the format defined by RFC 2782. Hence specific validations checks are
-	// not done
-	parts := strings.Split(name, ".")
-	if len(parts) < 3 {
+	// the format defined by RFC 2782. Hence specific validation checks are
+	// not done.
+	portName, protoService, ok := strings.Cut(name, ".")
+	if !ok {
 		return nil, nil
 	}
 
-	portName := parts[0]
-	proto := parts[1]
-	svcName := strings.Join(parts[2:], ".")
+	proto, svcName, ok := strings.Cut(protoService, ".")
+	if !ok {
+		return nil, nil
+	}
 
 	networkID := n.ID()
 	c.mu.Lock()
@@ -2052,6 +2034,8 @@ func (n *Network) ResolveService(ctx context.Context, name string) ([]*net.SRV, 
 		return nil, nil
 	}
 
+	srv := []*net.SRV{}
+	ip := []net.IP{}
 	for _, svc := range svcs {
 		if svc.portName != portName {
 			continue
@@ -2060,11 +2044,10 @@ func (n *Network) ResolveService(ctx context.Context, name string) ([]*net.SRV, 
 			continue
 		}
 		for _, t := range svc.target {
-			srv = append(srv,
-				&net.SRV{
-					Target: t.name,
-					Port:   t.port,
-				})
+			srv = append(srv, &net.SRV{
+				Target: t.name,
+				Port:   t.port,
+			})
 
 			ip = append(ip, t.ip)
 		}

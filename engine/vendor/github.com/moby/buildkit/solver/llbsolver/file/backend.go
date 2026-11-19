@@ -162,12 +162,12 @@ func rm(d string, action *pb.FileActionRm) (err error) {
 }
 
 func rmPath(root, src string, allowNotFound bool) error {
-	src = filepath.Clean(src)
+	src = filepath.Join("/", src)
 	dir, base := filepath.Split(src)
 	if base == "" {
 		return errors.New("rmPath: invalid empty path")
 	}
-	dir, err := fs.RootPath(root, filepath.Join("/", dir))
+	dir, err := fs.RootPath(root, dir)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -261,7 +261,7 @@ func docopy(ctx context.Context, src, dest string, action *pb.FileActionCopy, u 
 				continue
 			}
 		}
-		if err := copy.Copy(ctx, src, s, dest, destPath, opt...); err != nil {
+		if err := platformCopy(ctx, src, s, dest, destPath, opt...); err != nil {
 			return errors.WithStack(err)
 		}
 	}
